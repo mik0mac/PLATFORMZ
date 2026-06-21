@@ -76,6 +76,7 @@ public:
         velocity.y -= GRAVITY * dt;
         // Update position based on velocity
         position = Vector3Add(position, Vector3Scale(velocity, dt));
+    }
 
 
     // shape, size and collision box
