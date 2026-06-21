@@ -219,6 +219,13 @@ public:
     float expansionRate = 20.0f; // How quickly the explosion expands, in units/sec
     bool isActive = true; // Whether the explosion effect is still active (expanding or at max radius)
 
+    // splash damage - set from the originating Rocket's damage/damageRadius
+    // at spawn time, since the rocket itself is typically destroyed/erased
+    // before the explosion finishes its visual lifetime.
+    int damage = 25; // Max damage dealt to anything within damageRadius of position
+    float damageRadius = 5.0f; // Radius of the splash damage area (separate from visual maxRadius)
+    bool hasAppliedDamage = false; // Splash damage applies once, at the moment of explosion creation - not every frame
+
     // appearance
     Color color_outline = {255, 150, 0, 255};
     Color color_fill = {255, 150, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
