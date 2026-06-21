@@ -6,6 +6,8 @@
 #include <vector>
 #include <cmath>
 
+#include "elements.h"
+
 void DrawPlatform(const Platform& platform) {
     DrawShadedWireCube(platform.position, platform.size.x, 0.0f, platform.color_outline, platform.color_fill);
 }
@@ -24,18 +26,3 @@ void DrawRocket(const Rocket& rocket) {
     DrawWirePyramid(rocket.position, 0.0f, 1.5f, 0.5f, rocket.color_outline);
 }
 
-void ExplosionEffect(const Vector3& position, float size) {
-    // Draw a quick explosion effect using a transient wireframe sphere that expands and fades
-    float explosionDuration = 0.5f; // seconds
-    float elapsed = 0.0f;
-
-    while (elapsed < explosionDuration) {
-        float t = elapsed / explosionDuration; // 0 to 1 over the duration
-        float currentSize = size * (1.0f + t); // Expand from initial size to larger
-        Color col = {255, 200, 0, (unsigned char)(255 * (1.0f - t))}; // Fade out over time
-
-        DrawSphereWires(position, currentSize, 8, 8, col);
-
-        elapsed += GetFrameTime();
-    }
-}

@@ -1,5 +1,7 @@
 // C++ header file with the classes and functions related to the game logic.  Using raylib 3d.
 
+pragma once
+
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
@@ -9,92 +11,6 @@
 
 const float GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 
-//MARK: GameSpace
-class GameSpace {
-public:
-    float halfSize = 40.0; // 1.0 equates to a meter. Defines the half-size of the cubic game space, so total size is 80x80x80
-    Color backgroundColor = {0, 0, 0, 255}; // Black background for the game space
-    Color gridColor = {0, 90, 90, 255}; // Color for the ground grid lines
-
-    float wall_elasticity = 1.0f; // When player hits the walls of the game space, velocity is reflected and scaled by this factor (velocity = -velocity * wall_elasticity)
-    int wall_damage = 10; // When player hits the walls of the game space, they take this much damage
-
-    void generate() {
-        platforms.clear();
-        for (int i = 0; i < num_of_platforms; ++i) {
-            Platform platform;
-            platform.size = {GetRandomValue(1, 5), 0.5f, GetRandomValue(1, 5)}; // Random width and depth, thin height for a platform
-            platform.position = {GetRandomValue(-halfSize, halfSize), GetRandomValue(-halfSize, halfSize), GetRandomValue(-halfSize, halfSize)};
-            platform.startingPosition = platform.position; // Store the initial position of the platform
-            platforms.push_back(platform);
-        }
-        asteroids.clear();
-        for (int i = 0; i < num_of_asteroids; ++i) {
-            Asteroid asteroid;
-            asteroid.size = GetRandomValue(0.5f, 3.0f);
-            asteroid.position = {GetRandomValue(-halfSize, halfSize), GetRandomValue(-halfSize, halfSize), GetRandomValue(-halfSize, halfSize)};
-            asteroid.startingPosition = asteroid.position; // Store the initial position of the asteroid
-            asteroid.velocity = {GetRandomValue(-2, 2), GetRandomValue(-2, 2), GetRandomValue(-2, 2)}; // Random velocity in each direction
-            asteroids.push_back(asteroid);
-        }
-        players.clear();
-        for (int i = 0; i < number_of_players; ++i) {
-            Player player;
-            // chose a random platform and place the player on top of it as the starting position
-            if (!platforms.empty()) {
-                int platformIndex = GetRandomValue(0, platforms.size() - 1);
-                Platform& startPlatform = platforms[platformIndex];
-                player.position = Vector3Add(startPlatform.position, Vector3{0, startPlatform.size.y / 2 + player.size.y / 2, 0}); // Position player on top of the platform
-            } else {
-                player.position = {0.0f, 0.0f, 0.0f}; // If no platforms, start at the center of the game space
-            }
-            player.startingPosition = player.position; // Store the initial position of the player
-
-            // player direction starts facing towards the center of the game space.
-            player.direction = Vector3Normalize(Vector3Subtract({0.0f, 0.0f, 0.0f}, player.position));
-
-            // player velocity starts at zero.  Default speed is set in the Player class.
-            // player health, fuel, and ammo start at their default values defined in the Player class.
-            
-            players.push_back(player);
-        }
-
-        void updatePositions(float dt) {
-            // Update platforms (for moving platforms, future use)
-            for (Platform& platform : platforms) {
-                if (platform.isMoving) {
-                    platform.updatePos(dt);
-                }
-            }
-
-            // Update asteroids
-            for (Asteroid& asteroid : asteroids) {
-                asteroid.updatePos(dt);
-            }
-
-            // Update rockets
-            for (Rocket& rocket : rockets) {
-                rocket.updatePos(dt);
-            }
-
-            // Update players
-            for (Player& player : players) {
-                player.updatePos(dt);
-            }
-        }
-    }
-    
-   
-
-private:
-    int num_of_platforms = 8;
-    std::vector<Platform> platforms;
-    int num_of_asteroids = 5;
-    std::vector<Asteroid> asteroids;
-    int number_of_players = 1; // For future use: if we want to add multiplayer support, we can increase this and add a vector of Player objects.
-    std::vector<Player> players;
-
-}
 
 //MARK: Platform
 class Platform {
@@ -212,7 +128,7 @@ public:
 
     
 private:
-}
+};
 
 //MARK: Asteroid
 class Asteroid {
@@ -255,7 +171,7 @@ public:
     }
 
 private:
-}
+};
 
 //MARK: Rocket
 class Rocket {
@@ -289,6 +205,33 @@ public:
     bool isDestroyed = false; // Rocket is destroyed on collision or when it goes out of bounds
     bool isExploding = false; // Rocket is in the process of exploding, can be used for visual effects
 
+private:
+};
+
+#MARK: Explosion
+class Explosion {
+public:
+    // position and size
+    Vector3 position;
+    float radius = 0.0f; // Current radius of the explosion effect
+    float maxRadius = 5.0f; // Maximum radius of the explosion effect
+    float expansionRate = 20.0f; // How quickly the explosion expands, in units/sec
+    bool isActive = true; // Whether the explosion effect is still active (expanding or at max radius)
+
+    // appearance
+    Color color_outline = {255, 150, 0, 255};
+    Color color_fill = {255, 150, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
+
+    void update(float dt) {
+        if (isActive) {
+            radius += expansionRate * dt;
+            color_fill.a = (unsigned char)(40 * (1 - radius / maxRadius)); // Fade out fill color as explosion expands
+            if (radius >= maxRadius) {
+                radius = maxRadius;
+                isActive = false; // Explosion has reached its maximum size
+            }
+        }
+    }
     
 private:
-}
+};

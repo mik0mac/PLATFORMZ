@@ -1,4 +1,9 @@
 #include "raylib.h"
+#include "raymath.h"
+#include "rlgl.h"
+
+#include "gamespace.h"
+#include "shapes.h"
 
 int main() {
     // --- Setup (runs once) ---
