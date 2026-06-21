@@ -1,6 +1,6 @@
 // C++ header file with the classes and functions related to the game logic.  Using raylib 3d.
 
-pragma once
+#pragma once
 
 #include "raylib.h"
 #include "raymath.h"
@@ -90,9 +90,9 @@ public:
 
     // health, fuel, ammo
     int health = 100;
-    bool isAlive() const { return health > 0; }
+    bool isAlive = true; // Player is alive if health > 0.
     int ammo = 10;
-    bool canShoot() const { return ammo > 0; }
+    bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
     float fuel = 100.0f;
     float fuelRegenRate = 0.25f; // Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
@@ -157,7 +157,7 @@ public:
     // attributes
     int damage = 20; // Damage to player on collision
     int health = 50; // Asteroid health, can be reduced by player shooting it
-    bool isDestroyed() const { return health <= 0; }
+    bool isDestroyed = false; // Asteroid is destroyed when health reaches zero
     int scoreValue = 100; // Points awarded to player for destroying this asteroid
     int fuelAward = 20; // Fuel awarded to player for destroying this asteroid
     int healthAward = 10; // Health awarded to player for destroying this asteroid
@@ -208,7 +208,7 @@ public:
 private:
 };
 
-#MARK: Explosion
+//MARK: Explosion
 class Explosion {
 public:
     // position and size

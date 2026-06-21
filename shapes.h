@@ -1,4 +1,5 @@
 // How to draw the wireframe shapes for the various elements.
+#pragma once
 
 #include "raylib.h"
 #include "raymath.h"
