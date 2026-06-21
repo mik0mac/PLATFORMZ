@@ -58,6 +58,31 @@ public:
             
             players.push_back(player);
         }
+
+        void updatePositions(float dt) {
+            // Update platforms (for moving platforms, future use)
+            for (Platform& platform : platforms) {
+                if (platform.isMoving) {
+                    platform.updatePos(dt);
+                }
+            }
+
+            // Update asteroids
+            for (Asteroid& asteroid : asteroids) {
+                asteroid.updatePos(dt);
+            }
+
+            // Update rockets
+            for (Rocket& rocket : rockets) {
+                rocket.updatePos(dt);
+            }
+
+            // Update players
+            for (Player& player : players) {
+                player.updatePos(dt);
+            }
+        }
+    }
     
    
 
@@ -101,14 +126,41 @@ public:
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
     Vector3 velocity = {0.0f, 0.0f, 0.0f}; // Player velocity, updated by movement input and gravity
     Vector3 direction = {0.0f, 0.0f, 1.0f}; // Normalized direction vector for movement and facing
-    float speed = 5.0; // units/sec
+    float speedWalk = 5.0f; // units/sec
+    float accelerationWalk = 5.0f; // units/sec^2, how quickly the player accelerates to their max speed when input is applied
+    float speedJetpack = 8.0f; // units/sec, max speed when using jetpack
+    float accelerationJetpack = 10.0f; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
+    bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
+
+    void updateDirection(Vector3 inputDirection) {
+        // Update the player's facing direction based on input.  This is separate from movement to allow for strafing.
+        if (inputDirection.x != 0 || inputDirection.y != 0 || inputDirection.z != 0) {
+            direction = Vector3Normalize(inputDirection);
+        }
+    }
+
+    void updateVelocity(float dt, Vector3 inputDirection) {
+        // Update the player's velocity based on input and whether they are using the jetpack.
+        float targetSpeed = isUsingJetpack ? speedJetpack : speedWalk;
+        float acceleration = isUsingJetpack ? accelerationJetpack : accelerationWalk;
+
+        Vector3 desiredVelocity = Vector3Scale(Vector3Normalize(inputDirection), targetSpeed);
+        Vector3 velocityChange = Vector3Subtract(desiredVelocity, velocity);
+        Vector3 accelerationVector = Vector3Scale(Vector3Normalize(velocityChange), acceleration);
+
+        // Update velocity with acceleration, but don't exceed target speed
+        velocity = Vector3Add(velocity, Vector3Scale(accelerationVector, dt));
+        if (Vector3Length(velocity) > targetSpeed) {
+            velocity = Vector3Scale(Vector3Normalize(velocity), targetSpeed);
+        }
+    }
 
     void updatePos(float dt) {
         // Apply gravity
         velocity.y -= GRAVITY * dt;
-
         // Update position based on velocity
         position = Vector3Add(position, Vector3Scale(velocity, dt));
+
 
     // shape, size and collision box
     Vector3 size = {1.0f, 2.0f, 1.0f}; // width, height, depth of the player's collision box (a vertical rectangular prism)
@@ -165,11 +217,22 @@ private:
 //MARK: Asteroid
 class Asteroid {
 public:
-    // position, velocity, size
+    // position, velocity, speed
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the asteroid, set during game space generation.
     Vector3 velocity;
+    float speed = 5.0f; // units/sec
+
+    void updatePos(float dt) {
+        position = Vector3Add(position, Vector3Scale(velocity, dt));
+        // asteroids will move in a straight line at a constant velocity.
+    }
+
+    // shape and collision box
     float size; // radius of the asteroid
+    // For rendering the asteroid, we can use a wireframe sphere or a simple 3D model.
+    // For collision detection, we will use the position as the center of the sphere,
+    // and size as the radius of the collision sphere.
 
     // appearance
     Color color_outline = {255, 100, 0, 255};
@@ -202,6 +265,11 @@ public:
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
     float speed = 10.0f; // units/sec
+
+    void updatePos(float dt) {
+        velocity.y -= GRAVITY * dt; // Apply gravity to the rocket's velocity
+        position = Vector3Add(position, Vector3Scale(velocity, dt));
+    }
 
     // size and collision box
     Vector3 size = {0.2f, 0.2f, 0.8f}; // width, height, depth of the rocket's collision box (a small rectangular prism)
