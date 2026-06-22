@@ -299,14 +299,14 @@ public:
 
     // size and collision box
     // Vector3 size = {0.2f, 0.2f, 0.8f}; // width, height, depth of the rocket's collision box (a small rectangular prism)
-    float size = 0.2f; // Radius.
+    float size = 0.25f; // Radius.
     // For rendering the rocket, we can use a wireframe rectangular prism or a simple 3D model.
     // For collision detection, we will use the position as the center of the rocket,
     // and size to define the extents of the collision box.
 
     // appearance
-    Color color_outline = {255, 0, 0, 255};
-    Color color_fill = {255, 0, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
+    Color color_outline = {255, 255, 0, 255};  // yellow.
+    Color color_fill = {255, 255, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
 
     // attributes
     // int damage = 25; // Damage to player or asteroid on collision

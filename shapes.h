@@ -176,6 +176,7 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
     }
 }
 
+//MARK: Wrappers
 inline void DrawAsteroid(const Asteroid& asteroid) {
     DrawAsteroidShape(asteroid);
 }
@@ -183,7 +184,7 @@ inline void DrawAsteroid(const Asteroid& asteroid) {
 inline void DrawRocket(const Rocket& rocket) {
     // Simple wireframe for the rocket, no fill.
     // DrawWirePyramid(rocket.position, 0.0f, 1.5f, 0.5f, rocket.color_outline);
-    DrawWireSphere(rocket.position, rocket.size, rocket.color_outline);
+    DrawSphereWires(rocket.position, rocket.size, 6, 6, rocket.color_outline);
 }
 
 inline void DrawExplosion(const Explosion& explosion) {
