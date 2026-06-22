@@ -1,4 +1,6 @@
+#inlcude <vector>
 #include "collisions.h"
+
 
 //MARK: CollisionGrid::Rebuild
 void CollisionGrid::Rebuild(GameSpace& space) {
@@ -407,6 +409,12 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             asteroid.takeDamage(splashDamage);
+
+            // Also apply a pushback force to the asteroid, scaled by the same falloff and explosion damage,
+            // and inversely by asteroid size (smaller = more push). Push directly away from the explosion center.
+            Vector3 pushback = asteroid.position - explosion.position;
+            pushback *= falloff * (explosion.damage / asteroid.size); // scale pushback by damage and asteroid size (smaller = more push)
+            asteroid.velocity = Vector3Add(asteroid.velocity, pushback);
         }
 
         for (Player& player : players) {
@@ -418,6 +426,11 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             player.takeDamage(splashDamage);
+
+            // Also apply a pushback force to the player, scaled by the same falloff.
+            Vector3 pushback = player.position - explosion.position;
+            pushback = Vector3Scale(pushback, falloff * (explosion.damage / player.size)); // scale pushback by damage and player size (smaller = more push)
+            player.velocity = Vector3Add(player.velocity, pushback);
         }
     }
 }
