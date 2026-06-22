@@ -10,8 +10,6 @@
 
 #include "random.h"
 
-const float GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
-
 
 //MARK: Platform
 class Platform {
@@ -41,8 +39,8 @@ public:
 
     // attributes
     bool isMoving = false; // For future use: if true, platform moves according to velocity and speed
-    bool isBouncy = false; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
-    float elasticity = 0.5f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
+    bool isBouncy = true; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
+    float elasticity = 0.2f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
 
 private:
     // static constexpr (not per-instance const) so Platform stays copy-assignable.
@@ -102,7 +100,7 @@ public:
     // moveInput.x = strafe (right/left), moveInput.y = forward/back -
     // both relative to current look direction (flattened), not world axes.
     // Vertical movement (jetpack up/down) is separate, not part of moveInput.
-    void updateVelocity(float dt, Vector2 moveInput, bool jetpackUp, bool jetpackDown) {
+    void updateVelocity(float dt, Vector2 moveInput, float gravity) {
         float targetSpeed = isUsingJetpack ? speedJetpack : speedWalk;
         float acceleration = isUsingJetpack ? accelerationJetpack : accelerationWalk;
 
@@ -138,8 +136,8 @@ public:
         // instant override would erase a wall-bounce's reflected velocity.y
         // on the very next frame if jetpack input is still held. Accelerating
         // instead means a bounce gets a moment to actually take effect.
-        if (isUsingJetpack && (jetpackUp || jetpackDown)) {
-            float targetVerticalSpeed = jetpackUp ? speedJetpack : -speedJetpack;
+        if (isUsingJetpack) {
+            float targetVerticalSpeed = speedJetpack;
             float verticalChange = targetVerticalSpeed - velocity.y;
             float maxStep = accelerationJetpack * dt;
             if (fabsf(verticalChange) > maxStep) {
@@ -148,11 +146,17 @@ public:
                 velocity.y = targetVerticalSpeed;
             }
         }
+        // Apply gravity
+        velocity.y -= gravity * dt;
     }
 
     void updatePos(float dt) {
-        // Apply gravity
-        velocity.y -= GRAVITY * dt;
+        position = Vector3Add(position, Vector3Scale(velocity, dt));
+    }
+
+    void updatePos(float dt, float gravity) {
+        // // Apply gravity
+        // velocity.y -= gravity * dt;
         // Update position based on velocity
         position = Vector3Add(position, Vector3Scale(velocity, dt));
     }
@@ -164,6 +168,11 @@ public:
     // For collision detection, we will use the position as the center of the bottom face of the prism,
     // and size to define the extents of the collision box.
 
+    // Camera eye height above position - shared by the first-person camera
+    // (camera.h) and the wall-collision clamp (collisions.cpp) so the eye is
+    // kept inside the play space, not just the player's center.
+    float eyeHeight = 1.6f;
+
     // appearance
     Color color_outline = {0, 255, 200, 255};
     Color color_fill = {0, 255, 200, 40}; // low alpha translucent fill for the "glowing vector glass" look
@@ -171,10 +180,11 @@ public:
     // health, fuel, ammo
     int health = 100;
     bool isAlive = true; // Player is alive if health > 0.
-    int ammo = 10;
+    int ammo = 100;
     bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
     float fuel = 100.0f;
-    float fuelRegenRate = 0.25f; // Fuel regeneration rate when not using jetpack
+    float fuelConsumptionRate = 10.0f; // Per sec.
+    float fuelRegenRate = 0.25f; // Per sec.  Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
 
     void shoot() {
@@ -190,7 +200,7 @@ public:
 
     void updateFuel(float dt, bool isUsingJetpack) {
         if (isUsingJetpack && hasFuel()) {
-            fuel -= dt; // Consume fuel based on time using jetpack
+            fuel -= dt * fuelConsumptionRate; // Consume fuel based on time using jetpack
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
             fuel += dt * fuelRegenRate; // Regenerate fuel slowly when not using jetpack
@@ -283,7 +293,7 @@ public:
     float speed = 40.0f; // units/sec
 
     void updatePos(float dt) {
-        velocity.y * dt; // Apply gravity to the rocket's velocity
+        // velocity.y -= GRAVITY * dt; // Apply gravity to the rocket's velocity
         position = Vector3Add(position, Vector3Scale(velocity, dt));
     }
 

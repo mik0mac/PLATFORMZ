@@ -274,17 +274,37 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
         if (!player.isAlive) continue;
 
         for (Platform& platform : platforms) {
-            bool falling = player.velocity.y <= 0.0f;
-            if (!falling) continue;
-
             if (SphereIntersectsBox(player.position, 0.0f, platform.position, Vector3Add(platform.size, player.size))) {
-                float platformTop = platform.position.y + (platform.size.y / 2.0f);
-                player.position.y = platformTop + (player.size.y / 2.0f);
-                player.velocity.y = 0.0f;
+                // Only resolve when the player is moving down into the platform.
+                // This lets the player pass up through it from below, and -
+                // critically - stops the check from re-firing every frame while
+                // overlapping, which previously flipped velocity.y back and
+                // forth and killed the bounce.
+                if (player.velocity.y < 0.0f) {
+                    float platformTop = platform.position.y + (platform.size.y / 2.0f);
+                    // Pop the player out onto the surface first, so next frame
+                    // doesn't re-detect the overlap and cancel the response.
+                    player.position.y = platformTop + (player.size.y / 2.0f);
 
-                if (platform.isBouncy) {
-                    player.velocity.y = -player.velocity.y * platform.elasticity;
+                    if (platform.isBouncy) {
+                        player.velocity.y = -player.velocity.y * platform.elasticity; // bounce up
+                    } else {
+                        player.velocity.y = 0.0f; // land and stop
+                    }
                 }
+                // un-comment to work on bouncing off the underside of a platform.
+                // else if (player.velocity.y > 0.0f) {
+                //     // If the player is moving up into the platform, the should cancel out y velocity.
+                //     float platformBottom = platform.position.y - (platform.size.y / 2.0f);
+                //     // Pop the player out below the platform to prevent re-detection next frame.
+                //     player.position.y = platformBottom - (player.size.y / 2.0f);
+                //     if (platform.isBouncy) {
+                //         player.velocity.y = -player.velocity.y * platform.elasticity; // bounce down
+                //     } else {
+                //         player.velocity.y = 0.0f; // cancel upward velocity when hitting the underside
+                //     }
+
+                // }
             }
         }
     }
@@ -303,18 +323,31 @@ void CheckPlayerWallCollisions(GameSpace& space) {
 
         bool hitWall = false;
 
-        if (player.position.x > halfSize || player.position.x < -halfSize) {
-            player.position.x = Clamp(player.position.x, -halfSize, halfSize);
+        // Inset each bound by the player's extent on that axis so the whole
+        // player stays inside the cube, not just its center. The +Y (ceiling)
+        // bound uses the larger of the box half-height and the eye height, so
+        // neither the head nor the first-person camera pokes through the top.
+        float halfX = player.size.x * 0.5f;
+        float halfY = player.size.y * 0.5f;
+        float halfZ = player.size.z * 0.5f;
+        float topExtent = player.eyeHeight > halfY ? player.eyeHeight : halfY;
+
+        float xMin = -halfSize + halfX, xMax = halfSize - halfX;
+        float yMin = -halfSize + halfY, yMax = halfSize - topExtent;
+        float zMin = -halfSize + halfZ, zMax = halfSize - halfZ;
+
+        if (player.position.x < xMin || player.position.x > xMax) {
+            player.position.x = Clamp(player.position.x, xMin, xMax);
             player.velocity.x = -player.velocity.x * space.wall_elasticity;
             hitWall = true;
         }
-        if (player.position.y > halfSize || player.position.y < -halfSize) {
-            player.position.y = Clamp(player.position.y, -halfSize, halfSize);
+        if (player.position.y < yMin || player.position.y > yMax) {
+            player.position.y = Clamp(player.position.y, yMin, yMax);
             player.velocity.y = -player.velocity.y * space.wall_elasticity;
             hitWall = true;
         }
-        if (player.position.z > halfSize || player.position.z < -halfSize) {
-            player.position.z = Clamp(player.position.z, -halfSize, halfSize);
+        if (player.position.z < zMin || player.position.z > zMax) {
+            player.position.z = Clamp(player.position.z, zMin, zMax);
             player.velocity.z = -player.velocity.z * space.wall_elasticity;
             hitWall = true;
         }

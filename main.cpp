@@ -7,15 +7,18 @@
 #include "collisions.h"
 #include "camera.h"
 
+const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
+const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2 
+
+
 int main() {
     // --- Setup (runs once) ---
     const int screenWidth = 1000;
     const int screenHeight = 700;
+    const int textHeight = 20;
     InitWindow(screenWidth, screenHeight, "PLATFORMZ");
     SetTargetFPS(60);
     DisableCursor(); // captures mouse for free-look, like a standard 3D game
-
-    const float eyeHeight = 1.6f; // meters above player.position - roughly eye level within the 2.0-tall collision box
 
     // Game state lives here, declared once, mutated every frame
     GameSpace gameSpace; // The main game space containing platforms, asteroids, and players
@@ -46,19 +49,20 @@ int main() {
         if (IsKeyDown(KEY_D)) moveInput.x += 1.0f;
         if (IsKeyDown(KEY_A)) moveInput.x -= 1.0f;
 
-        player.isUsingJetpack = IsKeyDown(KEY_SPACE) || IsKeyDown(KEY_LEFT_CONTROL);
-        bool jetpackUp = IsKeyDown(KEY_SPACE);
-        bool jetpackDown = IsKeyDown(KEY_LEFT_CONTROL);
-        player.updateVelocity(dt, moveInput, jetpackUp, jetpackDown);
+        player.isUsingJetpack = IsKeyDown(KEY_SPACE);
+        // bool jetpackUp = IsKeyDown(KEY_SPACE);
+        bool earthGravityEngaged = IsKeyDown(KEY_LEFT_SUPER); // = COMMAND.
+        float gravity = earthGravityEngaged ? EARTH_GRAVITY : MOON_GRAVITY;
+        player.updateVelocity(dt, moveInput, gravity);
         player.updateFuel(dt, player.isUsingJetpack);
 
         // Fire a rocket on left-click. IsMouseButtonPressed fires once per
         // click, so this is naturally single-shot - no cooldown needed.
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && player.canShoot) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && player.canShoot && player.isAlive) {
             player.shoot(); // ammo / canShoot bookkeeping (see Player::shoot)
 
             Rocket rocket;
-            Vector3 eyePos = Vector3Add(player.position, Vector3{0, eyeHeight, 0});
+            Vector3 eyePos = Vector3Add(player.position, Vector3{0, player.eyeHeight, 0});
             Vector3 aim = player.Forward();
             // Nudge the muzzle forward so the rocket clears the player and
             // doesn't detonate on whatever the player is standing on the
@@ -88,13 +92,19 @@ int main() {
         BeginDrawing();
             ClearBackground(BLACK);
 
-            BeginMode3D(CameraFromPlayer(player, eyeHeight));
+            BeginMode3D(CameraFromPlayer(player, player.eyeHeight));
                 gameSpace.draw();
             EndMode3D();
 
-            DrawFPS(10, 10);
-            DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
-            DrawText(TextFormat("Ammo: %d", player.ammo), 10, 50, 14, DARKGRAY);
+            // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen
+            // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
+            DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
+            DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
+            DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);
+            if (earthGravityEngaged) {
+                DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
+            }
+            
         EndDrawing();
 
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
