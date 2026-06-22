@@ -181,8 +181,9 @@ inline void DrawAsteroid(const Asteroid& asteroid) {
 }
 
 inline void DrawRocket(const Rocket& rocket) {
-    // Simple wireframe pyramid for the rocket, no fill
-    DrawWirePyramid(rocket.position, 0.0f, 1.5f, 0.5f, rocket.color_outline);
+    // Simple wireframe for the rocket, no fill.
+    // DrawWirePyramid(rocket.position, 0.0f, 1.5f, 0.5f, rocket.color_outline);
+    DrawWireSphere(rocket.position, rocket.size, rocket.color_outline);
 }
 
 inline void DrawExplosion(const Explosion& explosion) {
