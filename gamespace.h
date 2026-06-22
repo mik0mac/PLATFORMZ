@@ -20,8 +20,8 @@ public:
     Color backgroundColor = {0, 0, 0, 255}; // Black background for the game space
     Color gridColor = {0, 90, 90, 255}; // Color for the ground grid lines
 
-    float wall_elasticity = 1.0f; // When player or asteroid hits the walls of the game space, velocity is reflected and scaled by this factor (velocity = -velocity * wall_elasticity)
-    int wall_damage = 10; // When player hits the walls of the game space, they take this much damage
+    float wall_elasticity = 1.001f; // When player or asteroid hits the walls of the game space, velocity is reflected and scaled by this factor (velocity = -velocity * wall_elasticity)
+    int wall_damage = 0; // When player hits the walls of the game space, they take this much damage
 
     void generate() {
         platforms.clear();

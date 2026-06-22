@@ -242,6 +242,10 @@ public:
     void updatePos(float dt) {
         position = Vector3Add(position, Vector3Scale(velocity, dt));
         // asteroids will move in a straight line at a constant velocity.
+
+        // Decay the damage-flash here since this runs every frame for every
+        // asteroid (gamespace.h) - no separate update pass needed.
+        if (flashTimer > 0.0f) flashTimer -= dt;
     }
 
     // shape and collision box
@@ -256,11 +260,19 @@ public:
 
     // appearance
     Color color_outline = {255, 100, 0, 255};
-    Color color_fill = {255, 100, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
+    static constexpr unsigned char starting_alpha = 64; // Starting alpha value for the fill color, used to calculate fade on damage
+    Color color_fill = {255, 100, 0, starting_alpha}; // low alpha translucent fill for the "glowing vector glass" look
+    float flashTimer = 0.0f; // seconds of damage-flash remaining; set on hit, decayed in updatePos
+
+    // 1.0 right after a hit, easing to 0.0 over flash_duration. Lets the
+    // (non-member) draw code read flash strength without exposing the constant.
+    float flashIntensity() const {
+        return flash_duration > 0.0f ? Clamp(flashTimer / flash_duration, 0.0f, 1.0f) : 0.0f;
+    }
 
     // attributes
     int damage = 20; // Damage to player on collision
-    int health = 50; // Asteroid health, can be reduced by player shooting it
+    int health = starting_health; // Asteroid health, can be reduced by player shooting it
     bool isDestroyed = false; // Asteroid is destroyed when health reaches zero
     int scoreValue = 100; // Points awarded to player for destroying this asteroid
     int fuelAward = 20; // Fuel awarded to player for destroying this asteroid
@@ -268,10 +280,20 @@ public:
 
     void takeDamage(int damage) {
         health -= damage;
+        
         if (health < 0) health = 0; // Clamp health to zero
         if (health == 0) {
             isDestroyed = true; // Asteroid is destroyed if health reaches zero
         }
+
+        // Adjust the fill color's alpha based on the current health ratio
+        float health_ratio = (float)health / (float)starting_health; // Calculate health ratio.
+        float color_ratio = (float)starting_alpha / 255.0f; // Calculate ratio between current fill alpha and max alpha.
+        float ratio = health_ratio * color_ratio; // Final ratio to apply to alpha for current health.
+        color_fill = Fade(color_fill, ratio); // Fade fill color based on health ratio.
+
+
+        flashTimer = flash_duration; // trigger the hot-glow damage flash
     }
 
 private:
@@ -281,6 +303,10 @@ private:
     static constexpr float max_size = 8.0f; // Maximum radius of the asteroid
     static constexpr float min_speed = 8.0f; // Minimum speed of the asteroid
     static constexpr float max_speed = 12.0f; // Maximum speed of the asteroid
+
+    static constexpr int starting_health = 50; // Initial health of the asteroid.
+
+    static constexpr float flash_duration = 0.15f; // length of the hot-glow damage flash, seconds
 };
 
 //MARK: Rocket

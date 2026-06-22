@@ -14,6 +14,20 @@
 // WireframeTests/main3d3.cpp. Higher-level Draw___(const Element&) functions
 // below build on top of these.
 
+// Translucent fills should test depth (stay hidden behind solid geometry) but
+// not WRITE depth - otherwise a see-through surface occludes whatever is drawn
+// behind it later, which is exactly the "can't see through it" bug. Flush the
+// batch around each toggle so the mask change only affects the fill vertices,
+// not the opaque wireframes queued before/after.
+inline void BeginTranslucentFill() {
+    rlDrawRenderBatchActive();
+    rlDisableDepthMask();
+}
+inline void EndTranslucentFill() {
+    rlDrawRenderBatchActive();
+    rlEnableDepthMask();
+}
+
 // Draws a wireframe box with a translucent, slightly-glowing fill pass underneath.
 // Render solid first (low alpha), then draw the wireframe on top at full opacity
 // so edges stay crisp - the core "vector + shading" look used throughout.
@@ -22,7 +36,9 @@ inline void DrawShadedWireBox(Vector3 position, float width, float height, float
     rlTranslatef(position.x, position.y, position.z);
     rlRotatef(rotY * RAD2DEG, 0, 1, 0);
 
+    BeginTranslucentFill();
     DrawCube(Vector3Zero(), width, height, depth, fillColor);
+    EndTranslucentFill();
     DrawCubeWires(Vector3Zero(), width, height, depth, wireColor);
 
     rlPopMatrix();
@@ -31,7 +47,9 @@ inline void DrawShadedWireBox(Vector3 position, float width, float height, float
 // Same fill+wireframe layering as DrawShadedWireBox, but for a sphere.
 // Used for asteroids and the explosion effect.
 inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Color fillColor) {
+    BeginTranslucentFill();
     DrawSphere(position, radius, fillColor);
+    EndTranslucentFill();
     DrawSphereWires(position, radius, 16, 16, wireColor);
 }
 
@@ -155,15 +173,24 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
         verts[i] = Vector3Add(asteroid.position, local);
     }
 
+    // Damage flash: brighten the orange toward white on a recent hit, easing
+    // back over flashIntensity()'s decay. ColorBrightness preserves alpha, so
+    // the fill stays glassy. At flash == 0 these return the colors unchanged.
+    float flash = asteroid.flashIntensity();
+    Color fill    = ColorBrightness(asteroid.color_fill,    0.8f * flash);
+    Color outline = ColorBrightness(asteroid.color_outline, 0.8f * flash);
+
     // Fill faces - drawn both windings so the translucent glow reads from any
     // angle (backface culling leaves exactly one of each pair visible).
+    BeginTranslucentFill();
     for (int f = 0; f < 20; f++) {
         Vector3 a = verts[faces[f][0]];
         Vector3 b = verts[faces[f][1]];
         Vector3 c = verts[faces[f][2]];
-        DrawTriangle3D(a, b, c, asteroid.color_fill);
-        DrawTriangle3D(a, c, b, asteroid.color_fill);
+        DrawTriangle3D(a, b, c, fill);
+        DrawTriangle3D(a, c, b, fill);
     }
+    EndTranslucentFill();
 
     // Wireframe edges on top. Each undirected edge appears in two faces with
     // opposite winding, so the i<j test draws it exactly once (30 edges total).
@@ -171,7 +198,7 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
         for (int e = 0; e < 3; e++) {
             int i = faces[f][e];
             int j = faces[f][(e + 1) % 3];
-            if (i < j) DrawLine3D(verts[i], verts[j], asteroid.color_outline);
+            if (i < j) DrawLine3D(verts[i], verts[j], outline);
         }
     }
 }
