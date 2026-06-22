@@ -93,6 +93,72 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
     }
 }
 
+//MARK: Rocket vs Platform
+// A rocket flying into a platform detonates: destroy the rocket and spawn an
+// explosion at impact so splash damage hits nearby objects. Platforms have no
+// health, so they aren't damaged themselves. Mirrors the rocket-vs-asteroid
+// detonation. Platforms aren't bucketed in the grid (static and few), so they
+// are brute-forced like CheckPlayerPlatformCollisions.
+void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) {
+    (void)grid; // platforms not bucketed - brute-force, see note above
+
+    auto& rockets = space.getRockets();
+    auto& platforms = space.getPlatforms();
+    auto& explosions = space.getExplosions();
+
+    for (Rocket& rocket : rockets) {
+        if (rocket.isDestroyed) continue;
+
+        for (Platform& platform : platforms) {
+            // Rocket treated as a small sphere (its size.x), same as the
+            // rocket-vs-asteroid check.
+            if (SphereIntersectsBox(rocket.position, rocket.size.x, platform.position, platform.size)) {
+                rocket.isDestroyed = true;
+
+                Explosion explosion;
+                explosion.position = rocket.position;
+                explosion.damage = rocket.damage;
+                explosion.damageRadius = rocket.damageRadius;
+                explosions.push_back(explosion);
+
+                break; // rocket already detonated this frame
+            }
+        }
+    }
+}
+
+//MARK: Rocket vs Walls
+// Same boundary cube as the player/asteroid wall checks. A rocket reaching the
+// boundary detonates at the wall (spawns an explosion) and is destroyed, rather
+// than escaping the play space. No grid - the boundary test is pure position
+// math, matching CheckPlayerWallCollisions / CheckAsteroidWallCollisions.
+void CheckRocketWallCollisions(GameSpace& space) {
+    auto& rockets = space.getRockets();
+    auto& explosions = space.getExplosions();
+    float halfSize = space.halfSize;
+
+    for (Rocket& rocket : rockets) {
+        if (rocket.isDestroyed) continue;
+
+        bool hitWall = rocket.position.x > halfSize || rocket.position.x < -halfSize ||
+                       rocket.position.y > halfSize || rocket.position.y < -halfSize ||
+                       rocket.position.z > halfSize || rocket.position.z < -halfSize;
+        if (!hitWall) continue;
+
+        // Clamp onto the wall so the explosion appears at the impact point.
+        rocket.position.x = Clamp(rocket.position.x, -halfSize, halfSize);
+        rocket.position.y = Clamp(rocket.position.y, -halfSize, halfSize);
+        rocket.position.z = Clamp(rocket.position.z, -halfSize, halfSize);
+        rocket.isDestroyed = true;
+
+        Explosion explosion;
+        explosion.position = rocket.position;
+        explosion.damage = rocket.damage;
+        explosion.damageRadius = rocket.damageRadius;
+        explosions.push_back(explosion);
+    }
+}
+
 //MARK: Rocket vs Player
 // This is direct rocket-body collision (a rocket physically touching a
 // player mid-flight, before detonating) - NOT splash damage, which is
@@ -130,6 +196,65 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                 }
             }
         });
+    }
+}
+
+//MARK: Asteroid vs Platform
+// A drifting asteroid bounces off a platform, reflecting its velocity and being
+// pushed clear of the overlap - consistent with how asteroids bounce off the
+// boundary walls (reusing space.wall_elasticity, so they keep drifting at a
+// constant speed). Platforms aren't bucketed in the grid (static and few), so
+// they are brute-forced like CheckPlayerPlatformCollisions.
+void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid) {
+    (void)grid; // platforms not bucketed - brute-force, see note above
+
+    auto& asteroids = space.getAsteroids();
+    auto& platforms = space.getPlatforms();
+
+    for (Asteroid& asteroid : asteroids) {
+        if (asteroid.isDestroyed) continue;
+
+        for (Platform& platform : platforms) {
+            if (!SphereIntersectsBox(asteroid.position, asteroid.size, platform.position, platform.size)) continue;
+
+            // Closest point on the platform box to the asteroid center (same
+            // clamp math SphereIntersectsBox uses internally).
+            Vector3 halfExtents = Vector3Scale(platform.size, 0.5f);
+            Vector3 boxMin = Vector3Subtract(platform.position, halfExtents);
+            Vector3 boxMax = Vector3Add(platform.position, halfExtents);
+            Vector3 closest{
+                Clamp(asteroid.position.x, boxMin.x, boxMax.x),
+                Clamp(asteroid.position.y, boxMin.y, boxMax.y),
+                Clamp(asteroid.position.z, boxMin.z, boxMax.z)
+            };
+
+            Vector3 offset = Vector3Subtract(asteroid.position, closest);
+            float dist = Vector3Length(offset);
+
+            Vector3 normal;
+            if (dist > 1e-4f) {
+                // Center is outside the box - normal points from surface to center.
+                normal = Vector3Scale(offset, 1.0f / dist);
+            } else {
+                // Center is inside the box (degenerate): push out along the axis
+                // of least penetration to the nearest face. For thin platforms
+                // this is almost always the Y (top/bottom) axis.
+                float penX = halfExtents.x - fabsf(asteroid.position.x - platform.position.x);
+                float penY = halfExtents.y - fabsf(asteroid.position.y - platform.position.y);
+                float penZ = halfExtents.z - fabsf(asteroid.position.z - platform.position.z);
+                if (penX <= penY && penX <= penZ) {
+                    normal = {asteroid.position.x < platform.position.x ? -1.0f : 1.0f, 0.0f, 0.0f};
+                } else if (penY <= penZ) {
+                    normal = {0.0f, asteroid.position.y < platform.position.y ? -1.0f : 1.0f, 0.0f};
+                } else {
+                    normal = {0.0f, 0.0f, asteroid.position.z < platform.position.z ? -1.0f : 1.0f};
+                }
+            }
+
+            asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), space.wall_elasticity);
+            // Push clear of the overlap so it isn't re-detected next frame.
+            asteroid.position = Vector3Add(closest, Vector3Scale(normal, asteroid.size));
+        }
     }
 }
 
@@ -269,9 +394,12 @@ void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
     grid.Rebuild(space);
 
     CheckRocketAsteroidCollisions(space, grid);
-    ApplyExplosionSplashDamage(space, grid); // after rocket-asteroid so this-frame explosions resolve immediately
+    CheckRocketPlatformCollisions(space, grid);
+    CheckRocketWallCollisions(space);
+    ApplyExplosionSplashDamage(space, grid); // after rocket detonation checks so this-frame explosions resolve immediately
     CheckRocketPlayerCollisions(space, grid);
     CheckAsteroidPlayerCollisions(space, grid);
+    CheckAsteroidPlatformCollisions(space, grid);
     CheckPlayerPlatformCollisions(space, grid);
     CheckPlayerWallCollisions(space);
     CheckAsteroidWallCollisions(space);

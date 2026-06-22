@@ -267,10 +267,10 @@ public:
 private:
     // static constexpr (not per-instance const) so Asteroid stays
     // copy-assignable - std::remove_if/erase in GameSpace needs that.
-    static constexpr float min_size = 1.0f; // Minimum radius of the asteroid
-    static constexpr float max_size = 5.0f; // Maximum radius of the asteroid
-    static constexpr float min_speed = 12.0f; // Minimum speed of the asteroid
-    static constexpr float max_speed = 24.0f; // Maximum speed of the asteroid
+    static constexpr float min_size = 2.0f; // Minimum radius of the asteroid
+    static constexpr float max_size = 8.0f; // Maximum radius of the asteroid
+    static constexpr float min_speed = 8.0f; // Minimum speed of the asteroid
+    static constexpr float max_speed = 12.0f; // Maximum speed of the asteroid
 };
 
 //MARK: Rocket
@@ -280,10 +280,10 @@ public:
     Vector3 position;
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
-    float speed = 10.0f; // units/sec
+    float speed = 40.0f; // units/sec
 
     void updatePos(float dt) {
-        velocity.y -= GRAVITY * dt; // Apply gravity to the rocket's velocity
+        velocity.y * dt; // Apply gravity to the rocket's velocity
         position = Vector3Add(position, Vector3Scale(velocity, dt));
     }
 

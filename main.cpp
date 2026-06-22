@@ -52,6 +52,23 @@ int main() {
         player.updateVelocity(dt, moveInput, jetpackUp, jetpackDown);
         player.updateFuel(dt, player.isUsingJetpack);
 
+        // Fire a rocket on left-click. IsMouseButtonPressed fires once per
+        // click, so this is naturally single-shot - no cooldown needed.
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && player.canShoot) {
+            player.shoot(); // ammo / canShoot bookkeeping (see Player::shoot)
+
+            Rocket rocket;
+            Vector3 eyePos = Vector3Add(player.position, Vector3{0, eyeHeight, 0});
+            Vector3 aim = player.Forward();
+            // Nudge the muzzle forward so the rocket clears the player and
+            // doesn't detonate on whatever the player is standing on the
+            // instant it spawns.
+            rocket.position = Vector3Add(eyePos, Vector3Scale(aim, 1.0f));
+            rocket.direction = aim;
+            rocket.velocity = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
+            gameSpace.getRockets().push_back(rocket);
+        }
+
         gameSpace.updatePositions(dt);
 
         // Collision detection and response:
@@ -76,7 +93,8 @@ int main() {
             EndMode3D();
 
             DrawFPS(10, 10);
-            DrawText("WASD move | mouse look | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
+            DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
+            DrawText(TextFormat("Ammo: %d", player.ammo), 10, 50, 14, DARKGRAY);
         EndDrawing();
 
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.

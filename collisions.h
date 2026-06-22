@@ -106,8 +106,11 @@ bool SphereIntersectsBox(Vector3 spherePos, float sphereRadius, Vector3 boxCente
 // takeDamage/isDestroyed methods already defined in elements.h. Spawns
 // Explosion objects into GameSpace where appropriate.
 void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid);
+void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
+void CheckRocketWallCollisions(GameSpace& space);
 void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
+void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerWallCollisions(GameSpace& space);
 void CheckAsteroidWallCollisions(GameSpace& space);
