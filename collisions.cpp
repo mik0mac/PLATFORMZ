@@ -1,4 +1,4 @@
-#inlcude <vector>
+#include <vector>
 #include "collisions.h"
 
 
@@ -83,8 +83,8 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                     Explosion explosion;
                     explosion.position = rocket.position;
-                    explosion.damage = rocket.damage;
-                    explosion.damageRadius = rocket.damageRadius;
+                    // explosion.damage = rocket.damage;
+                    // explosion.damageRadius = rocket.damageRadius;
                     explosions.push_back(explosion);
 
                     hit = true;
@@ -119,8 +119,8 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 Explosion explosion;
                 explosion.position = rocket.position;
-                explosion.damage = rocket.damage;
-                explosion.damageRadius = rocket.damageRadius;
+                // explosion.damage = rocket.damage;
+                // explosion.damageRadius = rocket.damageRadius;
                 explosions.push_back(explosion);
 
                 break; // rocket already detonated this frame
@@ -155,8 +155,8 @@ void CheckRocketWallCollisions(GameSpace& space) {
 
         Explosion explosion;
         explosion.position = rocket.position;
-        explosion.damage = rocket.damage;
-        explosion.damageRadius = rocket.damageRadius;
+        // explosion.damage = rocket.damage;
+        // explosion.damageRadius = rocket.damageRadius;
         explosions.push_back(explosion);
     }
 }
@@ -413,7 +413,10 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             // Also apply a pushback force to the asteroid, scaled by the same falloff and explosion damage,
             // and inversely by asteroid size (smaller = more push). Push directly away from the explosion center.
             Vector3 pushback = asteroid.position - explosion.position;
-            pushback *= falloff * (explosion.damage / asteroid.size); // scale pushback by damage and asteroid size (smaller = more push)
+            // normalize so the magnitude of the pushback is consistent regardless of distance.
+            pushback = Vector3Normalize(pushback);
+            // scale by falloff and explosion damage.
+            pushback = Vector3Scale(pushback, falloff * explosion.damage * explosion.pushbackFactor);
             asteroid.velocity = Vector3Add(asteroid.velocity, pushback);
         }
 
@@ -429,7 +432,9 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 
             // Also apply a pushback force to the player, scaled by the same falloff.
             Vector3 pushback = player.position - explosion.position;
-            pushback = Vector3Scale(pushback, falloff * (explosion.damage / player.size)); // scale pushback by damage and player size (smaller = more push)
+            // normalize so the magnitude of the pushback is consistent regardless of distance.
+            pushback = Vector3Normalize(pushback);
+            pushback = Vector3Scale(pushback, falloff * explosion.damage * explosion.pushbackFactor); // scale pushback by damage and pushback factor.
             player.velocity = Vector3Add(player.velocity, pushback);
         }
     }

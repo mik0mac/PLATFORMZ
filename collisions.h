@@ -126,3 +126,15 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid);
 // each pair-type check. Call this from main.cpp's update step, after
 // updatePositions(dt) and before updateActiveObjects().
 void RunCollisionChecks(GameSpace& space, CollisionGrid& grid);
+
+
+// // helper function to remap a Vector3 to the -1 to 1 range on all axes, maintaining the same relative proportions between axes. Useful for normalizing pushback directions without losing the relative strength of each axis in the push.
+// Vector3 RemapToNegOneToOne(Vector3 value) {
+//     // find the max extent of the value on any axis, then divide all axes by that to map the largest one to 1 or -1, and the others proportionally.
+//     float maxExtent = fmaxf(fabsf(value.x), fmaxf(fabsf(value.y), fabsf(value.z)));
+//     if (maxExtent > 1e-6f) { // avoid divide-by-zero for very small vectors
+//         return Vector3Scale(value, 1.0f / maxExtent);
+//     } else {
+//         return Vector3Zero(); // if the vector is very small, just return zero to avoid instability in the pushback direction.
+//     }
+// }

@@ -308,8 +308,8 @@ public:
     Color color_fill = {255, 0, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
 
     // attributes
-    int damage = 25; // Damage to player or asteroid on collision
-    float damageRadius = 5.0f; // Radius of the explosion damage area
+    // int damage = 25; // Damage to player or asteroid on collision
+    // float damageRadius = 25.0f; // Radius of the explosion damage area
     // will need a function to check for collisions with players and asteroids within this radius
     // and apply damage to accordingly, like damage * (1 - distance_to_target / damageRadius).
     bool isDestroyed = false; // Rocket is destroyed on collision or when it goes out of bounds
@@ -324,17 +324,17 @@ public:
     // position and size
     Vector3 position;
     float radius = 0.0f; // Current radius of the explosion effect
-    float maxRadius = 5.0f; // Maximum radius of the explosion effect
-    float expansionRate = 20.0f; // How quickly the explosion expands, in units/sec
+    float maxRadius = 10.0f; // Maximum radius of the explosion effect
+    float expansionRate = 10.0f; // How quickly the explosion expands, in units/sec
     bool isActive = true; // Whether the explosion effect is still active (expanding or at max radius)
 
     // splash damage - set from the originating Rocket's damage/damageRadius
     // at spawn time, since the rocket itself is typically destroyed/erased
     // before the explosion finishes its visual lifetime.
     int damage = 25; // Max damage dealt to anything within damageRadius of position
-    float damageRadius = 5.0f; // Radius of the splash damage area (separate from visual maxRadius)
+    float damageRadius = 10.0f; // Radius of the splash damage area (separate from visual maxRadius)
     bool hasAppliedDamage = false; // Splash damage applies once, at the moment of explosion creation - not every frame
-
+    float pushbackFactor = 1.0f; // Factor to scale the pushback force applied to objects within the explosion radius
     // appearance
     Color color_outline = {255, 150, 0, 255};
     Color color_fill = {255, 150, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
@@ -349,6 +349,8 @@ public:
             }
         }
     }
+
+    
     
 private:
 };
