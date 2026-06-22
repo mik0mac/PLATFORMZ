@@ -152,14 +152,15 @@ public:
 
     void updatePos(float dt) {
         position = Vector3Add(position, Vector3Scale(velocity, dt));
+        // gravity is applied in updateVelocity.
     }
 
-    void updatePos(float dt, float gravity) {
-        // // Apply gravity
-        // velocity.y -= gravity * dt;
-        // Update position based on velocity
-        position = Vector3Add(position, Vector3Scale(velocity, dt));
-    }
+    // void updatePos(float dt, float gravity) {
+    //     // // Apply gravity
+    //     // velocity.y -= gravity * dt;
+    //     // Update position based on velocity
+    //     position = Vector3Add(position, Vector3Scale(velocity, dt));
+    // }
 
 
     // shape, size and collision box

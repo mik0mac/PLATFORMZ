@@ -51,7 +51,6 @@ only `main.cpp` and `collisions.cpp` as translation units.
 - `camera.h` — `CameraFromPlayer(player, eyeHeight)` builds the first-person
   `Camera3D` from player state each frame. `FlyCam` is a debug free-fly camera.
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
-- `logic.cpp` — empty/unused stub; not in the build.
 - `WireframeTests/` — **gitignored** scratch dir of prototypes (2D/3D wireframe
   experiments, Godot tests) that much of this code was pulled from. Not built.
 
@@ -100,9 +99,6 @@ WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold 
 earth-gravity key (LEFT_SUPER/⌘) for stronger gravity · Esc toggle cursor capture.
 
 ## Known quirks — leave as-is unless asked
-- `Player` has two `updatePos` overloads (`updatePos(float)` used by
-  `gamespace.h`; `updatePos(float, float)` currently unused) — an in-progress
-  refactor the user is driving. Don't "fix" it proactively.
 - `Rocket::updatePos` has a commented-out gravity line — intentional (rockets
   fly straight). Leave it.
 - This builds/runs on macOS with Homebrew paths only; no cross-platform build.

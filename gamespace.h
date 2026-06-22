@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include <algorithm>
+#include <limits>
 
 #include "elements.h"
 #include "shapes.h"
@@ -17,6 +18,8 @@
 class GameSpace {
 public:
     float halfSize = 40.0; // 1.0 equates to a meter. Defines the half-size of the cubic game space, so total size is 80x80x80
+    float boundaryBufferPlatforms = 0.8f; // Buffer distance to keep platforms from spawning right on the boundary.  As a factor of halfSize.
+    float boundaryBufferAsteroids = 0.9f; // Buffer distance to keep objects from spawning right on the boundary.  As a factor of halfSize.
     Color backgroundColor = {0, 0, 0, 255}; // Black background for the game space
     Color gridColor = {0, 90, 90, 255}; // Color for the ground grid lines
 
@@ -25,18 +28,23 @@ public:
 
     void generate() {
         platforms.clear();
+        std::vector<Vector3> placed; // already-placed platform centers, fed to best-candidate sampling
+        placed.reserve(num_of_platforms);
+        float platformBuffer = halfSize * boundaryBufferPlatforms;
         for (int i = 0; i < num_of_platforms; ++i) {
             Platform platform;
             platform.generateSize(); // Random width and depth, thin height for a platform
-            platform.position = {RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize)};
+            platform.position = bestCandidatePosition(placed, platformBuffer); // spread platforms, avoid clustering
             platform.startingPosition = platform.position; // Store the initial position of the platform
+            placed.push_back(platform.position);
             platforms.push_back(platform);
         }
         asteroids.clear();
         for (int i = 0; i < num_of_asteroids; ++i) {
             Asteroid asteroid;
             asteroid.generateSize(); // Random size for the asteroid
-            asteroid.position = {RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize)};
+            float buffer = halfSize * boundaryBufferAsteroids;
+            asteroid.position = {RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer)};
             asteroid.startingPosition = asteroid.position; // Store the initial position of the asteroid
             asteroid.generateVelocity(); // Random velocity in each direction
             asteroids.push_back(asteroid);
@@ -152,9 +160,35 @@ public:
     std::vector<Explosion>& getExplosions() { return explosions; }
 
 private:
-    int num_of_platforms = 8;
+    // Mitchell's best-candidate sampling: returns a point that is well-spread
+    // relative to already-placed points. Draws `samples` random candidates in
+    // the buffer cube and keeps the one farthest from its nearest neighbour.
+    // Parameter-free spread (vs. uniform random clustering); always returns a
+    // point, unlike min-distance rejection which can fail for large N.
+    Vector3 bestCandidatePosition(const std::vector<Vector3>& placed,
+                                  float buffer, int samples = 10) {
+        Vector3 best{};
+        float bestNearestSqr = -1.0f;
+        for (int s = 0; s < samples; ++s) {
+            Vector3 c{RandomFloat(-buffer, buffer),
+                      RandomFloat(-buffer, buffer),
+                      RandomFloat(-buffer, buffer)};
+            if (placed.empty()) return c; // first point: nothing to space against
+            float nearestSqr = std::numeric_limits<float>::max();
+            for (const Vector3& p : placed) {
+                nearestSqr = std::min(nearestSqr, Vector3DistanceSqr(c, p));
+            }
+            if (nearestSqr > bestNearestSqr) {
+                bestNearestSqr = nearestSqr;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    int num_of_platforms = 12;
     std::vector<Platform> platforms;
-    int num_of_asteroids = 5;
+    int num_of_asteroids = 6;
     std::vector<Asteroid> asteroids;
     int number_of_players = 1; // For future use: if we want to add multiplayer support,
     // we can increase this and add a vector of Player objects.
