@@ -15,12 +15,13 @@ int main() {
     SetTargetFPS(60);
     DisableCursor(); // captures mouse for free-look, like a standard 3D game
 
+    const float eyeHeight = 1.6f; // meters above player.position - roughly eye level within the 2.0-tall collision box
+
     // Game state lives here, declared once, mutated every frame
     GameSpace gameSpace; // The main game space containing platforms, asteroids, and players
     gameSpace.generate(); // Generate the game space with platforms, asteroids, and players
 
     CollisionGrid collisionGrid; // Spatial grid, rebuilt each frame in RunCollisionChecks
-    FlyCam flyCam; // Free-fly camera, not part of GameSpace - see gamespace.h::draw() note
 
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits X, presses Esc, etc.
@@ -32,7 +33,25 @@ int main() {
 
         // 2. UPDATE
         // Read input, mutate game state. No drawing happens here.
-        flyCam.Update(dt);
+        // Player is the source of truth for movement/look - the camera is
+        // synced FROM the player after this, never the other way around.
+        Player& player = gameSpace.getPlayers()[0]; // single-player for now
+
+        Vector2 mouseDelta = GetMouseDelta();
+        player.updateLook(mouseDelta);
+
+        Vector2 moveInput{0, 0}; // x = strafe, y = forward/back
+        if (IsKeyDown(KEY_W)) moveInput.y += 1.0f;
+        if (IsKeyDown(KEY_S)) moveInput.y -= 1.0f;
+        if (IsKeyDown(KEY_D)) moveInput.x += 1.0f;
+        if (IsKeyDown(KEY_A)) moveInput.x -= 1.0f;
+
+        player.isUsingJetpack = IsKeyDown(KEY_SPACE) || IsKeyDown(KEY_LEFT_CONTROL);
+        bool jetpackUp = IsKeyDown(KEY_SPACE);
+        bool jetpackDown = IsKeyDown(KEY_LEFT_CONTROL);
+        player.updateVelocity(dt, moveInput, jetpackUp, jetpackDown);
+        player.updateFuel(dt, player.isUsingJetpack);
+
         gameSpace.updatePositions(dt);
 
         // Collision detection and response:
@@ -52,12 +71,12 @@ int main() {
         BeginDrawing();
             ClearBackground(BLACK);
 
-            BeginMode3D(flyCam.ToCamera3D());
+            BeginMode3D(CameraFromPlayer(player, eyeHeight));
                 gameSpace.draw();
             EndMode3D();
 
             DrawFPS(10, 10);
-            DrawText("WASD move | mouse look | Space/Ctrl up-down | Shift sprint | Esc toggle cursor", 10, 30, 14, DARKGRAY);
+            DrawText("WASD move | mouse look | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
         EndDrawing();
 
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.

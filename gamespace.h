@@ -63,7 +63,9 @@ public:
             player.startingPosition = player.position; // Store the initial position of the player
 
             // player direction starts facing towards the center of the game space.
-            player.direction = Vector3Normalize(Vector3Subtract({0.0f, 0.0f, 0.0f}, player.position));
+            Vector3 toCenter = Vector3Subtract({0, 0, 0}, player.position);
+            player.yaw = atan2f(toCenter.z, toCenter.x); // Yaw is the angle in the XZ plane, so use atan2 with z and x.
+            player.pitch = 0.0f; // Start looking horizontally, no pitch.
 
             // player velocity starts at zero.  Default speed is set in the Player class.
             // player health, fuel, and ammo start at their default values defined in the Player class.
@@ -124,9 +126,11 @@ public:
         for (Platform& platform : platforms) {
             DrawPlatform(platform);
         }
-        for (Player& player : players) {
-            if (player.isAlive) DrawPlayer(player);
-        }
+        // NOTE: not drawing players here - in first-person, the locally
+        // controlled player's own collision box would render directly
+        // around the camera (you'd see your own "body" as a box at your
+        // feet). Revisit this once there's a reason to render players -
+        // e.g. a third-person view, or other players in a multiplayer game.
         for (Asteroid& asteroid : asteroids) {
             DrawAsteroid(asteroid);
         }

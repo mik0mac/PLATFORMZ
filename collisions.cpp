@@ -200,6 +200,31 @@ void CheckPlayerWallCollisions(GameSpace& space) {
     }
 }
 
+//MARK: Asteroid vs Walls
+// Same boundary cube as CheckPlayerWallCollisions, reusing GameSpace's
+// wall_elasticity. Asteroids take no wall_damage (they're not the player).
+void CheckAsteroidWallCollisions(GameSpace& space) {
+    auto& asteroids = space.getAsteroids();
+    float halfSize = space.halfSize;
+
+    for (Asteroid& asteroid : asteroids) {
+        if (asteroid.isDestroyed) continue;
+
+        if (asteroid.position.x > halfSize || asteroid.position.x < -halfSize) {
+            asteroid.position.x = Clamp(asteroid.position.x, -halfSize, halfSize);
+            asteroid.velocity.x = -asteroid.velocity.x * space.wall_elasticity;
+        }
+        if (asteroid.position.y > halfSize || asteroid.position.y < -halfSize) {
+            asteroid.position.y = Clamp(asteroid.position.y, -halfSize, halfSize);
+            asteroid.velocity.y = -asteroid.velocity.y * space.wall_elasticity;
+        }
+        if (asteroid.position.z > halfSize || asteroid.position.z < -halfSize) {
+            asteroid.position.z = Clamp(asteroid.position.z, -halfSize, halfSize);
+            asteroid.velocity.z = -asteroid.velocity.z * space.wall_elasticity;
+        }
+    }
+}
+
 //MARK: Explosion splash damage
 // Explosions aren't bucketed into the spatial grid (typically few active at
 // once), so this loops asteroids/players directly per explosion rather than
@@ -249,4 +274,5 @@ void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
     CheckAsteroidPlayerCollisions(space, grid);
     CheckPlayerPlatformCollisions(space, grid);
     CheckPlayerWallCollisions(space);
+    CheckAsteroidWallCollisions(space);
 }

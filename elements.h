@@ -31,6 +31,9 @@ public:
     bool isBouncy = false; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
     float elasticity = 0.5f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
 
+    void updatePos(float dt) {
+        // For moving platforms, future use: position = position + velocity * dt;
+    }
     private:
 };
 
@@ -41,33 +44,92 @@ public:
     Vector3 position = {0.0f, 0.0f, 0.0f}; // Center starting position.  Replaced.
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
     Vector3 velocity = {0.0f, 0.0f, 0.0f}; // Player velocity, updated by movement input and gravity
-    Vector3 direction = {0.0f, 0.0f, 1.0f}; // Normalized direction vector for movement and facing
+
+    // Look direction, stored as yaw/pitch rather than a raw Vector3 - this is
+    // the authoritative state for both camera orientation and player facing
+    // (shooting direction). A Vector3 can't cleanly accumulate frame-over-frame
+    // mouse deltas or express a pitch clamp, so yaw/pitch are the source of
+    // truth and Forward()/Right() below derive a Vector3 from them on demand.
+    float yaw = -90.0f * DEG2RAD; // facing -Z initially, matches FlyCam's default
+    float pitch = 0.0f;
+    const float pitchLimit = 89.0f * DEG2RAD;
+    const float lookSensitivity = 0.0025f;
+
     float speedWalk = 5.0f; // units/sec
     float accelerationWalk = 5.0f; // units/sec^2, how quickly the player accelerates to their max speed when input is applied
     float speedJetpack = 8.0f; // units/sec, max speed when using jetpack
     float accelerationJetpack = 10.0f; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
     bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
 
-    void updateDirection(Vector3 inputDirection) {
-        // Update the player's facing direction based on input.  This is separate from movement to allow for strafing.
-        if (inputDirection.x != 0 || inputDirection.y != 0 || inputDirection.z != 0) {
-            direction = Vector3Normalize(inputDirection);
-        }
+    // Full look-direction vector (includes pitch) - used for aiming/shooting.
+    Vector3 Forward() const {
+        return { cosf(pitch) * cosf(yaw), sinf(pitch), cosf(pitch) * sinf(yaw) };
+    }
+    Vector3 Right() const {
+        Vector3 fwd = Forward();
+        return Vector3Normalize(Vector3CrossProduct(fwd, {0, 1, 0}));
+    }
+    // Forward flattened to the horizontal plane - used for ground movement,
+    // so looking up/down doesn't change walking speed or make the player fly.
+    Vector3 ForwardFlat() const {
+        Vector3 flat = { cosf(yaw), 0.0f, sinf(yaw) };
+        return Vector3Normalize(flat);
     }
 
-    void updateVelocity(float dt, Vector3 inputDirection) {
-        // Update the player's velocity based on input and whether they are using the jetpack.
+    void updateLook(Vector2 mouseDelta) {
+        yaw += mouseDelta.x * lookSensitivity;
+        pitch -= mouseDelta.y * lookSensitivity;
+        pitch = Clamp(pitch, -pitchLimit, pitchLimit);
+    }
+
+    // moveInput.x = strafe (right/left), moveInput.y = forward/back -
+    // both relative to current look direction (flattened), not world axes.
+    // Vertical movement (jetpack up/down) is separate, not part of moveInput.
+    void updateVelocity(float dt, Vector2 moveInput, bool jetpackUp, bool jetpackDown) {
         float targetSpeed = isUsingJetpack ? speedJetpack : speedWalk;
         float acceleration = isUsingJetpack ? accelerationJetpack : accelerationWalk;
 
-        Vector3 desiredVelocity = Vector3Scale(Vector3Normalize(inputDirection), targetSpeed);
-        Vector3 velocityChange = Vector3Subtract(desiredVelocity, velocity);
-        Vector3 accelerationVector = Vector3Scale(Vector3Normalize(velocityChange), acceleration);
+        Vector3 fwd = ForwardFlat();
+        Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, {0, 1, 0}));
 
-        // Update velocity with acceleration, but don't exceed target speed
-        velocity = Vector3Add(velocity, Vector3Scale(accelerationVector, dt));
-        if (Vector3Length(velocity) > targetSpeed) {
-            velocity = Vector3Scale(Vector3Normalize(velocity), targetSpeed);
+        Vector3 desiredHorizontal{0, 0, 0};
+        if (moveInput.y != 0.0f) desiredHorizontal = Vector3Add(desiredHorizontal, Vector3Scale(fwd, moveInput.y));
+        if (moveInput.x != 0.0f) desiredHorizontal = Vector3Add(desiredHorizontal, Vector3Scale(right, moveInput.x));
+        if (Vector3LengthSqr(desiredHorizontal) > 0.0f) {
+            desiredHorizontal = Vector3Scale(Vector3Normalize(desiredHorizontal), targetSpeed);
+        }
+
+        // Accelerate horizontal velocity toward desired, same easing approach
+        // as before - just split out from vertical so gravity/jetpack on the
+        // Y axis isn't fighting this every frame.
+        Vector3 currentHorizontal{velocity.x, 0, velocity.z};
+        Vector3 horizontalChange = Vector3Subtract(desiredHorizontal, currentHorizontal);
+        if (Vector3LengthSqr(horizontalChange) > 0.0f) {
+            Vector3 accelVec = Vector3Scale(Vector3Normalize(horizontalChange), acceleration * dt);
+            // don't overshoot past desired in one frame
+            if (Vector3Length(accelVec) > Vector3Length(horizontalChange)) {
+                currentHorizontal = desiredHorizontal;
+            } else {
+                currentHorizontal = Vector3Add(currentHorizontal, accelVec);
+            }
+        }
+        velocity.x = currentHorizontal.x;
+        velocity.z = currentHorizontal.z;
+
+        // Vertical: jetpack thrust accelerates toward target speed rather
+        // than snapping velocity.y directly - this matters because an
+        // instant override would erase a wall-bounce's reflected velocity.y
+        // on the very next frame if jetpack input is still held. Accelerating
+        // instead means a bounce gets a moment to actually take effect.
+        if (isUsingJetpack && (jetpackUp || jetpackDown)) {
+            float targetVerticalSpeed = jetpackUp ? speedJetpack : -speedJetpack;
+            float verticalChange = targetVerticalSpeed - velocity.y;
+            float maxStep = accelerationJetpack * dt;
+            if (fabsf(verticalChange) > maxStep) {
+                velocity.y += (verticalChange > 0 ? maxStep : -maxStep);
+            } else {
+                velocity.y = targetVerticalSpeed;
+            }
         }
     }
 
@@ -105,7 +167,7 @@ public:
         if (ammo == 0) {
             canShoot = false; // Player cannot shoot if ammo reaches zero
         }
-        // Create a new Rocket object and set its initial position, velocity, and direction based on the player's current facing direction.
+        // Create a new Rocket object and set its initial position, velocity, and direction based on Forward().
         // This will be handled in the main game loop where we manage the list of rockets. 
     }
 

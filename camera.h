@@ -10,6 +10,8 @@
 #include "raymath.h"
 #include <cmath>
 
+#include "elements.h"
+
 struct FlyCam {
     Vector3 position{0.0f, 3.0f, 14.0f};
     float yaw   = -90.0f * DEG2RAD; // facing -Z initially
@@ -64,3 +66,20 @@ struct FlyCam {
         return cam;
     }
 };
+
+// Builds a first-person Camera3D directly from Player state - position +
+// eye-height offset, and Player's own yaw/pitch (via Forward()) for look
+// direction. Player is the authoritative source; this is read-only,
+// called fresh each frame after player movement/look updates, never the
+// other way around (camera never drives player state).
+inline Camera3D CameraFromPlayer(const Player& player, float eyeHeight) {
+    Vector3 eyePos = Vector3Add(player.position, Vector3{0, eyeHeight, 0});
+
+    Camera3D cam{};
+    cam.position = eyePos;
+    cam.target = Vector3Add(eyePos, player.Forward());
+    cam.up = {0, 1, 0};
+    cam.fovy = 60.0f;
+    cam.projection = CAMERA_PERSPECTIVE;
+    return cam;
+}

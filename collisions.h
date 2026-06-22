@@ -110,6 +110,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerWallCollisions(GameSpace& space);
+void CheckAsteroidWallCollisions(GameSpace& space);
 
 // Splash damage from active Explosions onto nearby asteroids and players.
 // Falloff formula: damage * (1 - distance / damageRadius), so damage is

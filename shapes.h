@@ -94,29 +94,28 @@ inline void DrawGridRoom(float halfSize, float spacing, Color col) {
 // One function per game-object type, each reading only the fields it needs
 // from the corresponding class in elements.h.
 
-void DrawPlatform(const Platform& platform) {
+inline void DrawPlatform(const Platform& platform) {
     // NOTE: Platform::size is a Vector3 (width/height/depth can differ),
     // but DrawShadedWireCube only takes one size float (assumes a cube).
     // Using size.x for now - revisit if non-cubic platforms are needed.
     DrawShadedWireCube(platform.position, platform.size.x, 0.0f, platform.color_outline, platform.color_fill);
 }
 
-void DrawPlayer(const Player& player) {
+inline void DrawPlayer(const Player& player) {
     DrawShadedWireCube(player.position, player.size.x, 0.0f, player.color_outline, player.color_fill);
 }
 
-void DrawAsteroid(const Asteroid& asteroid) {
+inline void DrawAsteroid(const Asteroid& asteroid) {
     DrawShadedSphere(asteroid.position, asteroid.size, asteroid.color_outline, asteroid.color_fill);
 }
 
-void DrawRocket(const Rocket& rocket) {
+inline void DrawRocket(const Rocket& rocket) {
     // Simple wireframe pyramid for the rocket, no fill
     DrawWirePyramid(rocket.position, 0.0f, 1.5f, 0.5f, rocket.color_outline);
 }
 
-void DrawExplosion(const Explosion& explosion) {
+inline void DrawExplosion(const Explosion& explosion) {
     // Expanding wireframe sphere with fading fill, driven by Explosion::update(dt)
     // in gamespace.h. color_fill.a is already faded over time by that update step.
     DrawShadedSphere(explosion.position, explosion.radius, explosion.color_outline, explosion.color_fill);
 }
-
