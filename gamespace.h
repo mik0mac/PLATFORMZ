@@ -5,20 +5,12 @@
 #include "rlgl.h"
 #include <vector>
 #include <cmath>
-#include <random>
+
 #include <algorithm>
 
 #include "elements.h"
 #include "shapes.h"
-
-//MARK: Random
-// Utility function to generate a random float between min and max.
-inline float RandomFloat(float min, float max) {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(min, max);
-    return dist(gen);
-}
+#include "random.h"
 
 
 //MARK: GameSpace
@@ -35,7 +27,7 @@ public:
         platforms.clear();
         for (int i = 0; i < num_of_platforms; ++i) {
             Platform platform;
-            platform.size = {RandomFloat(1, 5), 0.5f, RandomFloat(1, 5)}; // Random width and depth, thin height for a platform
+            platform.generateSize(); // Random width and depth, thin height for a platform
             platform.position = {RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize)};
             platform.startingPosition = platform.position; // Store the initial position of the platform
             platforms.push_back(platform);
@@ -43,10 +35,10 @@ public:
         asteroids.clear();
         for (int i = 0; i < num_of_asteroids; ++i) {
             Asteroid asteroid;
-            asteroid.size = RandomFloat(0.5f, 3.0f);
+            asteroid.generateSize(); // Random size for the asteroid
             asteroid.position = {RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize), RandomFloat(-halfSize, halfSize)};
             asteroid.startingPosition = asteroid.position; // Store the initial position of the asteroid
-            asteroid.velocity = {RandomFloat(-2, 2), RandomFloat(-2, 2), RandomFloat(-2, 2)}; // Random velocity in each direction
+            asteroid.generateVelocity(); // Random velocity in each direction
             asteroids.push_back(asteroid);
         }
         players.clear();

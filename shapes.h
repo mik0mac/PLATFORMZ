@@ -14,21 +14,21 @@
 // WireframeTests/main3d3.cpp. Higher-level Draw___(const Element&) functions
 // below build on top of these.
 
-// Draws a wireframe cube with a translucent, slightly-glowing fill pass underneath.
+// Draws a wireframe box with a translucent, slightly-glowing fill pass underneath.
 // Render solid first (low alpha), then draw the wireframe on top at full opacity
 // so edges stay crisp - the core "vector + shading" look used throughout.
-inline void DrawShadedWireCube(Vector3 position, float size, float rotY, Color wireColor, Color fillColor) {
+inline void DrawShadedWireBox(Vector3 position, float width, float height, float depth, float rotY, Color wireColor, Color fillColor) {
     rlPushMatrix();
     rlTranslatef(position.x, position.y, position.z);
     rlRotatef(rotY * RAD2DEG, 0, 1, 0);
 
-    DrawCube(Vector3Zero(), size, size, size, fillColor);
-    DrawCubeWires(Vector3Zero(), size, size, size, wireColor);
+    DrawCube(Vector3Zero(), width, height, depth, fillColor);
+    DrawCubeWires(Vector3Zero(), width, height, depth, wireColor);
 
     rlPopMatrix();
 }
 
-// Same fill+wireframe layering as DrawShadedWireCube, but for a sphere.
+// Same fill+wireframe layering as DrawShadedWireBox, but for a sphere.
 // Used for asteroids and the explosion effect.
 inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Color fillColor) {
     DrawSphere(position, radius, fillColor);
@@ -95,14 +95,11 @@ inline void DrawGridRoom(float halfSize, float spacing, Color col) {
 // from the corresponding class in elements.h.
 
 inline void DrawPlatform(const Platform& platform) {
-    // NOTE: Platform::size is a Vector3 (width/height/depth can differ),
-    // but DrawShadedWireCube only takes one size float (assumes a cube).
-    // Using size.x for now - revisit if non-cubic platforms are needed.
-    DrawShadedWireCube(platform.position, platform.size.x, 0.0f, platform.color_outline, platform.color_fill);
+    DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, platform.color_outline, platform.color_fill);
 }
 
 inline void DrawPlayer(const Player& player) {
-    DrawShadedWireCube(player.position, player.size.x, 0.0f, player.color_outline, player.color_fill);
+    DrawShadedWireBox(player.position, player.size.x, player.size.y, player.size.z, 0.0f, player.color_outline, player.color_fill);
 }
 
 inline void DrawAsteroid(const Asteroid& asteroid) {

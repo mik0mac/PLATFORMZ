@@ -7,7 +7,8 @@
 #include "rlgl.h"
 #include <vector>
 #include <cmath>
-#include <random>
+
+#include "random.h"
 
 const float GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 
@@ -15,12 +16,24 @@ const float GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 //MARK: Platform
 class Platform {
 public:
-    // position and size
-    Vector3 size;
+    // position
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the platform.
     // Vector3 velocity; // For moving platforms, future use: position += velocity * dt;
     // float speed = 0.0f; // For moving platforms, future use: speed = length(velocity);
+
+    void updatePos(float dt) {
+    // For moving platforms, future use: position = position + velocity * dt;
+    }
+
+    // size
+    Vector3 size;
+
+    void generateSize() {
+        size.x = RandomFloat(min_width, max_width);
+        size.y = RandomFloat(min_height, max_height);
+        size.z = RandomFloat(min_depth, max_depth);
+    }
 
     // appearance
     Color color_outline = {0, 255, 200, 255};
@@ -31,10 +44,14 @@ public:
     bool isBouncy = false; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
     float elasticity = 0.5f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
 
-    void updatePos(float dt) {
-        // For moving platforms, future use: position = position + velocity * dt;
-    }
-    private:
+private:
+    // static constexpr (not per-instance const) so Platform stays copy-assignable.
+    static constexpr float max_height = 0.5f;
+    static constexpr float min_height = 0.1f;
+    static constexpr float max_width = 20.0f;
+    static constexpr float min_width = 5.0f;
+    static constexpr float max_depth = max_width;
+    static constexpr float min_depth = min_width;
 };
 
 //MARK: Player
@@ -200,7 +217,17 @@ public:
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the asteroid, set during game space generation.
     Vector3 velocity;
-    float speed = 5.0f; // units/sec
+    float speed;
+
+    void generateVelocity() {
+        // Magnitude is always positive (min_speed..max_speed); a random sign
+        // per axis gives asteroids drift in any direction, not just +X/+Y/+Z.
+        float speed_x = RandomFloat(min_speed, max_speed) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
+        float speed_y = RandomFloat(min_speed, max_speed) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
+        float speed_z = RandomFloat(min_speed, max_speed) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
+        velocity = {speed_x, speed_y, speed_z};
+        speed = Vector3Length(velocity); // keep the scalar speed in sync with the vector
+    }
 
     void updatePos(float dt) {
         position = Vector3Add(position, Vector3Scale(velocity, dt));
@@ -212,6 +239,10 @@ public:
     // For rendering the asteroid, we can use a wireframe sphere or a simple 3D model.
     // For collision detection, we will use the position as the center of the sphere,
     // and size as the radius of the collision sphere.
+
+    void generateSize() {
+        size = RandomFloat(min_size, max_size);
+    }
 
     // appearance
     Color color_outline = {255, 100, 0, 255};
@@ -234,6 +265,12 @@ public:
     }
 
 private:
+    // static constexpr (not per-instance const) so Asteroid stays
+    // copy-assignable - std::remove_if/erase in GameSpace needs that.
+    static constexpr float min_size = 1.0f; // Minimum radius of the asteroid
+    static constexpr float max_size = 5.0f; // Maximum radius of the asteroid
+    static constexpr float min_speed = 12.0f; // Minimum speed of the asteroid
+    static constexpr float max_speed = 24.0f; // Maximum speed of the asteroid
 };
 
 //MARK: Rocket
