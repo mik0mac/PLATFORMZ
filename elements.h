@@ -136,7 +136,7 @@ public:
         // instant override would erase a wall-bounce's reflected velocity.y
         // on the very next frame if jetpack input is still held. Accelerating
         // instead means a bounce gets a moment to actually take effect.
-        if (isUsingJetpack) {
+        if (isUsingJetpack && fuel > 0.1f) { // must compare against a small threshold.
             float targetVerticalSpeed = speedJetpack;
             float verticalChange = targetVerticalSpeed - velocity.y;
             float maxStep = accelerationJetpack * dt;
@@ -183,8 +183,8 @@ public:
     int ammo = 100;
     bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
     float fuel = 100.0f;
-    float fuelConsumptionRate = 10.0f; // Per sec.
-    float fuelRegenRate = 0.25f; // Per sec.  Fuel regeneration rate when not using jetpack
+    float fuelConsumptionRate = 5.0f; // Per sec.
+    float fuelRegenRate = 0.5f; // Per sec.  Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
 
     void shoot() {
@@ -291,6 +291,7 @@ public:
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
     float speed = 40.0f; // units/sec
+    float kickback = speed * 0.1f; // Recoil applied to player on shoot.
 
     void updatePos(float dt) {
         // velocity.y -= GRAVITY * dt; // Apply gravity to the rocket's velocity
@@ -309,10 +310,7 @@ public:
     Color color_fill = {255, 255, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
 
     // attributes
-    // int damage = 25; // Damage to player or asteroid on collision
-    // float damageRadius = 25.0f; // Radius of the explosion damage area
-    // will need a function to check for collisions with players and asteroids within this radius
-    // and apply damage to accordingly, like damage * (1 - distance_to_target / damageRadius).
+    // damage and explosion radius are properties of the resulting Explosion.
     bool isDestroyed = false; // Rocket is destroyed on collision or when it goes out of bounds
     bool isExploding = false; // Rocket is in the process of exploding, can be used for visual effects
 

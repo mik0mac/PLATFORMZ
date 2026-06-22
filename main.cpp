@@ -70,6 +70,10 @@ int main() {
             rocket.direction = aim;
             rocket.velocity = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             gameSpace.getRockets().push_back(rocket);
+
+            // kickback
+            Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));
+            player.velocity = Vector3Add(player.velocity, kickback);
         }
 
         gameSpace.updatePositions(dt);
