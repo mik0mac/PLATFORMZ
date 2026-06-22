@@ -50,7 +50,6 @@ int main() {
         if (IsKeyDown(KEY_A)) moveInput.x -= 1.0f;
 
         player.isUsingJetpack = IsKeyDown(KEY_SPACE);
-        // bool jetpackUp = IsKeyDown(KEY_SPACE);
         bool earthGravityEngaged = IsKeyDown(KEY_LEFT_SUPER); // = COMMAND.
         float gravity = earthGravityEngaged ? EARTH_GRAVITY : MOON_GRAVITY;
         player.updateVelocity(dt, moveInput, gravity);

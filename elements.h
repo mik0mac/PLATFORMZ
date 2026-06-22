@@ -298,7 +298,8 @@ public:
     }
 
     // size and collision box
-    Vector3 size = {0.2f, 0.2f, 0.8f}; // width, height, depth of the rocket's collision box (a small rectangular prism)
+    // Vector3 size = {0.2f, 0.2f, 0.8f}; // width, height, depth of the rocket's collision box (a small rectangular prism)
+    float size = 0.2f; // Radius.
     // For rendering the rocket, we can use a wireframe rectangular prism or a simple 3D model.
     // For collision detection, we will use the position as the center of the rocket,
     // and size to define the extents of the collision box.

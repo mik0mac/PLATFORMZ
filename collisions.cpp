@@ -73,7 +73,7 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 // Rocket treated as a small sphere (its size.x) for detection
                 // simplicity, rather than full box-vs-sphere.
-                if (SphereIntersectsSphere(rocket.position, rocket.size.x, asteroid.position, asteroid.size)) {
+                if (SphereIntersectsSphere(rocket.position, rocket.size, asteroid.position, asteroid.size)) {
                     // No direct-hit takeDamage call here - ApplyExplosionSplashDamage
                     // handles all damage from the resulting explosion, including the
                     // directly-hit asteroid (it's at ~0 distance from the blast, so
@@ -83,8 +83,6 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                     Explosion explosion;
                     explosion.position = rocket.position;
-                    // explosion.damage = rocket.damage;
-                    // explosion.damageRadius = rocket.damageRadius;
                     explosions.push_back(explosion);
 
                     hit = true;
@@ -114,13 +112,11 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
         for (Platform& platform : platforms) {
             // Rocket treated as a small sphere (its size.x), same as the
             // rocket-vs-asteroid check.
-            if (SphereIntersectsBox(rocket.position, rocket.size.x, platform.position, platform.size)) {
+            if (SphereIntersectsBox(rocket.position, rocket.size, platform.position, platform.size)) {
                 rocket.isDestroyed = true;
 
                 Explosion explosion;
                 explosion.position = rocket.position;
-                // explosion.damage = rocket.damage;
-                // explosion.damageRadius = rocket.damageRadius;
                 explosions.push_back(explosion);
 
                 break; // rocket already detonated this frame
@@ -155,8 +151,6 @@ void CheckRocketWallCollisions(GameSpace& space) {
 
         Explosion explosion;
         explosion.position = rocket.position;
-        // explosion.damage = rocket.damage;
-        // explosion.damageRadius = rocket.damageRadius;
         explosions.push_back(explosion);
     }
 }
@@ -370,16 +364,23 @@ void CheckAsteroidWallCollisions(GameSpace& space) {
     for (Asteroid& asteroid : asteroids) {
         if (asteroid.isDestroyed) continue;
 
-        if (asteroid.position.x > halfSize || asteroid.position.x < -halfSize) {
-            asteroid.position.x = Clamp(asteroid.position.x, -halfSize, halfSize);
+        // Inset each bound by the asteroid's radius so the sphere's edge - not
+        // just its center - stays inside the cube, matching how the player
+        // wall clamp accounts for the player's extent.
+        float r = asteroid.size;
+        float minBound = -halfSize + r;
+        float maxBound = halfSize - r;
+
+        if (asteroid.position.x < minBound || asteroid.position.x > maxBound) {
+            asteroid.position.x = Clamp(asteroid.position.x, minBound, maxBound);
             asteroid.velocity.x = -asteroid.velocity.x * space.wall_elasticity;
         }
-        if (asteroid.position.y > halfSize || asteroid.position.y < -halfSize) {
-            asteroid.position.y = Clamp(asteroid.position.y, -halfSize, halfSize);
+        if (asteroid.position.y < minBound || asteroid.position.y > maxBound) {
+            asteroid.position.y = Clamp(asteroid.position.y, minBound, maxBound);
             asteroid.velocity.y = -asteroid.velocity.y * space.wall_elasticity;
         }
-        if (asteroid.position.z > halfSize || asteroid.position.z < -halfSize) {
-            asteroid.position.z = Clamp(asteroid.position.z, -halfSize, halfSize);
+        if (asteroid.position.z < minBound || asteroid.position.z > maxBound) {
+            asteroid.position.z = Clamp(asteroid.position.z, minBound, maxBound);
             asteroid.velocity.z = -asteroid.velocity.z * space.wall_elasticity;
         }
     }
