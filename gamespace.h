@@ -92,6 +92,12 @@ public:
             rocket.updatePos(dt);
         }
 
+        // Update explosions (expand + fade). Finished ones (isActive == false)
+        // are removed in updateActiveObjects().
+        for (Explosion& explosion : explosions) {
+            explosion.update(dt);
+        }
+
     }
 
     void updateActiveObjects() {

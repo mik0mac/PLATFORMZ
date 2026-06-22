@@ -112,7 +112,24 @@ inline void DrawRocket(const Rocket& rocket) {
 }
 
 inline void DrawExplosion(const Explosion& explosion) {
-    // Expanding wireframe sphere with fading fill, driven by Explosion::update(dt)
-    // in gamespace.h. color_fill.a is already faded over time by that update step.
-    DrawShadedSphere(explosion.position, explosion.radius, explosion.color_outline, explosion.color_fill);
+    // Two-layer vector explosion, all driven by Explosion::update(dt) (called
+    // each frame in gamespace.h), which grows radius 0 -> maxRadius:
+    //   - a bright near-white outer shockwave shell (wire only) that flashes
+    //     at the leading edge and fades as it expands
+    //   - a slower orange core sphere with the translucent fill underneath
+    float t = explosion.maxRadius > 0.0f ? (explosion.radius / explosion.maxRadius) : 1.0f;
+    t = Clamp(t, 0.0f, 1.0f);
+
+    // Outer shockwave: full current radius, near-white flash fading to nothing.
+    unsigned char shockAlpha = (unsigned char)(255 * (1.0f - t));
+    Color shockColor = {255, 230, 180, shockAlpha};
+    DrawSphereWires(explosion.position, explosion.radius, 16, 16, shockColor);
+
+    // Core: smaller orange sphere lagging the shockwave. Fill alpha is already
+    // faded by Explosion::update; fade the wire outline over the lifetime too.
+    float coreRadius = explosion.radius * 0.6f;
+    unsigned char coreOutlineAlpha = (unsigned char)(255 * (1.0f - t));
+    Color coreOutline = {explosion.color_outline.r, explosion.color_outline.g,
+                         explosion.color_outline.b, coreOutlineAlpha};
+    DrawShadedSphere(explosion.position, coreRadius, coreOutline, explosion.color_fill);
 }
