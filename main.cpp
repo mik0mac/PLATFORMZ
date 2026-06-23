@@ -6,6 +6,7 @@
 #include "shapes.h"
 #include "collisions.h"
 #include "camera.h"
+#include "input.h"
 
 const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2 
@@ -46,41 +47,12 @@ int main() {
         // synced FROM the player after this, never the other way around.
         Player& player = gameSpace.getPlayers()[0]; // single-player for now
 
-        Vector2 mouseDelta = GetMouseDelta();
-        player.updateLook(mouseDelta);
-
-        Vector2 moveInput{0, 0}; // x = strafe, y = forward/back
-        if (IsKeyDown(KEY_W)) moveInput.y += 1.0f;
-        if (IsKeyDown(KEY_S)) moveInput.y -= 1.0f;
-        if (IsKeyDown(KEY_D)) moveInput.x += 1.0f;
-        if (IsKeyDown(KEY_A)) moveInput.x -= 1.0f;
-
-        player.isUsingJetpack = IsKeyDown(KEY_SPACE);
-        bool earthGravityEngaged = IsKeyDown(KEY_LEFT_SUPER); // = COMMAND.
-        float gravity = earthGravityEngaged ? EARTH_GRAVITY : MOON_GRAVITY;
-        player.updateVelocity(dt, moveInput, gravity);
-        player.updateFuel(dt, player.isUsingJetpack);
-
-        // Fire a rocket on left-click. IsMouseButtonPressed fires once per
-        // click, so this is naturally single-shot - no cooldown needed.
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && player.canShoot && player.isAlive) {
-            player.shoot(); // ammo / canShoot bookkeeping (see Player::shoot)
-
-            Rocket rocket;
-            Vector3 eyePos = Vector3Add(player.position, Vector3{0, player.eyeHeight, 0});
-            Vector3 aim = player.Forward();
-            // Nudge the muzzle forward so the rocket clears the player and
-            // doesn't detonate on whatever the player is standing on the
-            // instant it spawns.
-            rocket.position = Vector3Add(eyePos, Vector3Scale(aim, 1.0f));
-            rocket.direction = aim;
-            rocket.velocity = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
-            gameSpace.getRockets().push_back(rocket);
-
-            // kickback
-            Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));
-            player.velocity = Vector3Add(player.velocity, kickback);
-        }
+        // Gather this frame's intent into a source-agnostic struct, then apply
+        // it. For a networked player the same struct would arrive over the wire
+        // and feed the identical ApplyPlayerInput() path (see input.h).
+        PlayerInput in = PollLocalInput();
+        float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
+        ApplyPlayerInput(player, in, dt, gravity, gameSpace);
 
         gameSpace.updatePositions(dt);
 
@@ -161,7 +133,7 @@ int main() {
             DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
             DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
             DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);
-            if (earthGravityEngaged) {
+            if (in.earthGravity) {
                 DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
             }
             
