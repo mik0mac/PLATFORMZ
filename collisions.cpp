@@ -168,13 +168,46 @@ void CheckRocketWallCollisions(GameSpace& space) {
 // handled separately by ApplyExplosionSplashDamage and already applies to
 // all players in range, including whoever fired the rocket (self-damage
 // from your own blast radius is intentional).
-// Left as a stub since there's currently no concept of which player fired
-// a given rocket (no "owner" field on Rocket) and only one player exists
-// by default - revisit if direct rocket-player collision needs distinct
-// handling from splash damage once multiplayer or rocket ownership exists.
+// A rocket physically striking a player mid-flight detonates: destroy the
+// rocket and spawn an explosion at the impact point, so the blast's splash
+// damage (ApplyExplosionSplashDamage) deals the actual hit - matching the
+// rocket-vs-asteroid convention of never calling takeDamage directly. The
+// rocket's owner is skipped: a freshly-fired rocket spawns at the firing
+// player's position, so without this guard it would instantly detonate on
+// the shooter. Now that Rocket carries an owner, other players can be hit.
 void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
-    (void)space;
-    (void)grid;
+    auto& rockets = space.getRockets();
+    auto& players = space.getPlayers();
+    auto& explosions = space.getExplosions();
+
+    for (Rocket& rocket : rockets) {
+        if (rocket.isDestroyed) continue;
+
+        bool hit = false;
+        grid.ForEachNeighborCell(rocket.position, [&](const CellKey& key) {
+            if (hit) return; // already resolved this rocket this frame
+            const GridCell* cell = grid.FindCell(key);
+            if (!cell) return;
+
+            for (int playerIndex : cell->playerIndices) {
+                Player& player = players[playerIndex];
+                if (!player.isAlive) continue;
+                if (&player == rocket.owner) continue; // don't detonate on the shooter
+
+                // Rocket treated as a small sphere (its size), player as a box,
+                // same pairing as the rocket-vs-platform check.
+                if (SphereIntersectsBox(rocket.position, rocket.size, player.position, player.size)) {
+                    rocket.isDestroyed = true;
+
+                    Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
+                    explosions.push_back(explosion);
+
+                    hit = true;
+                    break;
+                }
+            }
+        });
+    }
 }
 
 //MARK: Asteroid vs Player
@@ -437,6 +470,11 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             player.takeDamage(splashDamage);
+            // check if player has been eliminated.
+            if (!player.isAlive) {
+                // handle player elimination logic here, e.g., respawn, score update, etc.
+                printf("Player eliminated by explosion!\n");   //placeholder.
+            }
 
             // Also apply a pushback force to the player, scaled by the same falloff.
             Vector3 pushback = player.position - explosion.position;
@@ -455,8 +493,8 @@ void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
     CheckRocketAsteroidCollisions(space, grid);
     CheckRocketPlatformCollisions(space, grid);
     CheckRocketWallCollisions(space);
-    ApplyExplosionSplashDamage(space, grid); // after rocket detonation checks so this-frame explosions resolve immediately
     CheckRocketPlayerCollisions(space, grid);
+    ApplyExplosionSplashDamage(space, grid); // after rocket detonation checks so this-frame explosions resolve immediately
     CheckAsteroidPlayerCollisions(space, grid);
     CheckAsteroidPlatformCollisions(space, grid);
     CheckPlayerPlatformCollisions(space, grid);
