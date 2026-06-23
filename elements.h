@@ -153,6 +153,10 @@ public:
     void updatePos(float dt) {
         position = Vector3Add(position, Vector3Scale(velocity, dt));
         // gravity is applied in updateVelocity.
+
+        // Decay the damage-flash here since this runs every frame for the
+        // player (gamespace.h) - mirrors how Asteroid decays its own flash.
+        if (flashTimer > 0.0f) flashTimer -= dt;
     }
 
     // void updatePos(float dt, float gravity) {
@@ -177,6 +181,15 @@ public:
     // appearance
     Color color_outline = {0, 255, 200, 255};
     Color color_fill = {0, 255, 200, 40}; // low alpha translucent fill for the "glowing vector glass" look
+
+    // Damage-flash, same pattern as Asteroid: set to flash_duration on hit,
+    // decayed in updatePos. Drives the full-screen red hurt vignette in main.cpp.
+    float flashTimer = 0.0f; // seconds of damage-flash remaining
+
+    // 1.0 right after a hit, easing to 0.0 over flash_duration.
+    float flashIntensity() const {
+        return flash_duration > 0.0f ? Clamp(flashTimer / flash_duration, 0.0f, 1.0f) : 0.0f;
+    }
 
     // health, fuel, ammo
     int health = 100;
@@ -215,10 +228,14 @@ public:
         if (health == 0) {
             isAlive = false; // Player is dead if health reaches zero
         }
+        flashTimer = flash_duration; // trigger the full-screen red hurt flash
     }
 
-    
+
 private:
+    // Longer than the asteroid's flash so a hit reads as a sustained screen
+    // flash rather than a blip. static constexpr keeps Player copy-assignable.
+    static constexpr float flash_duration = 0.5f;
 };
 
 //MARK: Asteroid
@@ -294,7 +311,7 @@ public:
         color_fill = Fade(color_fill, ratio); // Fade fill color based on health ratio.
 
 
-        flashTimer = flash_duration; // trigger the hot-glow damage flash
+        flashTimer = flash_duration * (damage / 25.0f); // trigger the hot-glow damage flash
     }
 
 private:
@@ -307,7 +324,7 @@ private:
 
     static constexpr int starting_health = 50; // Initial health of the asteroid.
 
-    static constexpr float flash_duration = 0.15f; // length of the hot-glow damage flash, seconds
+    static constexpr float flash_duration = 2.0f; // length of the hot-glow damage flash, seconds
 };
 
 //MARK: Rocket

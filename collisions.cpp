@@ -348,9 +348,9 @@ void CheckPlayerWallCollisions(GameSpace& space) {
             hitWall = true;
         }
 
-        if (hitWall) {
-            player.takeDamage(space.wall_damage);
-        }
+        // if (hitWall) {
+        //     player.takeDamage(space.wall_damage);
+        // }
     }
 }
 
