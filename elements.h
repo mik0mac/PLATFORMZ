@@ -159,14 +159,6 @@ public:
         if (flashTimer > 0.0f) flashTimer -= dt;
     }
 
-    // void updatePos(float dt, float gravity) {
-    //     // // Apply gravity
-    //     // velocity.y -= gravity * dt;
-    //     // Update position based on velocity
-    //     position = Vector3Add(position, Vector3Scale(velocity, dt));
-    // }
-
-
     // shape, size and collision box
     Vector3 size = {1.0f, 2.0f, 1.0f}; // width, height, depth of the player's collision box (a vertical rectangular prism)
     // For rendering the player, we can use a wireframe rectangular prism or a simple 3D model.
@@ -219,6 +211,9 @@ public:
         } else {
             fuel += dt * fuelRegenRate; // Regenerate fuel slowly when not using jetpack
             if (fuel > 100.0f) fuel = 100.0f; // Clamp fuel to max
+        }
+        if (!isAlive) {
+            fuel = 0.0f; // If player is dead, fuel is zero
         }
     }
 
@@ -330,6 +325,8 @@ private:
 //MARK: Rocket
 class Rocket {
 public:
+    // ownership.  Which player fired this rocket?
+    Player* owner = nullptr;
     // position, velocity, direction, speed
     Vector3 position;
     Vector3 velocity;
@@ -364,6 +361,8 @@ private:
 //MARK: Explosion
 class Explosion {
 public:
+    // ownership.  Which player fired the rocket that caused this explosion?
+    Player* owner = nullptr;
     // position and size
     Vector3 position;
     float radius = 0.0f; // Current radius of the explosion effect

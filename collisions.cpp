@@ -50,6 +50,16 @@ bool SphereIntersectsBox(Vector3 spherePos, float sphereRadius, Vector3 boxCente
     return distSqr <= (sphereRadius * sphereRadius);
 }
 
+//MARK: Spawn Explosion
+// avoid repeated code in CheckRocketAsteroidCollisions, CheckRocketPlatformCollisions, and CheckRocketWallCollisions
+Explosion spawnExplosion(Vector3 position, Player* owner) {
+    Explosion explosion;
+    explosion.owner = owner; // track which player fired this rocket
+    explosion.position = position;
+    return explosion;
+}
+
+
 //MARK: Rocket vs Asteroid
 // Rocket is the player's projectile - on hit, damages the asteroid and is
 // itself destroyed, and spawns an explosion at the impact point.
@@ -81,8 +91,7 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // double-damaging the asteroid this hit produced.
                     rocket.isDestroyed = true;
 
-                    Explosion explosion;
-                    explosion.position = rocket.position;
+                    Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
                     explosions.push_back(explosion);
 
                     hit = true;
@@ -115,8 +124,7 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
             if (SphereIntersectsBox(rocket.position, rocket.size, platform.position, platform.size)) {
                 rocket.isDestroyed = true;
 
-                Explosion explosion;
-                explosion.position = rocket.position;
+                Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
                 explosions.push_back(explosion);
 
                 break; // rocket already detonated this frame
@@ -149,8 +157,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
         rocket.position.z = Clamp(rocket.position.z, -halfSize, halfSize);
         rocket.isDestroyed = true;
 
-        Explosion explosion;
-        explosion.position = rocket.position;
+        Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
         explosions.push_back(explosion);
     }
 }
