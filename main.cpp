@@ -7,9 +7,8 @@
 #include "collisions.h"
 #include "camera.h"
 #include "input.h"
+#include "constants.h"
 
-const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
-const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2 
 
 
 int main() {
@@ -156,9 +155,11 @@ int main() {
             }
             if (!player.isAlive) EndShaderMode();
 // MARK: HUD
+            // text size, x, y, color.
             // draw onscreen text HUD.
             if (!player.isAlive) {
-                DrawText("YOU HAVE BEEN ELIMINATED. BETTER LUCK NEXT TIME!", 10, textHeight * 5, 14, RED);
+                // death centered on whole screen, not just the top-left corner like the rest of the HUD
+                DrawText("YOU HAVE BEEN ELIMINATED. BETTER LUCK NEXT TIME!", 56, 700, 300, RED);
             }
             else {
                 // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen

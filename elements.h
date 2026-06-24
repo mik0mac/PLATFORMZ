@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "random.h"
+#include "constants.h"
 
 
 //MARK: Platform
@@ -52,9 +53,10 @@ private:
     static constexpr float min_depth = min_width;
 };
 
-//MARK: Player
+
 class Player {
 public:
+//MARK: Player Move & Pos
     // movement and facing
     Vector3 position = {0.0f, 0.0f, 0.0f}; // Center starting position.  Replaced.
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
@@ -170,7 +172,7 @@ public:
     // kept inside the play space, not just the player's center.
     float eyeHeight = 1.6f;
 
-    // appearance
+    //MARK: Player Appearance
     Color color_outline = {0, 255, 200, 255};
     Color color_fill = {0, 255, 200, 40}; // low alpha translucent fill for the "glowing vector glass" look
 
@@ -183,14 +185,14 @@ public:
         return flash_duration > 0.0f ? Clamp(flashTimer / flash_duration, 0.0f, 1.0f) : 0.0f;
     }
 
-    // health, fuel, ammo
-    int health = 100;
+    //MARK: Health, fuel, ammo
+    int health = PLAYER_STARTING_HEALTH;
     bool isAlive = true; // Player is alive if health > 0.
-    int ammo = 100;
+    int ammo = PLAYER_STARTING_AMMO; // Player starts with this much ammo, can be increased by pickups
     bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
-    float fuel = 100.0f;
-    float fuelConsumptionRate = 5.0f; // Per sec.
-    float fuelRegenRate = 0.5f; // Per sec.  Fuel regeneration rate when not using jetpack
+    float fuel = PLAYER_STARTING_FUEL; // Player starts with this much fuel, can be increased by pickups
+    // float fuelConsumptionRate = FUEL_CONSUMPTION_RATE; // Per sec.
+    // float fuelRegenRate = FUEL_REGEN_RATE; // Per sec.  Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
 
     void shoot() {
@@ -206,17 +208,18 @@ public:
 
     void updateFuel(float dt, bool isUsingJetpack) {
         if (isUsingJetpack && hasFuel()) {
-            fuel -= dt * fuelConsumptionRate; // Consume fuel based on time using jetpack
+            fuel -= dt * FUEL_CONSUMPTION_RATE; // Consume fuel based on time using jetpack
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
-            fuel += dt * fuelRegenRate; // Regenerate fuel slowly when not using jetpack
-            if (fuel > 100.0f) fuel = 100.0f; // Clamp fuel to max
+            fuel += dt * FUEL_REGEN_RATE; // Regenerate fuel slowly when not using jetpack
+            if (fuel > PLAYER_MAX_FUEL) fuel = PLAYER_MAX_FUEL; // Clamp fuel to max
         }
         if (!isAlive) {
             fuel = 0.0f; // If player is dead, fuel is zero
         }
     }
 
+    //MARK: Player Damage
     void takeDamage(int damage) {
         health -= damage;
         if (health < 0) health = 0; // Clamp health to zero
@@ -225,6 +228,9 @@ public:
         }
         flashTimer = flash_duration; // trigger the full-screen red hurt flash
     }
+
+    //MARK: Player Points
+    int score = 0; // Player's score, can be increased by destroying asteroids or other players
 
 
 private:
@@ -284,12 +290,12 @@ public:
     }
 
     // attributes
-    int damage = 20; // Damage to player on collision
-    int health = starting_health; // Asteroid health, can be reduced by player shooting it
+    int damage = ASTEROID_DAMAGE; // Damage to player on collision
+    int health = ASTEROID_STARTING_HEALTH; // Asteroid health, can be reduced by player shooting it
     bool isDestroyed = false; // Asteroid is destroyed when health reaches zero
-    int scoreValue = 100; // Points awarded to player for destroying this asteroid
-    int fuelAward = 20; // Fuel awarded to player for destroying this asteroid
-    int healthAward = 10; // Health awarded to player for destroying this asteroid
+    int scoreValue = ASTEROID_SCORE_VALUE; // Points awarded to player for destroying this asteroid
+    int fuelAward = ASTEROID_FUEL_AWARD; // Fuel awarded to player for destroying this asteroid
+    int healthAward = ASTEROID_HEALTH_AWARD; // Health awarded to player for destroying this asteroid
 
     void takeDamage(int damage) {
         health -= damage;
@@ -331,8 +337,8 @@ public:
     Vector3 position;
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
-    float speed = 40.0f; // units/sec
-    float kickback = speed * 0.1f; // Recoil applied to player on shoot.
+    float speed = ROCKET_SPEED; // units/sec
+    float kickback = speed * ROCKET_KICKBACK_FACTOR; // Recoil applied to player on shoot.
 
     void updatePos(float dt) {
         // velocity.y -= GRAVITY * dt; // Apply gravity to the rocket's velocity
@@ -366,17 +372,18 @@ public:
     // position and size
     Vector3 position;
     float radius = 0.0f; // Current radius of the explosion effect
-    float maxRadius = 10.0f; // Maximum radius of the explosion effect
+    float maxRadius = EXPLOSION_MAX_RADIUS; // Maximum radius of the explosion effect
     float expansionRate = 10.0f; // How quickly the explosion expands, in units/sec
     bool isActive = true; // Whether the explosion effect is still active (expanding or at max radius)
 
     // splash damage - set from the originating Rocket's damage/damageRadius
-    // at spawn time, since the rocket itself is typically destroyed/erased
+    // at spawn time, since the rocket itself is destroyed/erased
     // before the explosion finishes its visual lifetime.
-    int damage = 25; // Max damage dealt to anything within damageRadius of position
-    float damageRadius = 10.0f; // Radius of the splash damage area (separate from visual maxRadius)
+    int damage = EXPLOSION_DAMAGE; // Max damage dealt to anything within damageRadius of position
+    float damageRadius = EXPLOSION_DAMAGE_RADIUS; // Radius of the splash damage area (separate from visual maxRadius)
     bool hasAppliedDamage = false; // Splash damage applies once, at the moment of explosion creation - not every frame
-    float pushbackFactor = 1.0f; // Factor to scale the pushback force applied to objects within the explosion radius
+    float pushbackFactor = EXPLOSION_PUSHBACK_FACTOR; // Factor to scale the pushback force applied to objects within the explosion radius
+
     // appearance
     Color color_outline = {255, 150, 0, 255};
     Color color_fill = {255, 150, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look

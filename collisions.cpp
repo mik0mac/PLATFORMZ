@@ -1,6 +1,6 @@
 #include <vector>
 #include "collisions.h"
-
+#include "constants.h"
 
 //MARK: CollisionGrid::Rebuild
 void CollisionGrid::Rebuild(GameSpace& space) {
@@ -57,6 +57,34 @@ Explosion spawnExplosion(Vector3 position, Player* owner) {
     explosion.owner = owner; // track which player fired this rocket
     explosion.position = position;
     return explosion;
+}
+
+//MARK: Awards
+void awardPoints(Player* player, int points) {
+    if (player && player->isAlive) {
+        player->score += points;
+    }
+}
+
+void awardFuel(Player* player, int fuel) {
+    if (player && player->isAlive) {
+        player->fuel += fuel;
+        if (player->fuel > 100.0f) player->fuel = 100.0f; // Clamp to max fuel
+    }
+}
+
+void awardAmmo(Player* player, int ammo) {
+    if (player && player->isAlive) {
+        player->ammo += ammo;
+        if (player->ammo > 100) player->ammo = 100; // Clamp to max ammo
+    }
+}
+
+void awardHealth(Player* player, int health) {
+    if (player && player->isAlive) {
+        player->health += health;
+        if (player->health > 100) player->health = 100; // Clamp to max health
+    }
 }
 
 
@@ -450,6 +478,12 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             asteroid.takeDamage(splashDamage);
+            if (asteroid.isDestroyed) {
+                awardPoints(explosion.owner, ASTEROID_SCORE_VALUE); // award points to the player who caused the explosion.
+                awardFuel(explosion.owner, ASTEROID_FUEL_AWARD); // award fuel to the player who caused the explosion.
+                awardAmmo(explosion.owner, ASTEROID_AMMO_AWARD); // award ammo to the player who caused the explosion.
+                awardHealth(explosion.owner, ASTEROID_HEALTH_AWARD); // award health to the player who caused the explosion.
+            }
 
             // Also apply a pushback force to the asteroid, scaled by the same falloff and explosion damage,
             // and inversely by asteroid size (smaller = more push). Push directly away from the explosion center.
@@ -472,8 +506,9 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             player.takeDamage(splashDamage);
             // check if player has been eliminated.
             if (!player.isAlive) {
-                // handle player elimination logic here, e.g., respawn, score update, etc.
-                printf("Player eliminated by explosion!\n");   //placeholder.
+                awardPoints(explosion.owner, PLAYER_ELIMINATION_SCORE_VALUE); // award points to the player who caused the explosion.
+                // could later add a "player eliminated" event here for UI feedback, etc.
+                // could add fuel/ammo/health awards for eliminating a player, if desired.
             }
 
             // Also apply a pushback force to the player, scaled by the same falloff.
