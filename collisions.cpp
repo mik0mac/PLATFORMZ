@@ -169,7 +169,7 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 void CheckRocketWallCollisions(GameSpace& space) {
     auto& rockets = space.getRockets();
     auto& explosions = space.getExplosions();
-    float halfSize = space.halfSize;
+    float halfSize = space.getWalls().halfSize;
 
     for (Rocket& rocket : rockets) {
         if (rocket.isDestroyed) continue;
@@ -266,7 +266,7 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
 //MARK: Asteroid vs Platform
 // A drifting asteroid bounces off a platform, reflecting its velocity and being
 // pushed clear of the overlap - consistent with how asteroids bounce off the
-// boundary walls (reusing space.wall_elasticity, so they keep drifting at a
+// boundary walls (reusing the walls' elasticity, so they keep drifting at a
 // constant speed). Platforms aren't bucketed in the grid (static and few), so
 // they are brute-forced like CheckPlayerPlatformCollisions.
 void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid) {
@@ -315,7 +315,7 @@ void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid
                 }
             }
 
-            asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), space.wall_elasticity);
+            asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), space.getWalls().elasticity);
             // Push clear of the overlap so it isn't re-detected next frame.
             asteroid.position = Vector3Add(closest, Vector3Scale(normal, asteroid.size));
         }
@@ -375,12 +375,13 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 }
 
 //MARK: Player vs Walls
-// GameSpace is a cube from -halfSize to +halfSize on each axis. Reflect
-// velocity and apply wall_damage on impact, per GameSpace's existing
-// wall_elasticity/wall_damage fields.
+// The boundary cube spans -halfSize to +halfSize on each axis. Reflect
+// velocity and apply the walls' damage on impact, per the Walls element's
+// elasticity/damage fields (space.getWalls()).
 void CheckPlayerWallCollisions(GameSpace& space) {
     auto& players = space.getPlayers();
-    float halfSize = space.halfSize;
+    Walls& walls = space.getWalls();
+    float halfSize = walls.halfSize;
 
     for (Player& player : players) {
         if (!player.isAlive) continue;
@@ -402,32 +403,33 @@ void CheckPlayerWallCollisions(GameSpace& space) {
 
         if (player.position.x < xMin || player.position.x > xMax) {
             player.position.x = Clamp(player.position.x, xMin, xMax);
-            player.velocity.x = -player.velocity.x * space.wall_elasticity;
+            player.velocity.x = -player.velocity.x * walls.elasticity;
             hitWall = true;
         }
         if (player.position.y < yMin || player.position.y > yMax) {
             player.position.y = Clamp(player.position.y, yMin, yMax);
-            player.velocity.y = -player.velocity.y * space.wall_elasticity;
+            player.velocity.y = -player.velocity.y * walls.elasticity;
             hitWall = true;
         }
         if (player.position.z < zMin || player.position.z > zMax) {
             player.position.z = Clamp(player.position.z, zMin, zMax);
-            player.velocity.z = -player.velocity.z * space.wall_elasticity;
+            player.velocity.z = -player.velocity.z * walls.elasticity;
             hitWall = true;
         }
 
         // if (hitWall) {
-        //     player.takeDamage(space.wall_damage);
+        //     player.takeDamage(walls.damage);
         // }
     }
 }
 
 //MARK: Asteroid vs Walls
-// Same boundary cube as CheckPlayerWallCollisions, reusing GameSpace's
-// wall_elasticity. Asteroids take no wall_damage (they're not the player).
+// Same boundary cube as CheckPlayerWallCollisions, reusing the walls'
+// elasticity. Asteroids take no wall damage (they're not the player).
 void CheckAsteroidWallCollisions(GameSpace& space) {
     auto& asteroids = space.getAsteroids();
-    float halfSize = space.halfSize;
+    Walls& walls = space.getWalls();
+    float halfSize = walls.halfSize;
 
     for (Asteroid& asteroid : asteroids) {
         if (asteroid.isDestroyed) continue;
@@ -441,15 +443,15 @@ void CheckAsteroidWallCollisions(GameSpace& space) {
 
         if (asteroid.position.x < minBound || asteroid.position.x > maxBound) {
             asteroid.position.x = Clamp(asteroid.position.x, minBound, maxBound);
-            asteroid.velocity.x = -asteroid.velocity.x * space.wall_elasticity;
+            asteroid.velocity.x = -asteroid.velocity.x * walls.elasticity;
         }
         if (asteroid.position.y < minBound || asteroid.position.y > maxBound) {
             asteroid.position.y = Clamp(asteroid.position.y, minBound, maxBound);
-            asteroid.velocity.y = -asteroid.velocity.y * space.wall_elasticity;
+            asteroid.velocity.y = -asteroid.velocity.y * walls.elasticity;
         }
         if (asteroid.position.z < minBound || asteroid.position.z > maxBound) {
             asteroid.position.z = Clamp(asteroid.position.z, minBound, maxBound);
-            asteroid.velocity.z = -asteroid.velocity.z * space.wall_elasticity;
+            asteroid.velocity.z = -asteroid.velocity.z * walls.elasticity;
         }
     }
 }

@@ -12,6 +12,26 @@
 #include "constants.h"
 
 
+//MARK: Walls
+// The play-space boundary cube, centered on origin and spanning
+// -halfSize..+halfSize on each axis. Treated as a first-class game element
+// (owns its own state + appearance) like Platform/Asteroid/etc., rather than
+// being loose fields on GameSpace. Collision response against the walls lives
+// in collisions.cpp (next to detection), reading these values via getWalls().
+class Walls {
+public:
+    // Centered on origin; cube spans -halfSize..+halfSize on each axis.
+    float halfSize = 40.0f;     // 1 unit = 1 meter -> 80x80x80 play space
+    float gridSpacing = 2.0f;   // spacing of the wireframe grid lines
+
+    float elasticity = 1.001f;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+    int   damage = 0;           // damage dealt to the player on wall impact
+
+    // appearance - wireframe grid only, no translucent fill (unlike the
+    // shaded-wire elements), so just an outline color.
+    Color color_outline = {0, 90, 90, 255};
+};
+
 //MARK: Platform
 class Platform {
 public:

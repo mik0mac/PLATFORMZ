@@ -17,20 +17,15 @@
 //MARK: GameSpace
 class GameSpace {
 public:
-    float halfSize = 40.0; // 1.0 equates to a meter. Defines the half-size of the cubic game space, so total size is 80x80x80
-    float boundaryBufferPlatforms = 0.8f; // Buffer distance to keep platforms from spawning right on the boundary.  As a factor of halfSize.
-    float boundaryBufferAsteroids = 0.9f; // Buffer distance to keep objects from spawning right on the boundary.  As a factor of halfSize.
+    float boundaryBufferPlatforms = 0.8f; // Buffer distance to keep platforms from spawning right on the boundary.  As a factor of walls.halfSize.
+    float boundaryBufferAsteroids = 0.9f; // Buffer distance to keep objects from spawning right on the boundary.  As a factor of walls.halfSize.
     Color backgroundColor = {0, 0, 0, 255}; // Black background for the game space
-    Color gridColor = {0, 90, 90, 255}; // Color for the ground grid lines
-
-    float wall_elasticity = 1.001f; // When player or asteroid hits the walls of the game space, velocity is reflected and scaled by this factor (velocity = -velocity * wall_elasticity)
-    int wall_damage = 0; // When player hits the walls of the game space, they take this much damage
 
     void generate() {
         platforms.clear();
         std::vector<Vector3> placed; // already-placed platform centers, fed to best-candidate sampling
         placed.reserve(num_of_platforms);
-        float platformBuffer = halfSize * boundaryBufferPlatforms;
+        float platformBuffer = walls.halfSize * boundaryBufferPlatforms;
         for (int i = 0; i < num_of_platforms; ++i) {
             Platform platform;
             platform.generateSize(); // Random width and depth, thin height for a platform
@@ -43,7 +38,7 @@ public:
         for (int i = 0; i < num_of_asteroids; ++i) {
             Asteroid asteroid;
             asteroid.generateSize(); // Random size for the asteroid
-            float buffer = halfSize * boundaryBufferAsteroids;
+            float buffer = walls.halfSize * boundaryBufferAsteroids;
             asteroid.position = {RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer)};
             asteroid.startingPosition = asteroid.position; // Store the initial position of the asteroid
             asteroid.generateVelocity(); // Random velocity in each direction
@@ -127,7 +122,7 @@ public:
     // GameSpace itself doesn't own or know about the camera, that's an
     // orchestration concern that belongs at the main.cpp level.
     void draw() {
-        DrawGridRoom(halfSize, 2.0f, gridColor);
+        DrawWalls(walls);
 
         for (Platform& platform : platforms) {
             DrawPlatform(platform);
@@ -153,6 +148,7 @@ public:
     // need direct access to these vectors. Returned by reference so callers
     // can both iterate and mutate (e.g. taking damage, marking destroyed,
     // pushing new rockets/explosions) without GameSpace exposing raw members.
+    Walls& getWalls() { return walls; }
     std::vector<Platform>& getPlatforms() { return platforms; }
     std::vector<Asteroid>& getAsteroids() { return asteroids; }
     std::vector<Player>& getPlayers() { return players; }
@@ -186,6 +182,7 @@ private:
         return best;
     }
 
+    Walls walls; // the play-space boundary cube (single instance)
     int num_of_platforms = 12;
     std::vector<Platform> platforms;
     int num_of_asteroids = 6;

@@ -7,8 +7,6 @@
 #include "collisions.h"
 #include "camera.h"
 #include "input.h"
-#include "constants.h"
-
 
 
 int main() {

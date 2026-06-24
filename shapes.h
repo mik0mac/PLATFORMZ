@@ -82,7 +82,7 @@ inline void DrawWirePyramid(Vector3 pos, float rotY, float height, float baseSiz
 }
 
 // Draws a vector-grid pattern across all 6 faces of a large bounding cube,
-// used for the play-space boundary walls (GameSpace::halfSize / gridColor).
+// used for the play-space boundary walls (Walls::halfSize / color_outline).
 inline void DrawGridRoom(float halfSize, float spacing, Color col) {
     int lines = (int)(halfSize / spacing);
 
@@ -111,6 +111,10 @@ inline void DrawGridRoom(float halfSize, float spacing, Color col) {
 //MARK: Element drawing functions
 // One function per game-object type, each reading only the fields it needs
 // from the corresponding class in elements.h.
+
+inline void DrawWalls(const Walls& walls) {
+    DrawGridRoom(walls.halfSize, walls.gridSpacing, walls.color_outline);
+}
 
 inline void DrawPlatform(const Platform& platform) {
     DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, platform.color_outline, platform.color_fill);
