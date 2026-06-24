@@ -13,6 +13,7 @@ const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
 
 
 int main() {
+//MARK: SETUP
     // --- Setup (runs once) ---
     const int screenWidth = 1000;
     const int screenHeight = 700;
@@ -27,12 +28,31 @@ int main() {
     // scramble the pixels that are already there).
     RenderTexture2D sceneTarget = LoadRenderTexture(screenWidth, screenHeight);
 
+    // Greyscale post-process, used on death. Fragment-only shader (the 0 vertex
+    // arg means "use raylib's default vertex shader"); kept inline so there's no
+    // extra file to ship. #version 330 = OpenGL 3.3, raylib's desktop context.
+    // colDiffuse is applied AFTER the luminance, so any draw tint still shows
+    // through (e.g. the glitch's red/blue split copies keep a faint fringe).
+    const char* grayscaleFrag =
+        "#version 330\n"
+        "in vec2 fragTexCoord;\n"
+        "in vec4 fragColor;\n"
+        "uniform sampler2D texture0;\n"
+        "uniform vec4 colDiffuse;\n"
+        "out vec4 finalColor;\n"
+        "void main() {\n"
+        "    vec4 texel = texture(texture0, fragTexCoord);\n"
+        "    float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));\n" // Rec.601 luma
+        "    finalColor = vec4(vec3(lum), texel.a) * colDiffuse * fragColor;\n"
+        "}\n";
+    Shader grayscaleShader = LoadShaderFromMemory(0, grayscaleFrag);
+
     // Game state lives here, declared once, mutated every frame
     GameSpace gameSpace; // The main game space containing platforms, asteroids, and players
     gameSpace.generate(); // Generate the game space with platforms, asteroids, and players
 
     CollisionGrid collisionGrid; // Spatial grid, rebuilt each frame in RunCollisionChecks
-
+//MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits X, presses Esc, etc.
 
@@ -66,7 +86,7 @@ int main() {
             // toggle cursor capture so you can alt-tab / quit comfortably
             if (IsCursorHidden()) EnableCursor(); else DisableCursor();
         }
-
+//MARK:DRAW
         // 3. DRAW
         // Two passes: first render the 3D world into sceneTarget (capture),
         // then composite that texture to the screen - cleanly, or scrambled
@@ -92,6 +112,13 @@ int main() {
             // Render textures are stored Y-flipped, so every source rect that
             // samples this texture uses a NEGATIVE height to flip it upright.
 
+            // On death: drive the glitch with a sustained intensity (flashIntensity
+            // would otherwise decay to 0 and the effect would fade out), and render
+            // the whole blit through the greyscale shader below.
+            const float DEATH_GLITCH = 0.5f;
+            if (!player.isAlive) hurt = DEATH_GLITCH;
+
+            if (!player.isAlive) BeginShaderMode(grayscaleShader);
             if (hurt <= 0.0f) {
                 // Clean path: one flipped full-screen blit.
                 DrawTexturePro(tex, {0, 0, (float)tex.width, -(float)tex.height},
@@ -127,25 +154,31 @@ int main() {
                     DrawRectangle(0, sy, screenWidth, sh, {255, 255, 255, a});
                 }
             }
-
-            // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen
-            // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
-            DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
-            DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
-            DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);
-            if (in.earthGravity) {
+            if (!player.isAlive) EndShaderMode();
+// MARK: HUD
+            // draw onscreen text HUD.
+            if (!player.isAlive) {
+                DrawText("YOU HAVE BEEN ELIMINATED. BETTER LUCK NEXT TIME!", 10, textHeight * 5, 14, RED);
+            }
+            else {
+                // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen
+                // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
+                DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
+                DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
+                DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);
+                if (in.earthGravity) {
                 DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
             }
+        }
             
         EndDrawing();
-
-
 
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
     }
 
     // --- Teardown (runs once, after the loop exits) ---
     UnloadRenderTexture(sceneTarget);
+    UnloadShader(grayscaleShader);
     CloseWindow();
     return 0;
 }
