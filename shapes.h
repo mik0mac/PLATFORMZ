@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "elements.h"
+#include "constants.h"
 
 //MARK: Primitive drawing helpers
 // These are the low-level wireframe/shaded-fill primitives, pulled in from
@@ -181,8 +182,8 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
     // back over flashIntensity()'s decay. ColorBrightness preserves alpha, so
     // the fill stays glassy. At flash == 0 these return the colors unchanged.
     float flash = asteroid.flashIntensity();
-    Color fill    = ColorBrightness(asteroid.color_fill,    0.8f * flash);
-    Color outline = ColorBrightness(asteroid.color_outline, 0.8f * flash);
+    Color fill    = ColorBrightness(asteroid.color_fill,    ASTEROID_FLASH_INTENSITY * flash);
+    Color outline = ColorBrightness(asteroid.color_outline, ASTEROID_FLASH_INTENSITY * flash);
 
     // Fill faces - drawn both windings so the translucent glow reads from any
     // angle (backface culling leaves exactly one of each pair visible).

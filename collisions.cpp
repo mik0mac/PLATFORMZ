@@ -1,6 +1,6 @@
 #include <vector>
 #include "collisions.h"
-#include "constants.h"
+
 
 //MARK: CollisionGrid::Rebuild
 void CollisionGrid::Rebuild(GameSpace& space) {
@@ -69,21 +69,21 @@ void awardPoints(Player* player, int points) {
 void awardFuel(Player* player, int fuel) {
     if (player && player->isAlive) {
         player->fuel += fuel;
-        if (player->fuel > 100.0f) player->fuel = 100.0f; // Clamp to max fuel
+        if (player->fuel > player->maxFuel) player->fuel = player->maxFuel; // Clamp to max fuel
     }
 }
 
 void awardAmmo(Player* player, int ammo) {
     if (player && player->isAlive) {
         player->ammo += ammo;
-        if (player->ammo > 100) player->ammo = 100; // Clamp to max ammo
+        if (player->ammo > player->maxAmmo) player->ammo = player->maxAmmo; // Clamp to max ammo
     }
 }
 
 void awardHealth(Player* player, int health) {
     if (player && player->isAlive) {
         player->health += health;
-        if (player->health > 100) player->health = 100; // Clamp to max health
+        if (player->health > player->maxHealth) player->health = player->maxHealth; // Clamp to max health
     }
 }
 
@@ -315,7 +315,7 @@ void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid
                 }
             }
 
-            asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), space.getWalls().elasticity);
+            asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), platform.elasticityAsteroid); // bounce off the platform, same elasticity as the walls
             // Push clear of the overlap so it isn't re-detected next frame.
             asteroid.position = Vector3Add(closest, Vector3Scale(normal, asteroid.size));
         }
@@ -351,7 +351,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     player.position.y = platformTop + (player.size.y / 2.0f);
 
                     if (platform.isBouncy) {
-                        player.velocity.y = -player.velocity.y * platform.elasticity; // bounce up
+                        player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
                     } else {
                         player.velocity.y = 0.0f; // land and stop
                     }
@@ -363,7 +363,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 //     // Pop the player out below the platform to prevent re-detection next frame.
                 //     player.position.y = platformBottom - (player.size.y / 2.0f);
                 //     if (platform.isBouncy) {
-                //         player.velocity.y = -player.velocity.y * platform.elasticity; // bounce down
+                //         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce down
                 //     } else {
                 //         player.velocity.y = 0.0f; // cancel upward velocity when hitting the underside
                 //     }
@@ -403,17 +403,17 @@ void CheckPlayerWallCollisions(GameSpace& space) {
 
         if (player.position.x < xMin || player.position.x > xMax) {
             player.position.x = Clamp(player.position.x, xMin, xMax);
-            player.velocity.x = -player.velocity.x * walls.elasticity;
+            player.velocity.x = -player.velocity.x * walls.elasticityPlayer;
             hitWall = true;
         }
         if (player.position.y < yMin || player.position.y > yMax) {
             player.position.y = Clamp(player.position.y, yMin, yMax);
-            player.velocity.y = -player.velocity.y * walls.elasticity;
+            player.velocity.y = -player.velocity.y * walls.elasticityPlayer;
             hitWall = true;
         }
         if (player.position.z < zMin || player.position.z > zMax) {
             player.position.z = Clamp(player.position.z, zMin, zMax);
-            player.velocity.z = -player.velocity.z * walls.elasticity;
+            player.velocity.z = -player.velocity.z * walls.elasticityPlayer;
             hitWall = true;
         }
 
@@ -443,15 +443,15 @@ void CheckAsteroidWallCollisions(GameSpace& space) {
 
         if (asteroid.position.x < minBound || asteroid.position.x > maxBound) {
             asteroid.position.x = Clamp(asteroid.position.x, minBound, maxBound);
-            asteroid.velocity.x = -asteroid.velocity.x * walls.elasticity;
+            asteroid.velocity.x = -asteroid.velocity.x * walls.elasticityAsteroid;
         }
         if (asteroid.position.y < minBound || asteroid.position.y > maxBound) {
             asteroid.position.y = Clamp(asteroid.position.y, minBound, maxBound);
-            asteroid.velocity.y = -asteroid.velocity.y * walls.elasticity;
+            asteroid.velocity.y = -asteroid.velocity.y * walls.elasticityAsteroid;
         }
         if (asteroid.position.z < minBound || asteroid.position.z > maxBound) {
             asteroid.position.z = Clamp(asteroid.position.z, minBound, maxBound);
-            asteroid.velocity.z = -asteroid.velocity.z * walls.elasticity;
+            asteroid.velocity.z = -asteroid.velocity.z * walls.elasticityAsteroid;
         }
     }
 }
@@ -475,17 +475,13 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             if (asteroid.isDestroyed) continue;
 
             float dist = Vector3Distance(explosion.position, asteroid.position);
+            // subract asteroid radius.
+            dist -= asteroid.size;
             if (dist >= explosion.damageRadius) continue;
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             asteroid.takeDamage(splashDamage);
-            if (asteroid.isDestroyed) {
-                awardPoints(explosion.owner, ASTEROID_SCORE_VALUE); // award points to the player who caused the explosion.
-                awardFuel(explosion.owner, ASTEROID_FUEL_AWARD); // award fuel to the player who caused the explosion.
-                awardAmmo(explosion.owner, ASTEROID_AMMO_AWARD); // award ammo to the player who caused the explosion.
-                awardHealth(explosion.owner, ASTEROID_HEALTH_AWARD); // award health to the player who caused the explosion.
-            }
 
             // Also apply a pushback force to the asteroid, scaled by the same falloff and explosion damage,
             // and inversely by asteroid size (smaller = more push). Push directly away from the explosion center.
@@ -495,12 +491,27 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             // scale by falloff and explosion damage.
             pushback = Vector3Scale(pushback, falloff * explosion.damage * explosion.pushbackFactor);
             asteroid.velocity = Vector3Add(asteroid.velocity, pushback);
+
+            // check if the asteroid has been destroyed by the splash damage.
+            if (asteroid.isDestroyed) {
+                awardPoints(explosion.owner, asteroid.scoreAward); // award points to the player who caused the explosion.
+                awardFuel(explosion.owner, asteroid.fuelAward); // award fuel to the player who caused the explosion.
+                awardAmmo(explosion.owner, asteroid.ammoAward); // award ammo to the player who caused the explosion.
+                awardHealth(explosion.owner, asteroid.healthAward); // award health to the player who caused the explosion.
+
+                // spawn debris from the destroyed asteroid and add it to the game space.  FUTURE.
+                // DebrisEffect debris = spawnDebris(asteroid.position, asteroid.velocity); // spawn debris from the destroyed asteroid
+                // debrisEffects.push_back(debris); // add the debris to the game space
+            }
         }
 
         for (Player& player : players) {
             if (!player.isAlive) continue;
 
             float dist = Vector3Distance(explosion.position, player.position);
+            // subract player size.  Estimate player radius as half the diagonal of the player's bounding box.
+            float playerRadius = 0.5f * sqrtf(player.size.x * player.size.x + player.size.y * player.size.y + player.size.z * player.size.z);
+            dist -= playerRadius;
             if (dist >= explosion.damageRadius) continue;
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
@@ -508,7 +519,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             player.takeDamage(splashDamage);
             // check if player has been eliminated.
             if (!player.isAlive) {
-                awardPoints(explosion.owner, PLAYER_ELIMINATION_SCORE_VALUE); // award points to the player who caused the explosion.
+                awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
                 // could later add a "player eliminated" event here for UI feedback, etc.
                 // could add fuel/ammo/health awards for eliminating a player, if desired.
             }

@@ -12,6 +12,8 @@
 #include "raymath.h"
 
 #include "gamespace.h" // GameSpace, Player, Rocket
+#include "random.h"    // RandomFloat
+#include "constants.h" // BOT_* tuning
 
 //MARK: PlayerInput
 // Per-frame intent for ONE player, decoupled from its source. Filled locally by
@@ -55,22 +57,67 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
 
     // IsMouseButtonPressed already fires once per click, so this stays
     // naturally single-shot - no cooldown needed.
-    if (in.fire && player.canShoot && player.isAlive) {
-        player.shoot(); // ammo / canShoot bookkeeping (see Player::shoot)
+    if (in.fire) {
+        bool shotFired = player.shoot(); // ammo / canShoot bookkeeping (see Player::shoot)
+        if (shotFired) {
+            Rocket rocket;
+            rocket.owner = &player; // track which player fired this rocket
+            Vector3 eyePos = Vector3Add(player.position, Vector3{0, player.eyeHeight, 0});
+            Vector3 aim = player.Forward();
+            // Nudge the muzzle forward so the rocket clears the player and doesn't
+            // detonate on whatever the player is standing on the instant it spawns.
+            rocket.position  = Vector3Add(eyePos, Vector3Scale(aim, 1.0f));
+            rocket.direction = aim;
+            rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
+            gameSpace.getRockets().push_back(rocket);
 
-        Rocket rocket;
-        rocket.owner = &player; // track which player fired this rocket
-        Vector3 eyePos = Vector3Add(player.position, Vector3{0, player.eyeHeight, 0});
-        Vector3 aim = player.Forward();
-        // Nudge the muzzle forward so the rocket clears the player and doesn't
-        // detonate on whatever the player is standing on the instant it spawns.
-        rocket.position  = Vector3Add(eyePos, Vector3Scale(aim, 1.0f));
-        rocket.direction = aim;
-        rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
-        gameSpace.getRockets().push_back(rocket);
-
-        // kickback (recoil)
-        Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));
-        player.velocity = Vector3Add(player.velocity, kickback);
+            // kickback (recoil)
+            Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));
+            player.velocity = Vector3Add(player.velocity, kickback);
+        }
     }
+}
+
+//MARK: Bot input
+// Test-only AI input source. Drives a non-local player by producing the same
+// PlayerInput a human would, so it flows through the identical ApplyPlayerInput()
+// path above. PlayerInput is per-frame/stateless, so the persistent wander
+// state (heading, held movement, re-roll timer) lives here in BotState - one
+// per bot, owned by the caller (main.cpp).
+struct BotState {
+    float timer = 0.0f;       // seconds until the next re-roll; <=0 forces an immediate re-roll
+    float targetYaw = 0.0f;   // heading the bot is steering toward (radians)
+    Vector2 moveAxis{0, 0};   // currently-held move intent (x = strafe, y = fwd/back)
+    bool jetpack = false;     // currently-held jetpack intent
+};
+
+// Produce one frame of wander input for a bot. Re-rolls a new heading/movement
+// on a random timer; between re-rolls it steers smoothly toward targetYaw and
+// holds the chosen movement. Never fires (movement-only test bot).
+inline PlayerInput MakeBotInput(const Player& bot, BotState& state, float dt) {
+    state.timer -= dt;
+    if (state.timer <= 0.0f) {
+        state.targetYaw = RandomFloat(-PI, PI);
+        // bias toward forward travel so the bot roams rather than shuffling
+        state.moveAxis = { RandomFloat(-0.5f, 0.5f), RandomFloat(0.25f, 1.0f) };
+        state.jetpack = RandomFloat(0.0f, 1.0f) < 0.5f;
+        state.timer = RandomFloat(BOT_REROLL_MIN_SECONDS, BOT_REROLL_MAX_SECONDS);
+    }
+
+    PlayerInput in;
+    in.moveAxis = state.moveAxis;
+    in.jetpack = state.jetpack;
+
+    // Steer toward targetYaw, turning at most BOT_TURN_RATE this frame. Wrap the
+    // error into [-PI, PI] so the bot always turns the short way around.
+    float yawError = state.targetYaw - bot.yaw;
+    while (yawError > PI) yawError -= 2.0f * PI;
+    while (yawError < -PI) yawError += 2.0f * PI;
+    float maxStep = BOT_TURN_RATE * dt;
+    float yawStep = Clamp(yawError, -maxStep, maxStep);
+    // updateLook() scales lookDelta by lookSensitivity, so pre-divide to land on
+    // the yaw step we actually want (feeding the bot through the human path).
+    in.lookDelta.x = yawStep / bot.lookSensitivity;
+
+    return in;
 }

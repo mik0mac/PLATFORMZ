@@ -12,6 +12,7 @@
 #include "elements.h"
 #include "shapes.h"
 #include "random.h"
+#include "constants.h"
 
 
 //MARK: GameSpace
@@ -57,6 +58,13 @@ public:
             }
             player.startingPosition = player.position; // Store the initial position of the player
 
+            // Non-local players (index 1+, the test bots) get a distinct magenta
+            // palette so they read clearly against the cyan local-player look.
+            if (i > 0) {
+                player.color_outline = {255, 0, 200, 255};
+                player.color_fill = {255, 0, 200, 40};
+            }
+
             // player direction starts facing towards the center of the game space.
             Vector3 toCenter = Vector3Subtract({0, 0, 0}, player.position);
             player.yaw = atan2f(toCenter.z, toCenter.x); // Yaw is the angle in the XZ plane, so use atan2 with z and x.
@@ -84,7 +92,6 @@ public:
             player.updatePos(dt);
         }
 
-
         // Update asteroids
         for (Asteroid& asteroid : asteroids) {
             asteroid.updatePos(dt);
@@ -100,7 +107,6 @@ public:
         for (Explosion& explosion : explosions) {
             explosion.update(dt);
         }
-
     }
 
     void updateActiveObjects() {
@@ -121,17 +127,21 @@ public:
     // Must be called between BeginMode3D(camera)/EndMode3D() in main.cpp -
     // GameSpace itself doesn't own or know about the camera, that's an
     // orchestration concern that belongs at the main.cpp level.
-    void draw() {
+    void draw(int localPlayerIndex = -1) {
         DrawWalls(walls);
 
         for (Platform& platform : platforms) {
             DrawPlatform(platform);
         }
-        // NOTE: not drawing players here - in first-person, the locally
-        // controlled player's own collision box would render directly
-        // around the camera (you'd see your own "body" as a box at your
-        // feet). Revisit this once there's a reason to render players -
-        // e.g. a third-person view, or other players in a multiplayer game.
+        // Draw every player EXCEPT the local one. In first-person the local
+        // player's own collision box would render directly around the camera
+        // (you'd see your own "body" as a box at your feet), so the caller
+        // passes its index to skip it; other players (e.g. test bots, or
+        // remote players in multiplayer) are drawn normally.
+        for (int i = 0; i < (int)players.size(); ++i) {
+            if (i == localPlayerIndex) continue;
+            DrawPlayer(players[i]);
+        }
         for (Asteroid& asteroid : asteroids) {
             DrawAsteroid(asteroid);
         }
@@ -183,11 +193,11 @@ private:
     }
 
     Walls walls; // the play-space boundary cube (single instance)
-    int num_of_platforms = 12;
+    int num_of_platforms = GAMESPACE_NUMBER_OF_PLATFORMS;
     std::vector<Platform> platforms;
-    int num_of_asteroids = 6;
+    int num_of_asteroids = GAMESPACE_NUMBER_OF_ASTEROIDS;
     std::vector<Asteroid> asteroids;
-    int number_of_players = 1; // For future use: if we want to add multiplayer support,
+    int number_of_players = GAMESPACE_NUMBER_OF_PLAYERS; // For future use: if we want to add multiplayer support,
     // we can increase this and add a vector of Player objects.
     std::vector<Player> players;
     int number_of_rockets = 0; // Rockets will be generated when the player shoots.

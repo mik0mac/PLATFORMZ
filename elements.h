@@ -21,11 +21,12 @@
 class Walls {
 public:
     // Centered on origin; cube spans -halfSize..+halfSize on each axis.
-    float halfSize = 40.0f;     // 1 unit = 1 meter -> 80x80x80 play space
-    float gridSpacing = 2.0f;   // spacing of the wireframe grid lines
+    float halfSize = GAMESPACE_HALF_SIZE;
+    float gridSpacing = 2.0f;// GAMESPACE_HALF_SIZE / 20.0f;   // spacing of the wireframe grid lines
 
-    float elasticity = 1.001f;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
-    int   damage = 0;           // damage dealt to the player on wall impact
+    float elasticityPlayer = WALL_ELASTICITY_PLAYER;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+    float elasticityAsteroid = WALL_ELASTICITY_ASTEROID;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+    int   damage = WALL_DAMAGE;           // damage dealt to the player on wall impact
 
     // appearance - wireframe grid only, no translucent fill (unlike the
     // shaded-wire elements), so just an outline color.
@@ -49,9 +50,9 @@ public:
     Vector3 size;
 
     void generateSize() {
-        size.x = RandomFloat(min_width, max_width);
-        size.y = RandomFloat(min_height, max_height);
-        size.z = RandomFloat(min_depth, max_depth);
+        size.x = RandomFloat(PLATFORM_MIN_WIDTH, PLATFORM_MAX_WIDTH);
+        size.y = RandomFloat(PLATFORM_MIN_HEIGHT, PLATFORM_MAX_HEIGHT);
+        size.z = RandomFloat(PLATFORM_MIN_DEPTH, PLATFORM_MAX_DEPTH);
     }
 
     // appearance
@@ -61,16 +62,17 @@ public:
     // attributes
     bool isMoving = false; // For future use: if true, platform moves according to velocity and speed
     bool isBouncy = true; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
-    float elasticity = 0.2f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
+    float elasticityPlayer = PLATFORM_ELASTICITY_PLAYER; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
+    float elasticityAsteroid = PLATFORM_ELASTICITY_ASTEROID; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
 
 private:
     // static constexpr (not per-instance const) so Platform stays copy-assignable.
-    static constexpr float max_height = 0.5f;
-    static constexpr float min_height = 0.1f;
-    static constexpr float max_width = 20.0f;
-    static constexpr float min_width = 5.0f;
-    static constexpr float max_depth = max_width;
-    static constexpr float min_depth = min_width;
+    // static constexpr float max_height = 0.5f;
+    // static constexpr float min_height = 0.1f;
+    // static constexpr float max_width = 20.0f;
+    // static constexpr float min_width = 5.0f;
+    // static constexpr float max_depth = max_width;
+    // static constexpr float min_depth = min_width;
 };
 
 
@@ -92,10 +94,11 @@ public:
     const float pitchLimit = 89.0f * DEG2RAD;
     const float lookSensitivity = 0.0025f;
 
-    float speedWalk = 5.0f; // units/sec
-    float accelerationWalk = 5.0f; // units/sec^2, how quickly the player accelerates to their max speed when input is applied
-    float speedJetpack = 8.0f; // units/sec, max speed when using jetpack
-    float accelerationJetpack = 10.0f; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
+    //MARK: Player Movement Speeds and Acceleration
+    float speedWalk = PLAYER_SPEED_WALK; // units/sec
+    float accelerationWalk = PLAYER_ACCELERATION_WALK; // units/sec^2, how quickly the player accelerates to their max speed when input is applied
+    float speedJetpack = PLAYER_SPEED_JETPACK; // units/sec, max speed when using jetpack
+    float accelerationJetpack = PLAYER_ACCELERATION_JETPACK; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
     bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
 
     // Full look-direction vector (includes pitch) - used for aiming/shooting.
@@ -125,6 +128,11 @@ public:
     void updateVelocity(float dt, Vector2 moveInput, float gravity) {
         float targetSpeed = isUsingJetpack ? speedJetpack : speedWalk;
         float acceleration = isUsingJetpack ? accelerationJetpack : accelerationWalk;
+
+        if (fuel <= FUEL_REGEN_RATE * dt) {
+            targetSpeed = speedWalk; // If out of fuel, player can only walk, not jetpack.
+            acceleration = accelerationWalk;
+        }
 
         Vector3 fwd = ForwardFlat();
         Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, {0, 1, 0}));
@@ -178,7 +186,9 @@ public:
 
         // Decay the damage-flash here since this runs every frame for the
         // player (gamespace.h) - mirrors how Asteroid decays its own flash.
+        //MARK: Update Timers
         if (flashTimer > 0.0f) flashTimer -= dt;
+        if (coolDownTime > 0.0f) coolDownTime -= dt;
     }
 
     // shape, size and collision box
@@ -207,23 +217,28 @@ public:
 
     //MARK: Health, fuel, ammo
     int health = PLAYER_STARTING_HEALTH;
+    int maxHealth = PLAYER_MAX_HEALTH; // Player's maximum health, can be increased by pickups
     bool isAlive = true; // Player is alive if health > 0.
-    int ammo = PLAYER_STARTING_AMMO; // Player starts with this much ammo, can be increased by pickups
-    bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
+    int ammo = PLAYER_STARTING_AMMO;
+    int maxAmmo = PLAYER_MAX_AMMO; // Player's maximum ammo, can be increased by pickups
+    float fireRate = PLAYER_FIRE_RATE; // Shots per second, can be increased by pickups
+    float coolDownTime = 0.0f; // Time remaining until the player can shoot again, based on fire rate
+    // bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
     float fuel = PLAYER_STARTING_FUEL; // Player starts with this much fuel, can be increased by pickups
+    float maxFuel = PLAYER_MAX_FUEL; // Player's maximum fuel, can be increased by pickups
     // float fuelConsumptionRate = FUEL_CONSUMPTION_RATE; // Per sec.
     // float fuelRegenRate = FUEL_REGEN_RATE; // Per sec.  Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
 
-    void shoot() {
-        // game loop will check if player can shoot.
-        ammo -= 1;
-        if (ammo < 0) ammo = 0; // Clamp ammo to zero
-        if (ammo == 0) {
-            canShoot = false; // Player cannot shoot if ammo reaches zero
+    bool shoot() {
+        bool shotFired = false;
+        if (ammo > 0 && coolDownTime <= 0.0f && isAlive) {
+            ammo -= 1;
+            if (ammo < 0) ammo = 0; // Clamp ammo to zero
+            shotFired = true;
+            coolDownTime = 1.0f / fireRate; // Reset cooldown based on fire rate
         }
-        // Create a new Rocket object and set its initial position, velocity, and direction based on Forward().
-        // This will be handled in the main game loop where we manage the list of rockets. 
+        return shotFired;
     }
 
     void updateFuel(float dt, bool isUsingJetpack) {
@@ -249,8 +264,9 @@ public:
         flashTimer = flash_duration; // trigger the full-screen red hurt flash
     }
 
-    //MARK: Player Points
+    //MARK: Player Points/Award
     int score = 0; // Player's score, can be increased by destroying asteroids or other players
+    int eliminationScoreAward = PLAYER_ELIMINATION_SCORE_AWARD; // Points awarded for eliminating this player.
 
 
 private:
@@ -271,9 +287,9 @@ public:
     void generateVelocity() {
         // Magnitude is always positive (min_speed..max_speed); a random sign
         // per axis gives asteroids drift in any direction, not just +X/+Y/+Z.
-        float speed_x = RandomFloat(min_speed, max_speed) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
-        float speed_y = RandomFloat(min_speed, max_speed) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
-        float speed_z = RandomFloat(min_speed, max_speed) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
+        float speed_x = RandomFloat(ASTEROID_MIN_SPEED, ASTEROID_MAX_SPEED) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
+        float speed_y = RandomFloat(ASTEROID_MIN_SPEED, ASTEROID_MAX_SPEED) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
+        float speed_z = RandomFloat(ASTEROID_MIN_SPEED, ASTEROID_MAX_SPEED) * (RandomFloat(-1, 1) < 0 ? -1.0f : 1.0f);
         velocity = {speed_x, speed_y, speed_z};
         speed = Vector3Length(velocity); // keep the scalar speed in sync with the vector
     }
@@ -294,28 +310,29 @@ public:
     // and size as the radius of the collision sphere.
 
     void generateSize() {
-        size = RandomFloat(min_size, max_size);
+        size = RandomFloat(ASTEROID_MIN_SIZE, ASTEROID_MAX_SIZE);
     }
 
     // appearance
     Color color_outline = {255, 100, 0, 255};
-    static constexpr unsigned char starting_alpha = 64; // Starting alpha value for the fill color, used to calculate fade on damage
+    static constexpr unsigned char starting_alpha = 112; // Starting alpha value for the fill color, used to calculate fade on damage
     Color color_fill = {255, 100, 0, starting_alpha}; // low alpha translucent fill for the "glowing vector glass" look
     float flashTimer = 0.0f; // seconds of damage-flash remaining; set on hit, decayed in updatePos
 
     // 1.0 right after a hit, easing to 0.0 over flash_duration. Lets the
     // (non-member) draw code read flash strength without exposing the constant.
     float flashIntensity() const {
-        return flash_duration > 0.0f ? Clamp(flashTimer / flash_duration, 0.0f, 1.0f) : 0.0f;
+        return ASTEROID_FLASH_DURATION > 0.0f ? Clamp(flashTimer / ASTEROID_FLASH_DURATION, 0.0f, 1.0f) : 0.0f;
     }
 
     // attributes
     int damage = ASTEROID_DAMAGE; // Damage to player on collision
     int health = ASTEROID_STARTING_HEALTH; // Asteroid health, can be reduced by player shooting it
     bool isDestroyed = false; // Asteroid is destroyed when health reaches zero
-    int scoreValue = ASTEROID_SCORE_VALUE; // Points awarded to player for destroying this asteroid
-    int fuelAward = ASTEROID_FUEL_AWARD; // Fuel awarded to player for destroying this asteroid
+    int scoreAward = ASTEROID_SCORE_AWARD; // Points awarded to player for destroying this asteroid
+    float fuelAward = ASTEROID_FUEL_AWARD; // Fuel awarded to player for destroying this asteroid
     int healthAward = ASTEROID_HEALTH_AWARD; // Health awarded to player for destroying this asteroid
+    int ammoAward = ASTEROID_AMMO_AWARD; // Ammo awarded to player for destroying this asteroid
 
     void takeDamage(int damage) {
         health -= damage;
@@ -331,21 +348,20 @@ public:
         float ratio = health_ratio * color_ratio; // Final ratio to apply to alpha for current health.
         color_fill = Fade(color_fill, ratio); // Fade fill color based on health ratio.
 
-
-        flashTimer = flash_duration * (damage / 25.0f); // trigger the hot-glow damage flash
+        flashTimer = ASTEROID_FLASH_DURATION * (damage / 25.0f); // trigger the hot-glow damage flash
     }
 
 private:
     // static constexpr (not per-instance const) so Asteroid stays
     // copy-assignable - std::remove_if/erase in GameSpace needs that.
-    static constexpr float min_size = 2.0f; // Minimum radius of the asteroid
-    static constexpr float max_size = 8.0f; // Maximum radius of the asteroid
-    static constexpr float min_speed = 8.0f; // Minimum speed of the asteroid
-    static constexpr float max_speed = 12.0f; // Maximum speed of the asteroid
+    // static constexpr float min_size = ASTEROID_MIN_SIZE; // Minimum radius of the asteroid
+    // static constexpr float max_size = ASTEROID_MAX_SIZE; // Maximum radius of the asteroid
+    // static constexpr float min_speed = ASTEROID_MIN_SPEED; // Minimum speed of the asteroid
+    // static constexpr float max_speed = ASTEROID_MAX_SPEED; // Maximum speed of the asteroid
 
-    static constexpr int starting_health = 50; // Initial health of the asteroid.
+    static constexpr int starting_health = ASTEROID_STARTING_HEALTH; // Initial health of the asteroid.
 
-    static constexpr float flash_duration = 2.0f; // length of the hot-glow damage flash, seconds
+    // static const float flash_duration = ASTEROID_FLASH_DURATION; // length of the hot-glow damage flash, seconds
 };
 
 //MARK: Rocket
@@ -360,8 +376,17 @@ public:
     float speed = ROCKET_SPEED; // units/sec
     float kickback = speed * ROCKET_KICKBACK_FACTOR; // Recoil applied to player on shoot.
 
+    bool gravityEnabled = ROCKET_GRAVITY_ENABLED; // Whether gravity affects the rocket's trajectory
+    bool velocityInheritance = ROCKET_VELOCITY_INHERITANCE_ENABLED; // Whether the rocket inherits the player's velocity at the moment of firing
+
     void updatePos(float dt) {
-        // velocity.y -= GRAVITY * dt; // Apply gravity to the rocket's velocity
+        if (gravityEnabled) {
+            velocity.y -= MOON_GRAVITY * dt; // Apply gravity to the rocket's velocity
+        }
+        if (velocityInheritance && owner != nullptr) {
+            Vector3 inheritedVelocity = owner->velocity * dt; // Inherit player's velocity
+            velocity = Vector3Add(velocity, inheritedVelocity); // Inherit player's velocity
+        }
         position = Vector3Add(position, Vector3Scale(velocity, dt));
     }
 
@@ -393,7 +418,7 @@ public:
     Vector3 position;
     float radius = 0.0f; // Current radius of the explosion effect
     float maxRadius = EXPLOSION_MAX_RADIUS; // Maximum radius of the explosion effect
-    float expansionRate = 10.0f; // How quickly the explosion expands, in units/sec
+    float expansionRate = EXPLOSION_EXPANSION_RATE; // How quickly the explosion expands, in units/sec
     bool isActive = true; // Whether the explosion effect is still active (expanding or at max radius)
 
     // splash damage - set from the originating Rocket's damage/damageRadius

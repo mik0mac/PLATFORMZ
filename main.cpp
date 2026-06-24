@@ -49,6 +49,11 @@ int main() {
     gameSpace.generate(); // Generate the game space with platforms, asteroids, and players
 
     CollisionGrid collisionGrid; // Spatial grid, rebuilt each frame in RunCollisionChecks
+
+    // One wander-bot per non-local player (players[1..]). Index 0 is the local
+    // human. The players vector isn't resized during the loop, so these stay
+    // 1:1 with players[i+1]. Empty when there's only one player (bots disabled).
+    std::vector<BotState> botStates(gameSpace.getPlayers().size() - 1);
 //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits X, presses Esc, etc.
@@ -70,6 +75,15 @@ int main() {
         PlayerInput in = PollLocalInput();
         float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
         ApplyPlayerInput(player, in, dt, gravity, gameSpace);
+
+        // Drive the test bots (players[1..]) through the same input path with
+        // randomly-generated wander input. Bots always use moon gravity - they
+        // never hold the earth-gravity key.
+        std::vector<Player>& players = gameSpace.getPlayers();
+        for (int i = 1; i < (int)players.size(); ++i) {
+            PlayerInput botIn = MakeBotInput(players[i], botStates[i - 1], dt);
+            ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
+        }
 
         gameSpace.updatePositions(dt);
 
@@ -96,7 +110,7 @@ int main() {
         BeginTextureMode(sceneTarget);
             ClearBackground(BLACK);
             BeginMode3D(CameraFromPlayer(player, player.eyeHeight));
-                gameSpace.draw();
+                gameSpace.draw(0); // skip drawing the local player (index 0)
             EndMode3D();
         EndTextureMode();
 
