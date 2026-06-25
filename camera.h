@@ -72,8 +72,8 @@ struct FlyCam {
 // direction. Player is the authoritative source; this is read-only,
 // called fresh each frame after player movement/look updates, never the
 // other way around (camera never drives player state).
-inline Camera3D CameraFromPlayer(const Player& player, float eyeHeight) {
-    Vector3 eyePos = Vector3Add(player.position, Vector3{0, eyeHeight, 0});
+inline Camera3D CameraFromPlayer(const Player& player) {
+    Vector3 eyePos = player.position; // eye is at the sphere center
 
     Camera3D cam{};
     cam.position = eyePos;

@@ -52,7 +52,7 @@ public:
             if (!platforms.empty()) {
                 int platformIndex = static_cast<int>(RandomFloat(0, platforms.size() - 1));
                 Platform& startPlatform = platforms[platformIndex];
-                player.position = Vector3Add(startPlatform.position, Vector3{0, startPlatform.size.y / 2 + player.size.y / 2, 0}); // Position player on top of the platform
+                player.position = Vector3Add(startPlatform.position, Vector3{0, startPlatform.size.y / 2 + player.radius, 0}); // Position player on top of the platform
             } else {
                 player.position = {0.0f, 0.0f, 0.0f}; // If no platforms, start at the center of the game space
             }

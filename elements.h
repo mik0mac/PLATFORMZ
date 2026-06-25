@@ -78,8 +78,9 @@ private:
 class Reticle {
 public:
     Vector3 position; // 3D position of the reticle will be calculated based on the player's position and aim direction
-    float yaw;
-    float pitch;
+    // eyeHeight is decomissoned, so Reticle::position is based on the player's center point.
+    float yaw = 0.0f;
+    float pitch = 0.0f;
 
     // size, shape, and appearance
     float size = 0.5f; // Size of the reticle (radius for a circular reticle)
@@ -94,6 +95,7 @@ public:
 
     void updatePosition(const Vector3& playerPosition, float playerYaw, float playerPitch) {
         // Calculate the forward direction based on the player's yaw and pitch
+        // Called in Player::updateLook().
         Vector3 forwardDirection = {
             cosf(playerPitch) * cosf(playerYaw),
             sinf(playerPitch),
@@ -110,9 +112,8 @@ public:
 
 class Player {
 public:
+    Reticle reticle; // Each player has their own reticle, which is updated based on the player's position and aim direction.
 //MARK: Player Move & Pos
-    Reticle reticle; // The player's aiming reticle, which is a 3D object in the game world that indicates where the player is aiming. It has its own position, size, and appearance.
-    // movement and facing
     Vector3 position = {0.0f, 0.0f, 0.0f}; // Center starting position.  Replaced.
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
     Vector3 velocity = {0.0f, 0.0f, 0.0f}; // Player velocity, updated by movement input and gravity
@@ -226,22 +227,12 @@ public:
         if (coolDownTime > 0.0f) coolDownTime -= dt;
     }
 
-    // shape, size and collision box
-    Vector3 size = {PLAYER_WIDTH, PLAYER_HEIGHT, PLAYER_DEPTH}; // width, height, depth - all derived from PLAYER_SCALE (constants.h)
-    // Collider is a SPHERE (matches the dodecahedron body), not the box above.
-    // radius == size.y/2 == eyeHeight, so it spans floor -> eye. `size` is still
-    // used for spawn placement and the shape renderers (shapes.h).
-    float collisionRadius = PLAYER_COLLISION_RADIUS;
-    // This is the collision box (a vertical rectangular prism) AND the envelope
-    // the humanoid figure is drawn within (DrawPlayer in shapes.h builds the
-    // body in local space around the box center; feet at -size.y/2, head top at
-    // +size.y/2). position is the center of the box (see collisions.cpp).
-
-    // Camera eye height above position - shared by the first-person camera
-    // (camera.h) and the wall-collision clamp (collisions.cpp) so the eye is
-    // kept inside the play space, not just the player's center. Scales with the
-    // player so first-person feel is unchanged at PLAYER_SCALE = 1.
-    float eyeHeight = PLAYER_HEIGHT * PLAYER_EYE_HEIGHT_RATIO;
+    // MARK: Player Size and Collision
+    // The player is a SPHERE of this radius, centered on `position` (which is
+    // both the collider center and the first-person camera eye). Used by the
+    // renderer (shapes.h), spawn placement (gamespace.h), and all player
+    // collision checks (collisions.cpp). PLAYER_SCALE tunes it (constants.h).
+    float radius = PLAYER_RADIUS;
 
     //MARK: Player Appearance
     Color color_outline = {0, 255, 200, 255};

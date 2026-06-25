@@ -95,7 +95,7 @@ int main() {
             if (RandomFloat(0.0f, 1.0f) < (want - (float)n)) n++;
             if (n <= 0) continue;
             Vector3 origin = pl.position;
-            origin.y -= 0.5f * pl.size.y;                   // bottom of the body
+            origin.y -= pl.radius;                          // bottom of the body
             SpawnSparkCone(gameSpace.getSparks(), origin, {0, -1, 0}, PLAYER_EXHAUST_CONE,
                            PLAYER_EXHAUST_SPEED_MIN, PLAYER_EXHAUST_SPEED_MAX, n,
                            Color{255, 200, 80, 255},
@@ -127,7 +127,7 @@ int main() {
         // renders into the target now instead of the back buffer.
         BeginTextureMode(sceneTarget);
             ClearBackground(BLACK);
-            BeginMode3D(CameraFromPlayer(player, player.eyeHeight));
+            BeginMode3D(CameraFromPlayer(player));
                 gameSpace.draw(0); // skip drawing the local player (index 0)
             EndMode3D();
         EndTextureMode();

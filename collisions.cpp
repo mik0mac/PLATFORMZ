@@ -224,7 +224,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
 
                 // Rocket and player are both spheres (the player collider is a
                 // sphere matching the dodecahedron body).
-                if (SphereIntersectsSphere(rocket.position, rocket.size, player.position, player.collisionRadius)) {
+                if (SphereIntersectsSphere(rocket.position, rocket.size, player.position, player.radius)) {
                     rocket.isDestroyed = true;
 
                     Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
@@ -254,7 +254,7 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                 Asteroid& asteroid = asteroids[asteroidIndex];
                 if (asteroid.isDestroyed) continue;
 
-                if (SphereIntersectsSphere(asteroid.position, asteroid.size, player.position, player.collisionRadius)) {
+                if (SphereIntersectsSphere(asteroid.position, asteroid.size, player.position, player.radius)) {
                     player.takeDamage(asteroid.damage);
                     asteroid.isDestroyed = true; // asteroid breaks apart on impact with player
                 }
@@ -338,7 +338,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
         if (!player.isAlive) continue;
 
         for (Platform& platform : platforms) {
-            if (SphereIntersectsBox(player.position, player.collisionRadius, platform.position, platform.size)) {
+            if (SphereIntersectsBox(player.position, player.radius, platform.position, platform.size)) {
                 // Only resolve when the player is moving down into the platform.
                 // This lets the player pass up through it from below, and -
                 // critically - stops the check from re-firing every frame while
@@ -348,7 +348,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     float platformTop = platform.position.y + (platform.size.y / 2.0f);
                     // Pop the player out onto the surface first, so next frame
                     // doesn't re-detect the overlap and cancel the response.
-                    player.position.y = platformTop + player.collisionRadius;
+                    player.position.y = platformTop + player.radius;
 
                     if (platform.isBouncy) {
                         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
@@ -361,7 +361,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 //     // If the player is moving up into the platform, the should cancel out y velocity.
                 //     float platformBottom = platform.position.y - (platform.size.y / 2.0f);
                 //     // Pop the player out below the platform to prevent re-detection next frame.
-                //     player.position.y = platformBottom - (player.size.y / 2.0f);
+                //     player.position.y = platformBottom - (player.radius);
                 //     if (platform.isBouncy) {
                 //         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce down
                 //     } else {
@@ -389,14 +389,12 @@ void CheckPlayerWallCollisions(GameSpace& space) {
         bool hitWall = false;
 
         // Inset each bound by the player's sphere radius so the whole body stays
-        // inside the cube, not just its center. The +Y (ceiling) bound uses the
-        // larger of the radius and the eye height, so neither the body nor the
-        // first-person camera pokes through the top.
-        float r = player.collisionRadius;
-        float topExtent = player.eyeHeight > r ? player.eyeHeight : r;
+        // inside the cube, not just its center. The eye is at the sphere center,
+        // so the clamp is symmetric on every axis.
+        float r = player.radius;
 
         float xMin = -halfSize + r, xMax = halfSize - r;
-        float yMin = -halfSize + r, yMax = halfSize - topExtent;
+        float yMin = -halfSize + r, yMax = halfSize - r;
         float zMin = -halfSize + r, zMax = halfSize - r;
 
         if (player.position.x < xMin || player.position.x > xMax) {
@@ -508,7 +506,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 
             float dist = Vector3Distance(explosion.position, player.position);
             // subtract the player's sphere collider radius (matches the body).
-            dist -= player.collisionRadius;
+            dist -= player.radius;
             if (dist >= explosion.damageRadius) continue;
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
