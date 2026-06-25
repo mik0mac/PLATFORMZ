@@ -64,9 +64,11 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             rocket.owner = &player; // track which player fired this rocket
             Vector3 eyePos = player.position; // eye is at the sphere center
             Vector3 aim = player.Forward();
-            // Nudge the muzzle forward so the rocket clears the player and doesn't
-            // detonate on whatever the player is standing on the instant it spawns.
-            rocket.position  = Vector3Add(eyePos, Vector3Scale(aim, 1.0f));
+            // Push the muzzle past the body surface so the rocket spawns fully
+            // clear of the player: player radius + rocket radius + a small gap.
+            // Tied to player.radius so it scales with PLAYER_SCALE.
+            float muzzleOffset = player.radius + rocket.size + ROCKET_MUZZLE_CLEARANCE;
+            rocket.position  = Vector3Add(eyePos, Vector3Scale(aim, muzzleOffset));
             rocket.direction = aim;
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             gameSpace.getRockets().push_back(rocket);

@@ -83,17 +83,17 @@ public:
     float pitch = 0.0f;
 
     // size, shape, and appearance
-    float size = 0.5f; // Size of the reticle (radius for a circular reticle)
+    float size = RETICLE_SIZE; // radius of the ring / bracket frame, units
     float thickness = 0.1f; // Thickness of the reticle lines
     float rotation = 0.0f; // Rotation angle of the reticle in radians. AKA Roll.  Remains fixed, unlike pitch and yaw.  Represents the rotation around the forward axis (the direction the player is facing).
-    float distanceFromPlayer = 1.0f; // Distance from the player to the reticle in the direction of the player's aim
+    float standoff = RETICLE_STANDOFF; // gap beyond the body surface, along the aim direction (so it clears the body)
 
     Color color = {255, 255, 255, 255}; // Color of the reticle
 
     bool isVisibleToOwner = true; // Whether the reticle is currently visible
     bool isVisibleToEnemies = true; // Whether the reticle is visible to other players (enemies)
 
-    void updatePosition(const Vector3& playerPosition, float playerYaw, float playerPitch) {
+    void updatePosition(const Vector3& playerPosition, float playerYaw, float playerPitch, float playerRadius) {
         // Calculate the forward direction based on the player's yaw and pitch
         // Called in Player::updateLook().
         Vector3 forwardDirection = {
@@ -102,8 +102,9 @@ public:
             cosf(playerPitch) * sinf(playerYaw)
         };
 
-        // Update the reticle's position based on the player's position and the forward direction
-        position = Vector3Add(playerPosition, Vector3Scale(forwardDirection, distanceFromPlayer));
+        // Place the reticle in front of the player, just beyond the body surface
+        // (radius + standoff) so it never renders inside the body.
+        position = Vector3Add(playerPosition, Vector3Scale(forwardDirection, playerRadius + standoff));
     }
 };
 
@@ -155,7 +156,7 @@ public:
         pitch -= mouseDelta.y * lookSensitivity;
         pitch = Clamp(pitch, -pitchLimit, pitchLimit);
         // update the reticle's position based on the player's new look direction
-        reticle.updatePosition(position, yaw, pitch);
+        reticle.updatePosition(position, yaw, pitch, radius);
     }
 
     // moveInput.x = strafe (right/left), moveInput.y = forward/back -

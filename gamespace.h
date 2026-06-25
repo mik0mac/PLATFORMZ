@@ -175,8 +175,15 @@ public:
         // passes its index to skip it; other players (e.g. test bots, or
         // remote players in multiplayer) are drawn normally.
         for (int i = 0; i < (int)players.size(); ++i) {
-            if (i == localPlayerIndex) continue;
+            if (i == localPlayerIndex) {
+                // First-person: own body is skipped, but the reticle still draws
+                // as the player's crosshair, floating out along their aim.
+                if (players[i].reticle.isVisibleToOwner) DrawReticle(players[i]);
+                continue;
+            }
             DrawPlayer(players[i]);
+            // Reticle shows others where this player is looking.
+            if (players[i].reticle.isVisibleToEnemies) DrawReticle(players[i]);
         }
         for (Asteroid& asteroid : asteroids) {
             DrawAsteroid(asteroid);

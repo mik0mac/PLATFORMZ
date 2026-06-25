@@ -244,6 +244,110 @@ inline void DrawPlayer(const Player& player) {
     DrawPlayerDodeca(player);
 }
 
+//MARK: Reticle
+// The reticle is a purely visual in-world object (no collision). It is drawn at
+// ret.position in the plane perpendicular to the aim, using the (fwd, right, up)
+// basis the caller built from the player's look direction. Two silhouettes,
+// chosen by RETICLE_SHAPE (constants.h): a crosshair or corner brackets.
+
+// Crosshair: a ring (with a faint translucent fill disc) + a center cross with a
+// gap + a short prong poking forward along the aim so the facing reads in 3D.
+inline void DrawReticleCrosshair(const Reticle& ret, Vector3 fwd, Vector3 right, Vector3 up) {
+    const Vector3 c = ret.position;
+    const float s = ret.size;
+    const Color wire = ret.color;
+    const Color fill = ColorAlpha(ret.color, 0.22f);
+
+    // Ring vertices in the right/up plane.
+    const int N = RETICLE_RING_SEGMENTS;
+    Vector3 ring[64]; // RETICLE_RING_SEGMENTS is well under this
+    for (int i = 0; i < N; i++) {
+        float a = (float)i / (float)N * 2.0f * PI;
+        Vector3 off = Vector3Add(Vector3Scale(right, s * cosf(a)),
+                                 Vector3Scale(up,    s * sinf(a)));
+        ring[i] = Vector3Add(c, off);
+    }
+
+    // Faint fill disc (both windings so it reads from either side).
+    BeginTranslucentFill();
+    for (int i = 0; i < N; i++) {
+        int j = (i + 1) % N;
+        DrawTriangle3D(c, ring[i], ring[j], fill);
+        DrawTriangle3D(c, ring[j], ring[i], fill);
+    }
+    EndTranslucentFill();
+
+    // Ring wire.
+    for (int i = 0; i < N; i++) {
+        DrawLine3D(ring[i], ring[(i + 1) % N], wire);
+    }
+
+    // Center cross: four spokes from the gap radius out to the ring.
+    float gap = RETICLE_CROSS_GAP * s;
+    Vector3 axes[4] = { right, Vector3Negate(right), up, Vector3Negate(up) };
+    for (int k = 0; k < 4; k++) {
+        Vector3 inner = Vector3Add(c, Vector3Scale(axes[k], gap));
+        Vector3 outer = Vector3Add(c, Vector3Scale(axes[k], s));
+        DrawLine3D(inner, outer, wire);
+    }
+
+    // Forward prong: a short segment along the aim so others read the facing.
+    Vector3 prong = Vector3Add(c, Vector3Scale(fwd, RETICLE_PRONG_LENGTH * s));
+    DrawLine3D(c, prong, wire);
+}
+
+// Corner brackets: four L-shaped brackets at the corners of a size-half-extent
+// square in the right/up plane, plus a small center tick. Open look, no fill.
+inline void DrawReticleBrackets(const Reticle& ret, Vector3 fwd, Vector3 right, Vector3 up) {
+    (void)fwd;
+    const Vector3 c = ret.position;
+    const float s = ret.size;
+    const float arm = RETICLE_BRACKET_LENGTH * s; // length of each bracket leg
+    const Color wire = ret.color;
+
+    // The four corners (±right ± up) at the frame's half-extent.
+    Vector3 rt = Vector3Scale(right, s);
+    Vector3 upv = Vector3Scale(up, s);
+    Vector3 corners[4] = {
+        Vector3Add(Vector3Add(c, rt), upv),                 // top-right
+        Vector3Add(Vector3Subtract(c, rt), upv),            // top-left
+        Vector3Subtract(Vector3Subtract(c, rt), upv),       // bottom-left
+        Vector3Subtract(Vector3Add(c, rt), upv),            // bottom-right
+    };
+    // Inward directions (toward center along each axis) per corner.
+    Vector3 inX[4] = { Vector3Negate(right), right, right, Vector3Negate(right) };
+    Vector3 inY[4] = { Vector3Negate(up), Vector3Negate(up), up, up };
+    for (int k = 0; k < 4; k++) {
+        DrawLine3D(corners[k], Vector3Add(corners[k], Vector3Scale(inX[k], arm)), wire);
+        DrawLine3D(corners[k], Vector3Add(corners[k], Vector3Scale(inY[k], arm)), wire);
+    }
+
+    // Center tick: a tiny cross marking the exact aim point.
+    float dot = 0.12f * s;
+    DrawLine3D(Vector3Subtract(c, Vector3Scale(right, dot)), Vector3Add(c, Vector3Scale(right, dot)), wire);
+    DrawLine3D(Vector3Subtract(c, Vector3Scale(up, dot)),    Vector3Add(c, Vector3Scale(up, dot)),    wire);
+}
+
+inline void DrawReticle(const Player& player) {
+    const Reticle& ret = player.reticle;
+
+    // Orthonormal aim basis. Guard the near-vertical case where Forward() is
+    // parallel to world-up (cross product would collapse).
+    Vector3 fwd = player.Forward();
+    Vector3 up0 = (fabsf(fwd.y) < 0.99f) ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up0));
+    Vector3 up    = Vector3Normalize(Vector3CrossProduct(right, fwd));
+
+    // Apply roll (rotation about the aim axis) to the in-plane basis.
+    if (ret.rotation != 0.0f) {
+        right = Vector3Normalize(Vector3RotateByAxisAngle(right, fwd, ret.rotation));
+        up    = Vector3Normalize(Vector3RotateByAxisAngle(up,    fwd, ret.rotation));
+    }
+
+    if (RETICLE_SHAPE == RETICLE_SHAPE_BRACKETS) DrawReticleBrackets(ret, fwd, right, up);
+    else                                         DrawReticleCrosshair(ret, fwd, right, up);
+}
+
 // Builds an irregular, low-poly "vector rock" - the 3D analog of main2d.cpp's
 // jittered asteroid polygon. Starts from the unit icosahedron above and
 // displaces each vertex radially by a stable per-vertex jitter, so every
@@ -318,10 +422,72 @@ inline void DrawAsteroid(const Asteroid& asteroid) {
     DrawAsteroidShape(asteroid);
 }
 
+// Stella octangula (stellated octahedron): two interpenetrating regular
+// tetrahedra forming an 8-pointed star polyhedron. The 8 verts are the cube
+// corners split by sign-parity: product of signs +1 -> tetra A, -1 -> tetra B.
+// NOT unit length (corner length = sqrt 3) - scale before use.
+static const Vector3 STAR_VERTS[8] = {
+    { 1, 1, 1}, { 1,-1,-1}, {-1, 1,-1}, {-1,-1, 1}, // tetra A (sign product +)
+    {-1,-1,-1}, {-1, 1, 1}, { 1,-1, 1}, { 1, 1,-1}, // tetra B (sign product -)
+};
+static const int STAR_TETRA[2][4] = { {0, 1, 2, 3}, {4, 5, 6, 7} };
+static const int STAR_FACES[8][3] = {
+    {0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3},     // tetra A faces
+    {4, 5, 6}, {4, 5, 7}, {4, 6, 7}, {5, 6, 7},     // tetra B faces
+};
+
+// The rocket is drawn as a star polyhedron spinning rapidly about its travel
+// axis. Collision is unchanged - it still treats the rocket as a sphere of
+// `size` (collisions.cpp); this is purely visual. Circumradius == rocket.size,
+// so the star's points sit on the collision sphere.
 inline void DrawRocket(const Rocket& rocket) {
-    // Simple wireframe for the rocket, no fill.
-    // DrawWirePyramid(rocket.position, 0.0f, 1.5f, 0.5f, rocket.color_outline);
-    DrawSphereWires(rocket.position, rocket.size, 6, 6, rocket.color_outline);
+    // Spin axis = direction of travel (current velocity, falling back to the
+    // fired direction), so the spin follows the path even as gravity curves it.
+    Vector3 travel = rocket.velocity;
+    float speed = Vector3Length(travel);
+    Vector3 axisT = (speed > 1e-4f) ? Vector3Scale(travel, 1.0f / speed)
+                                    : Vector3Normalize(rocket.direction);
+    if (!(Vector3LengthSqr(axisT) > 0.5f)) axisT = Vector3{0, 1, 0}; // last-ditch guard
+
+    // Orientation: map the star's local +Y onto the travel axis (axis-angle).
+    Vector3 yAxis = {0, 1, 0};
+    Vector3 oCross = Vector3CrossProduct(yAxis, axisT);
+    float oLen = Vector3Length(oCross);
+    float oAngle = acosf(Clamp(Vector3DotProduct(yAxis, axisT), -1.0f, 1.0f));
+    Vector3 oAxis = (oLen < 1e-6f) ? Vector3{1, 0, 0} : Vector3Scale(oCross, 1.0f / oLen);
+
+    // Rapid spin about the (local +Y ->) travel axis, advanced by wall-clock time.
+    float spin = (float)GetTime() * ROCKET_SPIN_SPEED;
+
+    const float s = rocket.size / 1.7320508f; // circumradius == rocket.size (corner len = sqrt 3)
+
+    Vector3 v[8];
+    for (int i = 0; i < 8; i++) {
+        Vector3 p = Vector3Scale(STAR_VERTS[i], s);
+        p = Vector3RotateByAxisAngle(p, yAxis, spin);   // spin about local Y...
+        p = Vector3RotateByAxisAngle(p, oAxis, oAngle); // ...which now points along travel
+        v[i] = Vector3Add(rocket.position, p);
+    }
+
+    // Translucent fill (both windings) under the bright wireframe - house style.
+    BeginTranslucentFill();
+    for (int f = 0; f < 8; f++) {
+        Vector3 a = v[STAR_FACES[f][0]];
+        Vector3 b = v[STAR_FACES[f][1]];
+        Vector3 c = v[STAR_FACES[f][2]];
+        DrawTriangle3D(a, b, c, rocket.color_fill);
+        DrawTriangle3D(a, c, b, rocket.color_fill); // reverse winding
+    }
+    EndTranslucentFill();
+
+    // Wire: each tetrahedron's 6 edges (all vertex pairs).
+    for (int t = 0; t < 2; t++) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = i + 1; j < 4; j++) {
+                DrawLine3D(v[STAR_TETRA[t][i]], v[STAR_TETRA[t][j]], rocket.color_outline);
+            }
+        }
+    }
 }
 
 inline void DrawExplosion(const Explosion& explosion) {

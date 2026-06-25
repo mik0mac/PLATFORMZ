@@ -47,6 +47,20 @@ const float PLAYER_SCALE = 2.0f;         // proportional size multiplier
 const float PLAYER_BASE_RADIUS = 1.0f;   // body/collider radius in units, before scale
 const float PLAYER_RADIUS = PLAYER_BASE_RADIUS * PLAYER_SCALE; // == 2.0 (preserves current size)
 
+//MARK: Reticle Constants
+// The reticle is a purely visual in-world object (no collision): the player's
+// aiming device and, to others, an indicator of where they are looking. It is
+// drawn perpendicular to the aim, standing off just beyond the body surface.
+enum ReticleShape { RETICLE_SHAPE_CROSSHAIR = 0, RETICLE_SHAPE_BRACKETS = 1 };
+const ReticleShape RETICLE_SHAPE = RETICLE_SHAPE_BRACKETS; // toggle the silhouette
+
+const float RETICLE_SIZE = 0.5f;            // radius of the ring / bracket frame, units
+const float RETICLE_STANDOFF = 1.5f;        // gap beyond the body surface, along aim
+const int   RETICLE_RING_SEGMENTS = 28;     // circle smoothness (crosshair style)
+const float RETICLE_CROSS_GAP = 0.35f;      // center gap, as a fraction of RETICLE_SIZE
+const float RETICLE_PRONG_LENGTH = 0.6f;    // forward prong length, fraction of RETICLE_SIZE
+const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of RETICLE_SIZE
+
 //MARK: Player Constants
 const float PLAYER_SPEED_WALK = 10.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 7.5f; // units/sec^2
@@ -96,6 +110,8 @@ const float ROCKET_SPEED = 60.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = true; // If true, rockets are affected by gravity.
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = true; // If true, rockets inherit the player's velocity when fired.
+const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
+const float ROCKET_SPIN_SPEED = 18.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
 //MARK: Explosion Constants
 const int EXPLOSION_DAMAGE = 25;
