@@ -75,10 +75,43 @@ private:
     // static constexpr float min_depth = min_width;
 };
 
+class Reticle {
+public:
+    Vector3 position; // 3D position of the reticle will be calculated based on the player's position and aim direction
+    float yaw;
+    float pitch;
+
+    // size, shape, and appearance
+    float size = 0.5f; // Size of the reticle (radius for a circular reticle)
+    float thickness = 0.1f; // Thickness of the reticle lines
+    float rotation = 0.0f; // Rotation angle of the reticle in radians. AKA Roll.  Remains fixed, unlike pitch and yaw.  Represents the rotation around the forward axis (the direction the player is facing).
+    float distanceFromPlayer = 1.0f; // Distance from the player to the reticle in the direction of the player's aim
+
+    Color color = {255, 255, 255, 255}; // Color of the reticle
+
+    bool isVisibleToOwner = true; // Whether the reticle is currently visible
+    bool isVisibleToEnemies = true; // Whether the reticle is visible to other players (enemies)
+
+    void updatePosition(const Vector3& playerPosition, float playerYaw, float playerPitch) {
+        // Calculate the forward direction based on the player's yaw and pitch
+        Vector3 forwardDirection = {
+            cosf(playerPitch) * cosf(playerYaw),
+            sinf(playerPitch),
+            cosf(playerPitch) * sinf(playerYaw)
+        };
+
+        // Update the reticle's position based on the player's position and the forward direction
+        position = Vector3Add(playerPosition, Vector3Scale(forwardDirection, distanceFromPlayer));
+    }
+};
+
+
+
 
 class Player {
 public:
 //MARK: Player Move & Pos
+    Reticle reticle; // The player's aiming reticle, which is a 3D object in the game world that indicates where the player is aiming. It has its own position, size, and appearance.
     // movement and facing
     Vector3 position = {0.0f, 0.0f, 0.0f}; // Center starting position.  Replaced.
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
@@ -120,6 +153,8 @@ public:
         yaw += mouseDelta.x * lookSensitivity;
         pitch -= mouseDelta.y * lookSensitivity;
         pitch = Clamp(pitch, -pitchLimit, pitchLimit);
+        // update the reticle's position based on the player's new look direction
+        reticle.updatePosition(position, yaw, pitch);
     }
 
     // moveInput.x = strafe (right/left), moveInput.y = forward/back -
