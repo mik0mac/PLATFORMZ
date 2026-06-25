@@ -6,8 +6,8 @@ const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
 
 //MARK: GameSpace Constants
 const float GAMESPACE_HALF_SIZE = 40.0f; // half-size of the game space cube, units.  Also used by Walls.
-const int GAMESPACE_NUMBER_OF_PLATFORMS = 24; // Number of platforms in the game space
-const int GAMESPACE_NUMBER_OF_ASTEROIDS = 0; // Number of asteroids in the game space
+const int GAMESPACE_NUMBER_OF_PLATFORMS = 16; // Number of platforms in the game space
+const int GAMESPACE_NUMBER_OF_ASTEROIDS = 8; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 2; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
 
 //MARK: Wall Constants
@@ -59,6 +59,11 @@ const float PLAYER_HEIGHT = PLAYER_BASE_HEIGHT * PLAYER_SCALE;
 const float PLAYER_WIDTH  = PLAYER_HEIGHT * PLAYER_WIDTH_RATIO;
 const float PLAYER_DEPTH  = PLAYER_HEIGHT * PLAYER_DEPTH_RATIO;
 
+// Player collider is a sphere (matches the dodecahedron body). Radius = half the
+// body height, so the sphere spans exactly floor -> eye (== eyeHeight ==
+// size.y/2). Footprint is wider than the old box on purpose.
+const float PLAYER_COLLISION_RADIUS = 0.5f * PLAYER_HEIGHT;
+
 //MARK: Player Constants
 const float PLAYER_SPEED_WALK = 10.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 7.5f; // units/sec^2
@@ -84,6 +89,8 @@ const int PLAYER_ELIMINATION_SCORE_AWARD = 100; // Points awarded to player for 
 const float BOT_REROLL_MIN_SECONDS = 1.5f; // min time before a bot re-rolls its heading/movement
 const float BOT_REROLL_MAX_SECONDS = 4.0f; // max time before a bot re-rolls its heading/movement
 const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target heading, radians/sec
+
+const bool DIABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 
 //MARK: Asteroid Constants
 const int ASTEROID_STARTING_HEALTH = 25;

@@ -108,6 +108,11 @@ inline PlayerInput MakeBotInput(const Player& bot, BotState& state, float dt) {
     in.moveAxis = state.moveAxis;
     in.jetpack = state.jetpack;
 
+    if (DIABLE_BOT_MOVEMENT) {
+        in.moveAxis = {0, 0};
+        in.jetpack = false;
+    }
+
     // Steer toward targetYaw, turning at most BOT_TURN_RATE this frame. Wrap the
     // error into [-PI, PI] so the bot always turns the short way around.
     float yawError = state.targetYaw - bot.yaw;

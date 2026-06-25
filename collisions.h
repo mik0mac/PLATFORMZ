@@ -53,7 +53,9 @@ struct GridCell {
 
 class CollisionGrid {
 public:
-    float cellSize = 5.0f; // meters per cell; tune relative to object sizes
+    float cellSize = 8.0f; // meters per cell; must be >= the largest tested pair
+                           // reach so the 27-cell neighbor search can't miss a
+                           // contact: asteroid radius (4) + player sphere (2) = 6.
 
     // Rebuilds the grid from scratch using GameSpace's current object
     // positions. Must be called once per frame, before any collision

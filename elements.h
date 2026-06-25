@@ -193,6 +193,10 @@ public:
 
     // shape, size and collision box
     Vector3 size = {PLAYER_WIDTH, PLAYER_HEIGHT, PLAYER_DEPTH}; // width, height, depth - all derived from PLAYER_SCALE (constants.h)
+    // Collider is a SPHERE (matches the dodecahedron body), not the box above.
+    // radius == size.y/2 == eyeHeight, so it spans floor -> eye. `size` is still
+    // used for spawn placement and the shape renderers (shapes.h).
+    float collisionRadius = PLAYER_COLLISION_RADIUS;
     // This is the collision box (a vertical rectangular prism) AND the envelope
     // the humanoid figure is drawn within (DrawPlayer in shapes.h builds the
     // body in local space around the box center; feet at -size.y/2, head top at

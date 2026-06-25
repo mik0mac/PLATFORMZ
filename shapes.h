@@ -237,54 +237,22 @@ static const Vector3 DODECA_VERTS[20] = {
     { ICOSA_T, 0, -DODECA_INV_T}, { ICOSA_T, 0, DODECA_INV_T}      // (±phi, 0, ±1/phi) 16..19
 };
 
-// The 12 pentagon faces, filled once by EnsureDodecaFaces(). The dodecahedron
-// is the dual of the icosahedron, so each face points toward an ICOSA_VERTS
-// direction - we group/sort the verts around those normals rather than hand-
-// authoring an error-prone index table.
-static int DODECA_FACES[12][5];
+// Max |y| of a normalized dodecahedron vertex (the (±1/phi, ±phi, 0) verts):
+// phi/sqrt(3). Sizing the body's circumradius by this makes its vertical extent
+// fill the box HEIGHT, so it rests on the floor (and, being centrally symmetric,
+// its top reaches eye level).
+static const float DODECA_Y_EXTENT = 0.9341724f;
 
-inline void EnsureDodecaFaces() {
-    static bool built = false;
-    if (built) return;
-
-    for (int f = 0; f < 12; f++) {
-        Vector3 n = Vector3Normalize(ICOSA_VERTS[f]);
-
-        // The 5 vertices most aligned with this face normal (selection sort by dot).
-        int idx[20];
-        float dots[20];
-        for (int i = 0; i < 20; i++) {
-            idx[i] = i;
-            dots[i] = Vector3DotProduct(Vector3Normalize(DODECA_VERTS[i]), n);
-        }
-        for (int a = 0; a < 5; a++) {
-            int best = a;
-            for (int b = a + 1; b < 20; b++) if (dots[b] > dots[best]) best = b;
-            float td = dots[a]; dots[a] = dots[best]; dots[best] = td;
-            int ti = idx[a]; idx[a] = idx[best]; idx[best] = ti;
-        }
-
-        // Order those 5 by angle around n (2D basis in the face plane).
-        Vector3 up = (fabsf(n.y) < 0.99f) ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-        Vector3 u = Vector3Normalize(Vector3CrossProduct(up, n));
-        Vector3 v = Vector3CrossProduct(n, u);
-        float ang[5];
-        for (int a = 0; a < 5; a++) {
-            Vector3 d = Vector3Normalize(DODECA_VERTS[idx[a]]);
-            ang[a] = atan2f(Vector3DotProduct(d, v), Vector3DotProduct(d, u));
-        }
-        for (int a = 0; a < 5; a++) {           // bubble sort 5 by angle
-            for (int b = a + 1; b < 5; b++) {
-                if (ang[b] < ang[a]) {
-                    float ta = ang[a]; ang[a] = ang[b]; ang[b] = ta;
-                    int ti = idx[a]; idx[a] = idx[b]; idx[b] = ti;
-                }
-            }
-        }
-        for (int a = 0; a < 5; a++) DODECA_FACES[f][a] = idx[a];
-    }
-    built = true;
-}
+// The 12 pentagonal faces, each listing its 5 vertices in cyclic (adjacency)
+// order. Precomputed from DODECA_VERTS (min-edge adjacency -> the twelve planar
+// 5-cycles -> CCW order around each face's centroid normal); validated as 30
+// unique edges, each shared by exactly 2 faces.
+static const int DODECA_FACES[12][5] = {
+    { 6,10, 2,13,15}, { 3,11, 7,15,13}, {16,17, 3,13, 2},
+    {19,18, 6,15, 7}, { 8, 0,16, 2,10}, { 1, 9,11, 3,17},
+    { 4, 8,10, 6,18}, { 9, 5,19, 7,11}, { 0,12, 1,17,16},
+    { 5,14, 4,18,19}, {14,12, 0, 8, 4}, {12,14, 5, 9, 1},
+};
 
 static const int SHIP_FACES[6][3] = {
     {0, 3, 1}, {0, 2, 3}, // nose -> top, both sides
@@ -508,12 +476,13 @@ inline void DrawShadedPolyhedron(Vector3 center, float radius, const Vector3 ver
 // Regular dodecahedron body, upright. Jetpack exhaust is now a spawned spark
 // particle system (see SpawnSparkCone / main.cpp), not drawn here.
 inline void DrawPlayerDodeca(const Player& player) {
-    EnsureDodecaFaces();
     Color outline, fill;
     PlayerFlashColors(player, outline, fill);
 
     const Vector3 c = player.position;
-    const float r = 0.5f * player.size.x;
+    // Size to the box HEIGHT (not width) so the body rests on the platform and,
+    // being centrally symmetric, reaches eye level at the top.
+    const float r = (0.5f * player.size.y) / DODECA_Y_EXTENT;
 
     DrawShadedPolyhedron(c, r, DODECA_VERTS, 20, DODECA_FACES, 12, outline, fill);
 }
