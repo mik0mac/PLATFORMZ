@@ -192,15 +192,17 @@ public:
     }
 
     // shape, size and collision box
-    Vector3 size = {1.0f, 2.0f, 1.0f}; // width, height, depth of the player's collision box (a vertical rectangular prism)
-    // For rendering the player, we can use a wireframe rectangular prism or a simple 3D model.
-    // For collision detection, we will use the position as the center of the bottom face of the prism,
-    // and size to define the extents of the collision box.
+    Vector3 size = {PLAYER_WIDTH, PLAYER_HEIGHT, PLAYER_DEPTH}; // width, height, depth - all derived from PLAYER_SCALE (constants.h)
+    // This is the collision box (a vertical rectangular prism) AND the envelope
+    // the humanoid figure is drawn within (DrawPlayer in shapes.h builds the
+    // body in local space around the box center; feet at -size.y/2, head top at
+    // +size.y/2). position is the center of the box (see collisions.cpp).
 
     // Camera eye height above position - shared by the first-person camera
     // (camera.h) and the wall-collision clamp (collisions.cpp) so the eye is
-    // kept inside the play space, not just the player's center.
-    float eyeHeight = 1.6f;
+    // kept inside the play space, not just the player's center. Scales with the
+    // player so first-person feel is unchanged at PLAYER_SCALE = 1.
+    float eyeHeight = PLAYER_HEIGHT * PLAYER_EYE_HEIGHT_RATIO;
 
     //MARK: Player Appearance
     Color color_outline = {0, 255, 200, 255};
@@ -219,6 +221,7 @@ public:
     int health = PLAYER_STARTING_HEALTH;
     int maxHealth = PLAYER_MAX_HEALTH; // Player's maximum health, can be increased by pickups
     bool isAlive = true; // Player is alive if health > 0.
+    bool deathBurstSpawned = false; // VFX guard: the one-time elimination spark burst fires once (players aren't erased).
     int ammo = PLAYER_STARTING_AMMO;
     int maxAmmo = PLAYER_MAX_AMMO; // Player's maximum ammo, can be increased by pickups
     float fireRate = PLAYER_FIRE_RATE; // Shots per second, can be increased by pickups
@@ -444,7 +447,81 @@ public:
         }
     }
 
-    
-    
+
+
 private:
 };
+
+//MARK: Spark (VFX particle)
+// A lightweight visual-only particle (no collision). Streams out as jetpack
+// exhaust or an asteroid-destruction burst, drifts, and fades over its
+// lifetime. Mirrors Explosion's "tick + isActive" lifecycle so GameSpace can
+// own/update/erase it through the same pipeline.
+class Spark {
+public:
+    Vector3 position{0, 0, 0};
+    Vector3 velocity{0, 0, 0};
+    float age = 0.0f;
+    float lifetime = 0.5f;
+    Color color = {255, 230, 150, 255};
+    bool isActive = true;
+
+    void update(float dt) {
+        velocity.y -= SPARK_GRAVITY * dt;        // light gravity so bursts arc
+        float damp = 1.0f - SPARK_DRAG * dt;     // air drag
+        if (damp < 0.0f) damp = 0.0f;
+        velocity = Vector3Scale(velocity, damp);
+        position = Vector3Add(position, Vector3Scale(velocity, dt));
+        age += dt;
+        if (age >= lifetime) isActive = false;
+    }
+
+    // 1.0 at birth -> 0.0 at death, for alpha fade.
+    float fade() const { return lifetime > 0.0f ? Clamp(1.0f - age / lifetime, 0.0f, 1.0f) : 0.0f; }
+};
+
+//MARK: Spark emitters (reused by jetpack exhaust and asteroid bursts)
+// Emit `count` sparks from `origin` within a cone of half-angle `coneAngle`
+// (radians) around `dir`. Small angle + dir = {0,-1,0} gives an exhaust plume;
+// `inheritVel` (e.g. the emitter's velocity) is added to every spark so the
+// stream trails the mover. Visual only - pushes into the sparks vector.
+inline void SpawnSparkCone(std::vector<Spark>& out, Vector3 origin, Vector3 dir,
+                           float coneAngle, float speedMin, float speedMax,
+                           int count, Color color, float lifeMin, float lifeMax,
+                           Vector3 inheritVel = {0, 0, 0}) {
+    Vector3 n = Vector3Normalize(dir);
+    Vector3 up = (fabsf(n.y) < 0.99f) ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+    Vector3 u = Vector3Normalize(Vector3CrossProduct(up, n)); // basis in the cone's base plane
+    Vector3 v = Vector3CrossProduct(n, u);
+    for (int i = 0; i < count; i++) {
+        float az = RandomFloat(0.0f, 2.0f * PI);
+        float polar = coneAngle * sqrtf(RandomFloat(0.0f, 1.0f)); // denser toward the axis
+        Vector3 radial = Vector3Add(Vector3Scale(u, cosf(az)), Vector3Scale(v, sinf(az)));
+        Vector3 d = Vector3Add(Vector3Scale(n, cosf(polar)), Vector3Scale(radial, sinf(polar)));
+        Spark s;
+        s.position = origin;
+        s.velocity = Vector3Add(Vector3Scale(d, RandomFloat(speedMin, speedMax)), inheritVel);
+        s.lifetime = RandomFloat(lifeMin, lifeMax);
+        s.color = color;
+        out.push_back(s);
+    }
+}
+
+// Emit `count` sparks uniformly in all directions from `origin` - a one-time
+// spherical puff (e.g. an asteroid breaking apart, or a player elimination).
+inline void SpawnSparkBurst(std::vector<Spark>& out, Vector3 origin,
+                            float speedMin, float speedMax, int count, Color color,
+                            float lifeMin, float lifeMax) {
+    for (int i = 0; i < count; i++) {
+        float z = RandomFloat(-1.0f, 1.0f);          // uniform point on the unit sphere
+        float t = RandomFloat(0.0f, 2.0f * PI);
+        float r = sqrtf(1.0f - z * z);
+        Vector3 d = {r * cosf(t), z, r * sinf(t)};
+        Spark s;
+        s.position = origin;
+        s.velocity = Vector3Scale(d, RandomFloat(speedMin, speedMax));
+        s.lifetime = RandomFloat(lifeMin, lifeMax);
+        s.color = color;
+        out.push_back(s);
+    }
+}

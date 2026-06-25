@@ -85,6 +85,24 @@ int main() {
             ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
         }
 
+        // Jetpack exhaust: spawn spark particles streaming down out of each
+        // thrusting player's bottom. Visual only - emitted here (game-state
+        // phase) so velocity/jetpack state is current; ticked in updatePositions.
+        for (Player& pl : players) {
+            if (!(pl.isUsingJetpack && pl.hasFuel())) continue;
+            float want = PLAYER_EXHAUST_RATE * dt;          // fractional count -> integer with random carry
+            int n = (int)want;
+            if (RandomFloat(0.0f, 1.0f) < (want - (float)n)) n++;
+            if (n <= 0) continue;
+            Vector3 origin = pl.position;
+            origin.y -= 0.5f * pl.size.y;                   // bottom of the body
+            SpawnSparkCone(gameSpace.getSparks(), origin, {0, -1, 0}, PLAYER_EXHAUST_CONE,
+                           PLAYER_EXHAUST_SPEED_MIN, PLAYER_EXHAUST_SPEED_MAX, n,
+                           Color{255, 200, 80, 255},
+                           PLAYER_EXHAUST_LIFETIME_MIN, PLAYER_EXHAUST_LIFETIME_MAX,
+                           Vector3Scale(pl.velocity, PLAYER_EXHAUST_INHERIT));
+        }
+
         gameSpace.updatePositions(dt);
 
         // Collision detection and response:

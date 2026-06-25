@@ -77,6 +77,7 @@ public:
         }
         rockets.clear(); // Rockets will be generated when the player shoots.
         explosions.clear(); // Explosions will be generated when rockets detonate.
+        sparks.clear(); // VFX particles, spawned by jetpack exhaust / asteroid bursts.
     };
 
     void updatePositions(float dt) {
@@ -107,9 +108,40 @@ public:
         for (Explosion& explosion : explosions) {
             explosion.update(dt);
         }
+
+        // Update VFX sparks (drift + fade). Dead ones removed in updateActiveObjects().
+        for (Spark& spark : sparks) {
+            spark.update(dt);
+        }
     }
 
     void updateActiveObjects() {
+        // Spawn a one-time spherical spark burst for each asteroid about to be
+        // removed. Done here so it fires regardless of what destroyed it (rocket
+        // splash, player impact, ...) - a single centralized hook.
+        Color burst = {255, 180, 60, 255}; // hot orange break-up (shared by both bursts)
+        for (const Asteroid& asteroid : asteroids) {
+            if (asteroid.isDestroyed) {
+                SpawnSparkBurst(sparks, asteroid.position,
+                                ASTEROID_BURST_SPEED_MIN, ASTEROID_BURST_SPEED_MAX,
+                                ASTEROID_BURST_COUNT, burst,
+                                SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
+            }
+        }
+
+        // One-time spark burst when a player is eliminated. Players aren't erased
+        // (the local player drives the death screen), so a per-player flag keeps
+        // the burst from re-firing every frame.
+        for (Player& player : players) {
+            if (!player.isAlive && !player.deathBurstSpawned) {
+                SpawnSparkBurst(sparks, player.position,
+                                ASTEROID_BURST_SPEED_MIN, ASTEROID_BURST_SPEED_MAX,
+                                ASTEROID_BURST_COUNT, burst,
+                                SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
+                player.deathBurstSpawned = true;
+            }
+        }
+
         // Remove destroyed asteroids
         asteroids.erase(std::remove_if(asteroids.begin(), asteroids.end(),
             [](const Asteroid& asteroid) { return asteroid.isDestroyed; }), asteroids.end());
@@ -121,6 +153,10 @@ public:
         // Remove finished explosions
         explosions.erase(std::remove_if(explosions.begin(), explosions.end(),
             [](const Explosion& explosion) { return !explosion.isActive; }), explosions.end());
+
+        // Remove faded sparks
+        sparks.erase(std::remove_if(sparks.begin(), sparks.end(),
+            [](const Spark& spark) { return !spark.isActive; }), sparks.end());
     }
 
     //MARK: Draw
@@ -151,6 +187,9 @@ public:
         for (Explosion& explosion : explosions) {
             DrawExplosion(explosion);
         }
+        for (Spark& spark : sparks) {
+            DrawSpark(spark);
+        }
     }
 
     //MARK: Accessors
@@ -164,6 +203,7 @@ public:
     std::vector<Player>& getPlayers() { return players; }
     std::vector<Rocket>& getRockets() { return rockets; }
     std::vector<Explosion>& getExplosions() { return explosions; }
+    std::vector<Spark>& getSparks() { return sparks; }
 
 private:
     // Mitchell's best-candidate sampling: returns a point that is well-spread
@@ -204,4 +244,5 @@ private:
     std::vector<Rocket> rockets;
     int number_of_explosions = 0; // Explosions will be generated when rockets detonate.
     std::vector<Explosion> explosions;
+    std::vector<Spark> sparks; // VFX particles (jetpack exhaust, asteroid bursts); visual only.
 };
