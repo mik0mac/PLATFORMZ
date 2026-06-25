@@ -109,7 +109,13 @@ int main() {
         RunCollisionChecks(gameSpace, collisionGrid);
 
         // Remove destroyed asteroids and rockets, finished explosions, etc.
-        gameSpace.updateActiveObjects(); 
+        gameSpace.updateActiveObjects();
+
+        // Reticles follow the player's FINAL (post-collision) position; smoothed
+        // for non-local players so their indicator can't jump, snapped for the
+        // local player so the crosshair stays centered and responsive.
+        for (int i = 0; i < (int)players.size(); ++i)
+            players[i].updateReticle(dt, i != 0); // index 0 is the local player
 
         if (IsKeyPressed(KEY_ESCAPE)) {
             // toggle cursor capture so you can alt-tab / quit comfortably

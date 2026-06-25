@@ -60,6 +60,7 @@ const int   RETICLE_RING_SEGMENTS = 28;     // circle smoothness (crosshair styl
 const float RETICLE_CROSS_GAP = 0.35f;      // center gap, as a fraction of RETICLE_SIZE
 const float RETICLE_PRONG_LENGTH = 0.6f;    // forward prong length, fraction of RETICLE_SIZE
 const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of RETICLE_SIZE
+const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
 //MARK: Player Constants
 const float PLAYER_SPEED_WALK = 10.0f; // units/sec

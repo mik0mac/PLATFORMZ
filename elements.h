@@ -75,10 +75,14 @@ private:
     // static constexpr float min_depth = min_width;
 };
 
+
+//MARK: Reticle
 class Reticle {
 public:
-    Vector3 position; // 3D position of the reticle will be calculated based on the player's position and aim direction
+    Vector3 position; // 3D world position of the reticle, recomputed each frame (post-collision) from the anchor + aim.
     // eyeHeight is decomissoned, so Reticle::position is based on the player's center point.
+    Vector3 anchor{};               // smoothed player center the reticle hangs off of (eased toward player.position)
+    bool anchorInitialized = false; // seeds the anchor on the first update so it doesn't glide in from the origin
     float yaw = 0.0f;
     float pitch = 0.0f;
 
@@ -93,18 +97,29 @@ public:
     bool isVisibleToOwner = true; // Whether the reticle is currently visible
     bool isVisibleToEnemies = true; // Whether the reticle is visible to other players (enemies)
 
-    void updatePosition(const Vector3& playerPosition, float playerYaw, float playerPitch, float playerRadius) {
-        // Calculate the forward direction based on the player's yaw and pitch
-        // Called in Player::updateLook().
+    // Ticked once per frame AFTER collisions resolve the player's final position
+    // (see main.cpp), so the reticle can never lag a frame behind a wall bounce.
+    // Only the anchor (the player center) is smoothed; aim stays live so turning
+    // is responsive. `smooth` is false for the local player so the crosshair
+    // snaps to center (a plain smoother would lag a moving target off-center).
+    void update(const Vector3& playerPosition, float playerYaw, float playerPitch,
+                float playerRadius, float dt, bool smooth) {
+        if (!anchorInitialized || !smooth) {
+            anchor = playerPosition;             // snap (local player, or first frame)
+            anchorInitialized = true;
+        } else {
+            float a = 1.0f - expf(-dt * RETICLE_SMOOTHING); // frame-rate-independent ease
+            anchor = Vector3Lerp(anchor, playerPosition, a);
+        }
+
+        // Place the reticle in front of the (smoothed) anchor, just beyond the
+        // body surface (radius + standoff) so it never renders inside the body.
         Vector3 forwardDirection = {
             cosf(playerPitch) * cosf(playerYaw),
             sinf(playerPitch),
             cosf(playerPitch) * sinf(playerYaw)
         };
-
-        // Place the reticle in front of the player, just beyond the body surface
-        // (radius + standoff) so it never renders inside the body.
-        position = Vector3Add(playerPosition, Vector3Scale(forwardDirection, playerRadius + standoff));
+        position = Vector3Add(anchor, Vector3Scale(forwardDirection, playerRadius + standoff));
     }
 };
 
@@ -155,8 +170,15 @@ public:
         yaw += mouseDelta.x * lookSensitivity;
         pitch -= mouseDelta.y * lookSensitivity;
         pitch = Clamp(pitch, -pitchLimit, pitchLimit);
-        // update the reticle's position based on the player's new look direction
-        reticle.updatePosition(position, yaw, pitch, radius);
+        // The reticle is ticked separately (updateReticle), after collisions
+        // resolve the player's final position - not here in the input phase.
+    }
+
+    // Ticked each frame after collisions (main.cpp). `smooth` eases non-local
+    // reticles so they can't jump; the local player passes false to keep the
+    // crosshair centered and responsive.
+    void updateReticle(float dt, bool smooth) {
+        reticle.update(position, yaw, pitch, radius, dt, smooth);
     }
 
     // moveInput.x = strafe (right/left), moveInput.y = forward/back -
