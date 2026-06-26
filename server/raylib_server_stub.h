@@ -191,6 +191,7 @@ inline void    EnableCursor()                  {}
 // Logging - TraceLog used in some debug paths; map to stderr so it's visible
 // in the Actions log without pulling in raylib's implementation.
 #include <cstdio>
+#include <cstdarg> // va_list / va_start / va_end, used by TraceLog below
 enum TraceLogLevel { LOG_INFO = 3, LOG_WARNING = 4, LOG_ERROR = 5 };
 inline void TraceLog(int level, const char* fmt, ...) {
     va_list args;
@@ -199,4 +200,3 @@ inline void TraceLog(int level, const char* fmt, ...) {
     fprintf(stderr, "\n");
     va_end(args);
 }
-#include <cstdarg> // for va_list above
