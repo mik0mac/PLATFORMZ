@@ -20,8 +20,7 @@ jobs:
       - name: Compile test server
         working-directory: server
         run: |
-          g++ server_main.cpp -o gameserver -std=c++17 \
-            -lboost_system -lpthread
+          make
           echo "Build successful"
 
       - name: Start server and tunnel

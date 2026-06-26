@@ -12,10 +12,15 @@
 #   make clean -> remove binary
 
 CXX      := g++
-CXXFLAGS := -std=c++17 -O2 -Wall \
-             -I ./ \
-             -I ../
-LDFLAGS  := -lboost_system -lpthread
+# -I $(SERVERDIR) must come before -I $(GAMEDIR) so raylib_server_stub.h
+# shadows the real raylib.h for ALL files in the compilation, including
+# headers in the game root that do #include "raylib.h" themselves.
+SERVERDIR := $(shell pwd)
+GAMEDIR   := $(shell pwd)/..
+CXXFLAGS  := -std=c++17 -O2 -Wall \
+              -I $(SERVERDIR) \
+              -I $(GAMEDIR)
+LDFLAGS   := -lboost_system -lpthread
 
 # server_main.cpp + collisions.cpp (game logic, no rendering)
 SRCS     := server_main.cpp ../collisions.cpp
