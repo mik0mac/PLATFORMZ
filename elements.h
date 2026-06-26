@@ -36,6 +36,8 @@ public:
 //MARK: Platform
 class Platform {
 public:
+    // ID
+    uint32_t id = 0;
     // position
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the platform.
@@ -128,8 +130,14 @@ public:
 
 class Player {
 public:
+    // ID
+    uint32_t id = 0; // Unique identifier for the player
+    uint32_t rocketCounter = 0; // Counter for rockets fired by this player, used to generate unique rocket IDs
+
+    // Reticle
     Reticle reticle; // Each player has their own reticle, which is updated based on the player's position and aim direction.
-//MARK: Player Move & Pos
+
+    //MARK: Player Move & Pos
     Vector3 position = {0.0f, 0.0f, 0.0f}; // Center starting position.  Replaced.
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
     Vector3 velocity = {0.0f, 0.0f, 0.0f}; // Player velocity, updated by movement input and gravity
@@ -334,6 +342,9 @@ private:
 //MARK: Asteroid
 class Asteroid {
 public:
+    // ID
+    uint32_t id = 0; // Unique identifier for the asteroid
+
     // position, velocity, speed
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the asteroid, set during game space generation.
@@ -423,6 +434,8 @@ private:
 //MARK: Rocket
 class Rocket {
 public:
+    // ID
+    uint32_t id = 0; // Unique identifier for the rocket
     // ownership.  Which player fired this rocket?
     Player* owner = nullptr;
     // position, velocity, direction, speed
@@ -439,10 +452,10 @@ public:
         if (gravityEnabled) {
             velocity.y -= MOON_GRAVITY * dt; // Apply gravity to the rocket's velocity
         }
-        if (velocityInheritance && owner != nullptr) {
-            Vector3 inheritedVelocity = owner->velocity * dt; // Inherit player's velocity
-            velocity = Vector3Add(velocity, inheritedVelocity); // Inherit player's velocity
-        }
+        // if (velocityInheritance && owner != nullptr) {
+        //     Vector3 inheritedVelocity = owner->velocity * dt; // Inherit player's velocity
+        //     velocity = Vector3Add(velocity, inheritedVelocity); // Inherit player's velocity
+        // }
         position = Vector3Add(position, Vector3Scale(velocity, dt));
     }
 
@@ -468,6 +481,8 @@ private:
 //MARK: Explosion
 class Explosion {
 public:
+    // ID
+    uint32_t id = 0; // Unique identifier for the explosion
     // ownership.  Which player fired the rocket that caused this explosion?
     Player* owner = nullptr;
     // position and size

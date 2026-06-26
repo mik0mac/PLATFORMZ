@@ -60,7 +60,10 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     if (in.fire) {
         bool shotFired = player.shoot(); // ammo / canShoot bookkeeping (see Player::shoot)
         if (shotFired) {
+            // MARK: Rocket spawn
             Rocket rocket;
+            rocket.id = (player.id << 24) | (player.rocketCounter++);
+
             rocket.owner = &player; // track which player fired this rocket
             Vector3 eyePos = player.position; // eye is at the sphere center
             Vector3 aim = player.Forward();
@@ -71,6 +74,9 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             rocket.position  = Vector3Add(eyePos, Vector3Scale(aim, muzzleOffset));
             rocket.direction = aim;
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
+            if (rocket.velocityInheritance) {
+                rocket.velocity = Vector3Add(rocket.velocity, player.velocity); // inherit player's velocity
+            }
             gameSpace.getRockets().push_back(rocket);
 
             // kickback (recoil)
@@ -110,7 +116,7 @@ inline PlayerInput MakeBotInput(const Player& bot, BotState& state, float dt) {
     in.moveAxis = state.moveAxis;
     in.jetpack = state.jetpack;
 
-    if (DIABLE_BOT_MOVEMENT) {
+    if (DISABLE_BOT_MOVEMENT) {
         in.moveAxis = {0, 0};
         in.jetpack = false;
     }

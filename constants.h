@@ -88,7 +88,7 @@ const float BOT_REROLL_MIN_SECONDS = 1.5f; // min time before a bot re-rolls its
 const float BOT_REROLL_MAX_SECONDS = 4.0f; // max time before a bot re-rolls its heading/movement
 const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target heading, radians/sec
 
-const bool DIABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
+const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 
 //MARK: Asteroid Constants
 const int ASTEROID_STARTING_HEALTH = 25;
@@ -141,3 +141,9 @@ const float SPARK_BURST_LIFETIME_MAX = 18.0f;
 const int   ASTEROID_BURST_COUNT = 240;        // sparks per elimination burst (tunable quantity)
 const float ASTEROID_BURST_SPEED_MIN = 12.0f;
 const float ASTEROID_BURST_SPEED_MAX = 48.0f;
+
+//MARK: ID-related Constants
+const uint32_t ID_NONE = 0; // uninitialized/invalid sentinel
+
+const uint32_t PLAYER_ID_BASE    = 0x00000001; // 1 - 255 (max 255 players)
+const uint32_t NON_PLAYER_ID_BASE  = 0x00000100; // 256 - 65535

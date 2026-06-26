@@ -21,6 +21,11 @@ public:
     float boundaryBufferPlatforms = 0.8f; // Buffer distance to keep platforms from spawning right on the boundary.  As a factor of walls.halfSize.
     float boundaryBufferAsteroids = 0.9f; // Buffer distance to keep objects from spawning right on the boundary.  As a factor of walls.halfSize.
     Color backgroundColor = {0, 0, 0, 255}; // Black background for the game space
+    
+    uint32_t nextID = NON_PLAYER_ID_BASE; // Platforms and Asteroids (0x00000100) 256, 257, 258, ... 
+    uint32_t nextPlayerID = PLAYER_ID_BASE; // (0x00000001) 1, 2, 3, ... 255.
+    // Rockets' IDs generated in input.h
+
 
     void generate() {
         platforms.clear();
@@ -29,6 +34,10 @@ public:
         float platformBuffer = walls.halfSize * boundaryBufferPlatforms;
         for (int i = 0; i < num_of_platforms; ++i) {
             Platform platform;
+            //MARK: Platform ID
+            platform.id = nextID++;
+            
+            // size and position are generated randomly:
             platform.generateSize(); // Random width and depth, thin height for a platform
             platform.position = bestCandidatePosition(placed, platformBuffer); // spread platforms, avoid clustering
             platform.startingPosition = platform.position; // Store the initial position of the platform
@@ -38,6 +47,10 @@ public:
         asteroids.clear();
         for (int i = 0; i < num_of_asteroids; ++i) {
             Asteroid asteroid;
+            //MARK: Asteroid ID
+            asteroid.id = nextID++;
+            
+            // size, position, and velocity are generated randomly:
             asteroid.generateSize(); // Random size for the asteroid
             float buffer = walls.halfSize * boundaryBufferAsteroids;
             asteroid.position = {RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer)};
@@ -48,6 +61,8 @@ public:
         players.clear();
         for (int i = 0; i < number_of_players; ++i) {
             Player player;
+            //MARK: Player ID
+            player.id = nextPlayerID++;
             // chose a random platform and place the player on top of it as the starting position
             if (!platforms.empty()) {
                 int platformIndex = static_cast<int>(RandomFloat(0, platforms.size() - 1));
