@@ -316,7 +316,14 @@ private:
 // -------------------------------------------------------------------------
 // Broadcast state to all connected clients.
 // Each client gets the same world state but with their own lastSeq.
-// Called from the sim loop holding gameMutex - clientMutex acquired here.
+//
+// Called from the sim loop AFTER gameMutex is released, on purpose: the
+// per-client JSON build and blocking socket writes must not stall the
+// simulation (or hold gameMutex while a slow/dead client backs up a write).
+// Reading gameSpace here without gameMutex is safe because the sim thread is
+// its only mutator and this runs on that same thread, sequentially after the
+// locked sim step - so no concurrent writer exists. Only clientMutex is taken
+// here, to guard the clients map against connects/disconnects on io threads.
 // -------------------------------------------------------------------------
 void BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
@@ -363,6 +370,7 @@ void SimulationLoop() {
         lastTick = now;
 
         uint32_t tick;
+        size_t   asteroidCount = 0;
         {
             std::lock_guard<std::mutex> gg(gameMutex);
 
@@ -383,12 +391,24 @@ void SimulationLoop() {
             RunCollisionChecks(gameSpace, collisionGrid);
             gameSpace.updateActiveObjects();
             tick = ++serverTick;
+            asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
         }
 
         // Broadcast authoritative state to all clients every tick.
         // At 60Hz this is ~60 packets/sec per client. For 2 players the
         // bandwidth is trivial; revisit delta-compression if player count grows.
         BroadcastState(tick);
+
+        // Heartbeat (~1/sec) so the Actions live log shows the sim is alive.
+        // clientMutex is taken alone here (not nested under gameMutex) so it
+        // can't deadlock. std::endl flushes - stdout to a file is fully
+        // buffered, so without the flush this wouldn't appear under `tail -f`.
+        if (tick % 60 == 0) {
+            int connected;
+            { std::lock_guard<std::mutex> gc(clientMutex); connected = (int)clients.size(); }
+            std::cout << "tick " << tick << "  players " << connected
+                      << "  asteroids " << asteroidCount << std::endl;
+        }
     }
 }
 

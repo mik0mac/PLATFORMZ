@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PLATFORMZ — server test client</title>
+<!--
+  Standalone WebSocket test client for the PLATFORMZ game server.
+
+  WHY THIS FILE EXISTS:
+  Pasting `new WebSocket('wss://...trycloudflare.com')` into the DevTools console
+  of a normal page (GitHub Actions, claude.ai, etc.) runs in THAT page's origin,
+  whose Content-Security-Policy `connect-src` forbids the tunnel host - the browser
+  blocks the socket before it opens (the "CSP violation" you saw). A file:// page
+  has no CSP, so opening THIS file by double-click and connecting from here works.
+
+  USAGE: double-click to open (file://...), paste the wss:// tunnel URL printed in
+  the Actions log, click Connect, then tick "send input" to drive your player.
+
+  Wire protocol mirrors server/server_main.cpp:
+    send  -> {seq,mx,mz,jp,grav,fire,yaw,pitch}   (parseInput)
+    recv  <- {"type":"welcome",playerId,tick}
+    recv  <- {"type":"state",tick,seq,players[],asteroids[],rockets[],explosions[]}
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background:#0e1116; color:#d7dde5; margin:0; padding:16px; }
+  h1 { font-size:16px; margin:0 0 12px; color:#7ee0ff; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  input[type=text] { flex:1; min-width:280px; background:#161b22; border:1px solid #30363d;
+                     color:#d7dde5; padding:6px 8px; border-radius:6px; }
+  button { background:#21262d; border:1px solid #30363d; color:#d7dde5;
+           padding:6px 14px; border-radius:6px; cursor:pointer; }
+  button:hover { background:#30363d; }
+  button:disabled { opacity:.4; cursor:default; }
+  label { user-select:none; }
+  #status { font-weight:bold; }
+  .ok { color:#3fb950; } .bad { color:#f85149; } .warn { color:#d29922; }
+  .panels { display:flex; gap:16px; flex-wrap:wrap; }
+  .panel { flex:1; min-width:320px; background:#161b22; border:1px solid #30363d;
+           border-radius:8px; padding:12px; }
+  .panel h2 { font-size:13px; margin:0 0 8px; color:#9aa5b1; text-transform:uppercase;
+              letter-spacing:.05em; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; max-height:46vh; overflow:auto; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; }
+  .kv span:nth-child(odd) { color:#9aa5b1; }
+  .hint { color:#6e7681; font-size:12px; }
+  kbd { background:#30363d; border-radius:4px; padding:1px 5px; font-size:12px; }
+</style>
+</head>
+<body>
+  <h1>PLATFORMZ — server test client</h1>
+
+  <div class="row">
+    <input id="url" type="text"
+           placeholder="wss://something.trycloudflare.com"
+           value="" />
+    <button id="connect">Connect</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    <span id="status" class="warn">idle</span>
+  </div>
+
+  <div class="row">
+    <label><input id="sendInput" type="checkbox" /> send input @60Hz</label>
+    <span class="hint">drive with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+      · <kbd>Space</kbd> jetpack · <kbd>F</kbd> fire · mouse-free (yaw/pitch held at 0)</span>
+    <span id="pps" class="hint"></span>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Latest state</h2>
+      <div id="state" class="kv"><span>—</span><span>not connected</span></div>
+    </div>
+    <div class="panel">
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const urlEl = $("url"), statusEl = $("status"), logEl = $("log"),
+        stateEl = $("state"), ppsEl = $("pps");
+
+  let ws = null;
+  let sendTimer = null;
+  let playerId = null;
+  let pktCount = 0;          // state packets since last pps sample
+  let ppsTimer = null;
+
+  // Held input state, mutated by WASD/Space/F key handlers.
+  const keys = { w:false, a:false, s:false, d:false, space:false, fire:false };
+
+  function log(msg, cls) {
+    const t = new Date().toLocaleTimeString();
+    const line = `[${t}] ${msg}`;
+    logEl.textContent = (line + "\n" + logEl.textContent).split("\n").slice(0, 200).join("\n");
+    if (cls) console.log(msg);
+  }
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || "";
+  }
+
+  function persistUrl() {
+    try { localStorage.setItem("platformz_ws_url", urlEl.value.trim()); } catch (_) {}
+  }
+  try { const u = localStorage.getItem("platformz_ws_url"); if (u) urlEl.value = u; } catch (_) {}
+
+  function connect() {
+    const url = urlEl.value.trim();
+    if (!/^wss?:\/\//.test(url)) { log("Enter a ws:// or wss:// URL first.", 1); return; }
+    persistUrl();
+    setStatus("connecting…", "warn");
+    try { ws = new WebSocket(url); }
+    catch (e) { setStatus("error", "bad"); log("WebSocket ctor threw: " + e.message, 1); return; }
+
+    ws.onopen = () => {
+      setStatus("open", "ok");
+      log("connected to " + url, 1);
+      $("connect").disabled = true;
+      $("disconnect").disabled = false;
+      pktCount = 0;
+      ppsTimer = setInterval(() => { ppsEl.textContent = pktCount + " state pkts/s"; pktCount = 0; }, 1000);
+    };
+
+    ws.onmessage = e => {
+      let d;
+      try { d = JSON.parse(e.data); }
+      catch (_) { log("non-JSON: " + e.data, 1); return; }
+
+      if (d.type === "welcome") {
+        playerId = d.playerId;
+        log(`welcome — assigned playerId ${d.playerId} (tick ${d.tick})`, 1);
+      } else if (d.type === "state") {
+        pktCount++;
+        renderState(d);
+      } else {
+        log("unknown packet: " + e.data, 1);
+      }
+    };
+
+    ws.onerror = () => { setStatus("error", "bad"); log("socket error (see console / check the URL is current)", 1); };
+
+    ws.onclose = ev => {
+      setStatus("closed", "bad");
+      log(`closed (code ${ev.code}${ev.reason ? ", " + ev.reason : ""})`, 1);
+      teardown();
+    };
+  }
+
+  function teardown() {
+    if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
+    if (ppsTimer)  { clearInterval(ppsTimer);  ppsTimer = null; }
+    $("sendInput").checked = false;
+    $("connect").disabled = false;
+    $("disconnect").disabled = true;
+    ppsEl.textContent = "";
+  }
+
+  function disconnect() { if (ws) { ws.close(); ws = null; } }
+
+  // Build one input packet from current held keys. Mirrors parseInput() on the
+  // server: absolute yaw/pitch (held at 0 here — no mouse), move axes, buttons.
+  function makeInput() {
+    let mx = 0, mz = 0;
+    if (keys.d) mx += 1; if (keys.a) mx -= 1;
+    if (keys.w) mz += 1; if (keys.s) mz -= 1;
+    return {
+      seq: Date.now(),
+      mx, mz,
+      jp:   keys.space,
+      grav: false,
+      fire: keys.fire,
+      yaw:  0,
+      pitch: 0
+    };
+  }
+
+  function startSending() {
+    if (sendTimer) return;
+    sendTimer = setInterval(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const pkt = makeInput();
+      ws.send(JSON.stringify(pkt));
+      keys.fire = false; // fire is single-shot per press
+    }, 16); // ~60Hz
+  }
+  function stopSending() { if (sendTimer) { clearInterval(sendTimer); sendTimer = null; } }
+
+  function renderState(d) {
+    const p = (d.players && d.players[playerId]) || (d.players && d.players[0]) || null;
+    const rows = [
+      ["tick", d.tick],
+      ["players", d.players ? d.players.length : 0],
+      ["asteroids", d.asteroids ? d.asteroids.length : 0],
+      ["rockets", d.rockets ? d.rockets.length : 0],
+      ["explosions", d.explosions ? d.explosions.length : 0],
+    ];
+    if (p) {
+      rows.push(["— me (id " + p.id + ") —", ""]);
+      rows.push(["pos", `${fmt(p.px)}, ${fmt(p.py)}, ${fmt(p.pz)}`]);
+      rows.push(["vel", `${fmt(p.vx)}, ${fmt(p.vy)}, ${fmt(p.vz)}`]);
+      rows.push(["yaw/pitch", `${fmt(p.yaw)} / ${fmt(p.pitch)}`]);
+      rows.push(["hp / fuel / ammo", `${p.hp} / ${fmt(p.fuel)} / ${p.ammo}`]);
+      rows.push(["alive", String(p.alive)]);
+    }
+    stateEl.innerHTML = rows.map(([k, v]) =>
+      `<span>${k}</span><span>${v}</span>`).join("");
+  }
+  const fmt = n => (typeof n === "number" ? n.toFixed(2) : n);
+
+  // --- key handling: only while the page is focused, ignore when typing in the URL box
+  function keyTarget(e) { return e.target && e.target.tagName === "INPUT"; }
+  window.addEventListener("keydown", e => {
+    if (keyTarget(e)) return;
+    switch (e.code) {
+      case "KeyW": keys.w = true; break;
+      case "KeyA": keys.a = true; break;
+      case "KeyS": keys.s = true; break;
+      case "KeyD": keys.d = true; break;
+      case "Space": keys.space = true; e.preventDefault(); break;
+      case "KeyF": keys.fire = true; break;
+      default: return;
+    }
+  });
+  window.addEventListener("keyup", e => {
+    switch (e.code) {
+      case "KeyW": keys.w = false; break;
+      case "KeyA": keys.a = false; break;
+      case "KeyS": keys.s = false; break;
+      case "KeyD": keys.d = false; break;
+      case "Space": keys.space = false; break;
+      // fire is cleared after it's sent, not on keyup
+      default: return;
+    }
+  });
+
+  $("connect").addEventListener("click", connect);
+  $("disconnect").addEventListener("click", disconnect);
+  $("url").addEventListener("change", persistUrl);
+  $("sendInput").addEventListener("change", e => {
+    if (e.target.checked) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) { e.target.checked = false; log("connect first.", 1); return; }
+      startSending(); log("sending input @60Hz", 1);
+    } else {
+      stopSending(); log("stopped sending input", 1);
+    }
+  });
+})();
+</script>
+</body>
+</html>
