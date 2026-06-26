@@ -1,38 +1,12 @@
-# .github/workflows/gameserver.yml
-#
-# Manually-triggered workflow that:
-#   1. Checks out the repo
-#   2. Compiles the test server (server/server_main.cpp) on Ubuntu
-#   3. Starts it in the background
-#   4. Opens a Cloudflare Quick Tunnel so the outside world can reach it
-#   5. Prints the public tunnel URL to the Actions log
-#   6. Keeps running for up to 6 hours (the GitHub Actions maximum)
-#
-# TRIGGER: go to Actions tab in GitHub -> "Run Game Server" -> Run workflow
-#
-# USAGE AFTER TRIGGER:
-#   1. Watch the "Start server + tunnel" step log
-#   2. Look for a line like:
-#        https://random-words-here.trycloudflare.com
-#   3. In your browser dev console:
-#        const ws = new WebSocket('wss://random-words-here.trycloudflare.com');
-#        ws.onmessage = e => console.log(e.data);
-#        ws.onopen = () => ws.send('ping');
-#   4. You should see: pong, then heartbeat:1, heartbeat:2, ...
-#
-# NOTE: Cloudflare Quick Tunnels use wss:// (TLS) automatically, so use
-# wss:// not ws:// in the browser even though the server itself is plain ws://.
-# Cloudflare handles the TLS termination at their edge.
-
 name: Run Game Server
 
 on:
-  workflow_dispatch:  # manual trigger only - no auto-run on push
+  workflow_dispatch:
 
 jobs:
   serve:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hour max (GitHub Actions limit)
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
@@ -41,8 +15,6 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          # Boost is pre-installed on ubuntu-latest but libboost-dev
-          # ensures the headers are present. Beast is header-only inside Boost.
           sudo apt-get install -y libboost-dev libboost-system-dev
 
       - name: Compile test server
@@ -51,49 +23,35 @@ jobs:
           g++ server_main.cpp -o gameserver -std=c++17 \
             -lboost_system -lpthread
           echo "Build successful"
-          ls -lh gameserver
-
-      - name: Install cloudflared tunnel
-        run: |
-          # Download the cloudflared binary directly from Cloudflare's releases.
-          # No account or token needed for Quick Tunnels (temporary URLs).
-          curl -L \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-            -o cloudflared
-          chmod +x cloudflared
-          ./cloudflared --version
 
       - name: Start server and tunnel
-        working-directory: server
         run: |
-          # Start the game server in the background.
-          # Output goes to server.log so we can tail it for diagnostics.
+          # Start game server from its directory
+          cd server
           ./gameserver > server.log 2>&1 &
           SERVER_PID=$!
           echo "Game server started (PID $SERVER_PID)"
-
-          # Give the server a moment to bind the port before tunneling.
           sleep 2
 
-          # Verify the server is actually listening before opening the tunnel.
+          # Verify server is still running
           if ! kill -0 $SERVER_PID 2>/dev/null; then
-            echo "ERROR: server process died. Last log:"
+            echo "ERROR: server died. Log:"
             cat server.log
             exit 1
           fi
 
-          echo "Server is running. Opening Cloudflare tunnel..."
+          # Download cloudflared into current directory (server/)
+          cd ..
+          curl -L \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o cloudflared
+          chmod +x cloudflared
+          echo "cloudflared downloaded: $(./cloudflared --version)"
 
-          # cloudflared tunnel --url points a Quick Tunnel at localhost:9000.
-          # It prints the public URL to stderr (look for the https:// line).
-          # We tee to tunnel.log and also print to the Actions log in real time.
-          #
-          # The URL looks like: https://random-words.trycloudflare.com
-          # Use wss:// (not ws://) from the browser - Cloudflare adds TLS.
-          ./cloudflared tunnel --url http://localhost:9000 2>&1 | tee tunnel.log &
-          TUNNEL_PID=$!
+          # Open tunnel pointing at server port
+          ./cloudflared tunnel --url http://localhost:9000 > tunnel.log 2>&1 &
 
-          # Wait for the tunnel URL to appear in the log (up to 30 seconds).
+          # Wait for URL to appear
           echo "Waiting for tunnel URL..."
           for i in $(seq 1 30); do
             URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' tunnel.log | head -1)
@@ -104,7 +62,7 @@ jobs:
               echo "WebSocket:  ${URL/https/wss}"
               echo "============================================"
               echo ""
-              echo "Test in browser console:"
+              echo "Paste in browser console to test:"
               echo "  const ws = new WebSocket('${URL/https/wss}');"
               echo "  ws.onmessage = e => console.log(e.data);"
               echo "  ws.onopen = () => ws.send('ping');"
@@ -114,15 +72,13 @@ jobs:
           done
 
           if [ -z "$URL" ]; then
-            echo "WARNING: tunnel URL not found after 30s. Check tunnel.log:"
+            echo "WARNING: no tunnel URL after 30s"
             cat tunnel.log
           fi
 
-          # Tail the server log so you can see connections/heartbeats in
-          # the Actions log while the workflow runs.
+          # Tail server log live so you can see connections in Actions log
           echo "--- Server log (live) ---"
-          tail -f server.log &
+          tail -f server/server.log &
 
-          # Keep the workflow alive until GitHub's 6-hour limit.
-          # The server and tunnel run as background processes.
+          # Block until server exits (keeps workflow alive up to 6hr limit)
           wait $SERVER_PID
