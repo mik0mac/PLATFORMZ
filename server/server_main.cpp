@@ -19,10 +19,9 @@
 //   // expect: pong, then every second:
 //   // tick:60 players:1 asteroids:8
 
-// Include stub FIRST - before any game headers.
-// Makefile also sets -I ./ before -I ../ for transitive includes.
-#include "raylib_server_stub.h"
-
+// Game logic headers - raylib_server_stub.h is injected via -include in the
+// Makefile, so raylib.h/raymath.h/rlgl.h includes in these headers are
+// intercepted by the stub's header guards before they can fail.
 #include "../gamespace.h"
 #include "../collisions.h"
 

@@ -12,14 +12,19 @@
 #   make clean -> remove binary
 
 CXX      := g++
-# -I $(SERVERDIR) must come before -I $(GAMEDIR) so raylib_server_stub.h
-# shadows the real raylib.h for ALL files in the compilation, including
-# headers in the game root that do #include "raylib.h" themselves.
 SERVERDIR := $(shell pwd)
 GAMEDIR   := $(shell pwd)/..
+
+# -include injects the stub as the very first line of every compiled file,
+# before any #include in the source. This means when gamespace.h or
+# collisions.h do #include "raylib.h", the RAYLIB_H guard from the stub
+# is already defined and the include is skipped - even though those headers
+# live in ../ and would otherwise resolve "raylib.h" relative to themselves.
 CXXFLAGS  := -std=c++17 -O2 -Wall \
               -I $(SERVERDIR) \
-              -I $(GAMEDIR)
+              -I $(GAMEDIR) \
+              -include $(SERVERDIR)/raylib_server_stub.h
+
 LDFLAGS   := -lboost_system -lpthread
 
 # server_main.cpp + collisions.cpp (game logic, no rendering)
