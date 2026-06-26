@@ -9,9 +9,14 @@
 // If you add new raylib calls to the game logic headers, add the stub here.
 //
 // HOW IT WORKS:
-// The server Makefile passes -I server/ before -I ../ so this file shadows
-// the real raylib.h when compiling server_main.cpp and the game headers it
-// pulls in. The game headers themselves are unchanged.
+// server/ also contains thin raylib.h / raymath.h / rlgl.h shims that each just
+// #include this file. The server Makefile passes -I server/ before -I ../, so
+// when the game headers do #include "raylib.h" (etc.) the directive resolves to
+// those shims and pulls in this stub - on Linux there is no raylib.h in ../ to
+// find. (An #include must locate a real file; a predefined include-guard macro
+// alone does NOT make the directive skip the lookup.) Rendering code in
+// shapes.h / GameSpace::draw is excluded from the server build via the
+// PLATFORMZ_SERVER guard, so this stub only needs math types, not draw calls.
 
 #pragma once
 
@@ -109,6 +114,27 @@ inline Vector3 Vector3Reflect(Vector3 v, Vector3 normal) {
     float dot = Vector3DotProduct(v, normal);
     return Vector3Subtract(v, Vector3Scale(normal, 2.0f * dot));
 }
+
+// -------------------------------------------------------------------------
+// C++ operator overloads - raymath.h defines these for Vector2/Vector3 when
+// compiled as C++, and the game logic uses them (e.g. `position - position`
+// in collisions.cpp). Mirror raymath so the stub and the real build agree.
+// -------------------------------------------------------------------------
+inline Vector2 operator+(Vector2 a, Vector2 b) { return Vector2Add(a, b); }
+inline Vector2 operator-(Vector2 a, Vector2 b) { return Vector2Subtract(a, b); }
+inline Vector2 operator*(Vector2 v, float s)   { return Vector2Scale(v, s); }
+inline Vector2 operator-(Vector2 v)            { return {-v.x, -v.y}; }
+inline Vector2& operator+=(Vector2& a, Vector2 b) { a = a + b; return a; }
+inline Vector2& operator-=(Vector2& a, Vector2 b) { a = a - b; return a; }
+
+inline Vector3 operator+(Vector3 a, Vector3 b) { return Vector3Add(a, b); }
+inline Vector3 operator-(Vector3 a, Vector3 b) { return Vector3Subtract(a, b); }
+inline Vector3 operator*(Vector3 v, float s)   { return Vector3Scale(v, s); }
+inline Vector3 operator/(Vector3 v, float s)   { return Vector3Scale(v, 1.0f / s); }
+inline Vector3 operator-(Vector3 v)            { return {-v.x, -v.y, -v.z}; }
+inline Vector3& operator+=(Vector3& a, Vector3 b) { a = a + b; return a; }
+inline Vector3& operator-=(Vector3& a, Vector3 b) { a = a - b; return a; }
+inline Vector3& operator*=(Vector3& v, float s)   { v = v * s; return v; }
 
 // -------------------------------------------------------------------------
 // Color math - structs need to compile even though server doesn't render.

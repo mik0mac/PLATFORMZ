@@ -10,7 +10,9 @@
 #include <limits>
 
 #include "elements.h"
-#include "shapes.h"
+#ifndef PLATFORMZ_SERVER
+#include "shapes.h"   // rendering only - excluded from the headless server build
+#endif
 #include "random.h"
 #include "constants.h"
 
@@ -175,9 +177,12 @@ public:
     }
 
     //MARK: Draw
+    // Rendering - excluded from the headless server build (PLATFORMZ_SERVER),
+    // which never calls draw() and has no raylib draw primitives available.
     // Must be called between BeginMode3D(camera)/EndMode3D() in main.cpp -
     // GameSpace itself doesn't own or know about the camera, that's an
     // orchestration concern that belongs at the main.cpp level.
+#ifndef PLATFORMZ_SERVER
     void draw(int localPlayerIndex = -1) {
         DrawWalls(walls);
 
@@ -213,6 +218,7 @@ public:
             DrawSpark(spark);
         }
     }
+#endif // PLATFORMZ_SERVER
 
     //MARK: Accessors
     // Collision detection/response (collisions.h) and other external systems

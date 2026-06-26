@@ -4,7 +4,8 @@
 # No raylib install needed - raylib_server_stub.h provides the math types.
 #
 # Include order matters:
-#   -I ./    server/ first, so raylib_server_stub.h shadows raylib.h
+#   -I ./    server/ first, so the raylib.h/raymath.h/rlgl.h shims here resolve
+#            the game headers' includes (those files don't exist in ../ on Linux)
 #   -I ../   game headers (elements.h, gamespace.h, collisions.h, etc.)
 #
 # BUILD:
@@ -15,15 +16,20 @@ CXX      := g++
 SERVERDIR := $(shell pwd)
 GAMEDIR   := $(shell pwd)/..
 
-# -include injects the stub as the very first line of every compiled file,
-# before any #include in the source. This means when gamespace.h or
-# collisions.h do #include "raylib.h", the RAYLIB_H guard from the stub
-# is already defined and the include is skipped - even though those headers
-# live in ../ and would otherwise resolve "raylib.h" relative to themselves.
+# When gamespace.h / collisions.h do #include "raylib.h" (and raymath.h, rlgl.h),
+# those directives must physically find a file - a predefined include guard does
+# NOT skip the lookup. server/ provides shim headers of those exact names (each
+# forwarding to raylib_server_stub.h), and -I $(SERVERDIR) is searched before
+# $(GAMEDIR), so the includes resolve to the math-only stub.
+#
+# -DPLATFORMZ_SERVER guards out shapes.h (and GameSpace::draw) in gamespace.h, so
+# the headless server never compiles rendering code that calls real raylib.
+# Paths are quoted so a directory containing spaces (e.g. a Dropbox path on a
+# local machine) doesn't break the include flags. On CI the path has no spaces.
 CXXFLAGS  := -std=c++17 -O2 -Wall \
-              -I $(SERVERDIR) \
-              -I $(GAMEDIR) \
-              -include $(SERVERDIR)/raylib_server_stub.h
+              -I "$(SERVERDIR)" \
+              -I "$(GAMEDIR)" \
+              -DPLATFORMZ_SERVER
 
 LDFLAGS   := -lboost_system -lpthread
 
