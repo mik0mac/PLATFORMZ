@@ -159,3 +159,44 @@ inline Color ColorBrightness(Color color, float factor) {
 #ifndef RAYMATH_STANDALONE
 #define RAYMATH_STANDALONE
 #endif
+
+// -------------------------------------------------------------------------
+// Raylib input stubs - needed so input.h's PollLocalInput() compiles on the
+// server even though it is never called. The server drives players via
+// network packets, not local devices; these all return safe zero/false values.
+// -------------------------------------------------------------------------
+enum KeyboardKey {
+    KEY_W = 87, KEY_A = 65, KEY_S = 83, KEY_D = 68,
+    KEY_SPACE = 32, KEY_LEFT_SUPER = 343, KEY_ESCAPE = 256,
+    KEY_LEFT_CONTROL = 341, KEY_LEFT_SHIFT = 340
+};
+enum MouseButton {
+    MOUSE_BUTTON_LEFT = 0, MOUSE_BUTTON_RIGHT = 1, MOUSE_BUTTON_MIDDLE = 2
+};
+
+inline bool    IsKeyDown(int key)              { return false; }
+inline bool    IsKeyPressed(int key)           { return false; }
+inline bool    IsKeyReleased(int key)          { return false; }
+inline bool    IsMouseButtonDown(int btn)      { return false; }
+inline bool    IsMouseButtonPressed(int btn)   { return false; }
+inline bool    IsMouseButtonReleased(int btn)  { return false; }
+inline Vector2 GetMouseDelta()                 { return {0, 0}; }
+inline Vector2 GetMousePosition()              { return {0, 0}; }
+inline float   GetMouseWheelMove()             { return 0.0f; }
+inline float   GetFrameTime()                  { return 1.0f / 60.0f; }
+inline bool    IsCursorHidden()                { return false; }
+inline void    DisableCursor()                 {}
+inline void    EnableCursor()                  {}
+
+// Logging - TraceLog used in some debug paths; map to stderr so it's visible
+// in the Actions log without pulling in raylib's implementation.
+#include <cstdio>
+enum TraceLogLevel { LOG_INFO = 3, LOG_WARNING = 4, LOG_ERROR = 5 };
+inline void TraceLog(int level, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
+#include <cstdarg> // for va_list above

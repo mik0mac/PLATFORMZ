@@ -227,22 +227,22 @@ public:
         ws_.async_accept([self = shared_from_this()](beast::error_code ec) {
             if (ec) { std::cerr << "accept: " << ec.message() << "\n"; return; }
 
-            // Assign player slot
+            // Assign player slot - acquire locks in a consistent order:
+            // always gameMutex before clientMutex to match SimulationLoop.
             int playerId = -1;
             {
-                std::lock_guard<std::mutex> gl(clientMutex);
                 std::lock_guard<std::mutex> gg(gameMutex);
+                std::lock_guard<std::mutex> gc(clientMutex);
                 auto& players = gameSpace.getPlayers();
-                // Find first player slot not already claimed by a connected client
                 std::set<int> claimed;
                 for (auto& [ws, c] : clients) claimed.insert(c.playerId);
                 for (int i = 0; i < (int)players.size(); i++) {
                     if (claimed.find(i) == claimed.end()) { playerId = i; break; }
                 }
                 if (playerId == -1) {
-                    // No free slot - reject
                     std::cout << "Server full, rejecting connection\n";
-                    self->ws_.close(websocket::close_code::try_again_later);
+                    beast::error_code cec;
+                    self->ws_.close(websocket::close_code::try_again_later, cec);
                     return;
                 }
                 ConnectedClient c;

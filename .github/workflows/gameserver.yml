@@ -25,32 +25,32 @@ jobs:
 
       - name: Start server and tunnel
         run: |
-          # Start game server from its directory
+          # Start game server - stdout is unbuffered so log appears immediately
           cd server
           ./gameserver > server.log 2>&1 &
           SERVER_PID=$!
-          echo "Game server started (PID $SERVER_PID)"
-          sleep 2
+          cd ..
 
-          # Verify server is still running
+          # Give it 3 seconds to either start successfully or crash
+          sleep 3
+
+          echo "--- Server startup log ---"
+          cat server/server.log
+          echo "--- End startup log ---"
+
+          # Bail out if server already died
           if ! kill -0 $SERVER_PID 2>/dev/null; then
-            echo "ERROR: server died. Log:"
-            cat server.log
+            echo "ERROR: server died on startup (see log above)"
             exit 1
           fi
 
-          # Download cloudflared into current directory (server/)
-          cd ..
+          # Download and start cloudflared tunnel
           curl -L \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
             -o cloudflared
           chmod +x cloudflared
-          echo "cloudflared downloaded: $(./cloudflared --version)"
-
-          # Open tunnel pointing at server port
           ./cloudflared tunnel --url http://localhost:9000 > tunnel.log 2>&1 &
 
-          # Wait for URL to appear
           echo "Waiting for tunnel URL..."
           for i in $(seq 1 30); do
             URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' tunnel.log | head -1)
@@ -61,10 +61,10 @@ jobs:
               echo "WebSocket:  ${URL/https/wss}"
               echo "============================================"
               echo ""
-              echo "Paste in browser console to test:"
+              echo "Test in browser console:"
               echo "  const ws = new WebSocket('${URL/https/wss}');"
-              echo "  ws.onmessage = e => console.log(e.data);"
-              echo "  ws.onopen = () => ws.send('ping');"
+              echo "  ws.onmessage = e => { const d=JSON.parse(e.data); console.log(d.type, d); };"
+              echo "  ws.onopen = () => setInterval(() => ws.send(JSON.stringify({seq:Date.now(),mx:0,mz:1,jp:false,grav:false,fire:false,yaw:-1.57,pitch:0})), 16);"
               break
             fi
             sleep 1
@@ -75,9 +75,7 @@ jobs:
             cat tunnel.log
           fi
 
-          # Tail server log live so you can see connections in Actions log
           echo "--- Server log (live) ---"
           tail -f server/server.log &
 
-          # Block until server exits (keeps workflow alive up to 6hr limit)
           wait $SERVER_PID
