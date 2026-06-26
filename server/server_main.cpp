@@ -1,31 +1,30 @@
 // server/server_main.cpp
 //
-// Minimal PLATFORMZ connectivity test server.
-// Goal: confirm the full pipeline works (GitHub Actions VM -> build ->
-// Cloudflare tunnel -> browser WebSocket) before any game logic is added.
+// PLATFORMZ test server - step 1: game headers compile on Linux.
 //
-// What this does:
-//   - Listens for WebSocket connections on port 9000
-//   - Responds to a "ping" message with "pong"
-//   - Broadcasts a "heartbeat:<tick>" message to all clients every second
+// Adds over the previous version:
+//   - GameSpace instantiated and generate() called on startup
+//   - Fixed-timestep sim loop: updatePositions + RunCollisionChecks each tick
+//   - Heartbeat now reports live asteroid/player counts from real game state
 //
-// Uses Boost.Beast (WebSockets) + Boost.Asio (async I/O).
-// Boost is pre-installed on ubuntu-latest GitHub Actions runners.
+// raylib_server_stub.h (in this directory) shadows raylib.h/raymath.h/rlgl.h
+// so game headers compile without a graphics library on the Linux VM.
 //
-// BUILD (Linux / GitHub Actions):
-//   g++ server_main.cpp -o gameserver -std=c++17 -lboost_system -lpthread
+// BUILD: make  (from server/ directory)
 //
-// BUILD (mac, local test):
-//   brew install boost
-//   g++ server_main.cpp -o gameserver -std=c++17 \
-//     -I/opt/homebrew/include -L/opt/homebrew/lib -lboost_system -lpthread
-//
-// TEST (browser dev console):
-//   const ws = new WebSocket('ws://localhost:9000');
-//   ws.onmessage = e => console.log('received:', e.data);
+// TEST (browser console after connecting):
+//   const ws = new WebSocket('wss://your-tunnel.trycloudflare.com');
+//   ws.onmessage = e => console.log(e.data);
 //   ws.onopen = () => ws.send('ping');
-//   // expect: received: pong
-//   // then every second: received: heartbeat:1, heartbeat:2, ...
+//   // expect: pong, then every second:
+//   // tick:60 players:1 asteroids:8
+
+// Include stub FIRST - before any game headers.
+// Makefile also sets -I ./ before -I ../ for transitive includes.
+#include "raylib_server_stub.h"
+
+#include "../gamespace.h"
+#include "../collisions.h"
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -38,26 +37,36 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <vector>
 
 namespace beast     = boost::beast;
 namespace websocket = boost::beast::websocket;
 namespace net       = boost::asio;
 using tcp           = boost::asio::ip::tcp;
 
-const unsigned short PORT = 9000;
-
-// All active sessions for broadcast. Protected by mutex.
-std::set<void*> activeSessions;
-std::mutex sessionMutex;
-std::atomic<uint32_t> heartbeatTick{0};
+const unsigned short PORT      = 9000;
+const float          TICK_RATE = 60.0f;
+const float          TICK_DT   = 1.0f / TICK_RATE;
 
 // -------------------------------------------------------------------------
-// Session - owns one WebSocket connection.
+// Shared game state
+// -------------------------------------------------------------------------
+GameSpace     gameSpace;
+CollisionGrid collisionGrid;
+std::mutex    gameMutex;
+std::atomic<uint32_t> serverTick{0};
+
+// Active WebSocket sessions for broadcast
+std::set<void*> activeSessions;
+std::mutex      sessionMutex;
+
+// -------------------------------------------------------------------------
+// Session - one WebSocket connection
 // -------------------------------------------------------------------------
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    explicit Session(tcp::socket socket)
-        : ws_(std::move(socket)) {}
+    explicit Session(tcp::socket socket) : ws_(std::move(socket)) {}
 
     void Start() {
         ws_.async_accept([self = shared_from_this()](beast::error_code ec) {
@@ -72,10 +81,9 @@ public:
         });
     }
 
-    void Send(const std::string& message) {
+    void Send(const std::string& msg) {
         beast::error_code ec;
-        ws_.write(net::buffer(message), ec);
-        // Errors here mean the client disconnected; Read() will clean up.
+        ws_.write(net::buffer(msg), ec);
     }
 
 private:
@@ -86,49 +94,79 @@ private:
         ws_.async_read(buffer_,
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) {
-                    // Disconnected - remove from active set.
                     std::lock_guard<std::mutex> lock(sessionMutex);
                     activeSessions.erase(self.get());
                     std::cout << "Client disconnected. Sessions: "
                               << activeSessions.size() << "\n";
                     return;
                 }
-
                 std::string msg = beast::buffers_to_string(self->buffer_.data());
                 self->buffer_.consume(self->buffer_.size());
                 std::cout << "Received: " << msg << "\n";
-
                 if (msg == "ping") {
-                    beast::error_code writeEc;
-                    self->ws_.write(net::buffer(std::string("pong")), writeEc);
+                    beast::error_code wec;
+                    self->ws_.write(net::buffer(std::string("pong")), wec);
                 }
-
-                self->Read(); // keep reading
+                self->Read();
             });
     }
 };
 
 // -------------------------------------------------------------------------
-// Heartbeat - broadcasts to all sessions every second.
-// Simulates the server's future game-tick broadcast.
+// Broadcast to all sessions
 // -------------------------------------------------------------------------
-void HeartbeatLoop() {
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        uint32_t tick = ++heartbeatTick;
-        std::string msg = "heartbeat:" + std::to_string(tick);
+void Broadcast(const std::string& msg) {
+    std::lock_guard<std::mutex> lock(sessionMutex);
+    for (void* ptr : activeSessions)
+        static_cast<Session*>(ptr)->Send(msg);
+}
 
-        std::lock_guard<std::mutex> lock(sessionMutex);
-        std::cout << "Broadcasting " << msg << " to "
-                  << activeSessions.size() << " clients\n";
-        for (void* ptr : activeSessions) {
-            static_cast<Session*>(ptr)->Send(msg);
+// -------------------------------------------------------------------------
+// Simulation loop - fixed timestep, broadcasts status every second
+// -------------------------------------------------------------------------
+void SimulationLoop() {
+    using Clock    = std::chrono::steady_clock;
+    using Duration = std::chrono::duration<double>;
+
+    auto lastTick   = Clock::now();
+    auto lastReport = Clock::now();
+
+    while (true) {
+        auto now     = Clock::now();
+        auto elapsed = Duration(now - lastTick).count();
+
+        if (elapsed < TICK_DT) {
+            std::this_thread::sleep_for(std::chrono::microseconds(
+                (int)((TICK_DT - elapsed) * 900000)));
+            continue;
+        }
+        lastTick = now;
+
+        {
+            std::lock_guard<std::mutex> lock(gameMutex);
+            gameSpace.updatePositions(TICK_DT);
+            RunCollisionChecks(gameSpace, collisionGrid);
+            gameSpace.updateActiveObjects();
+            serverTick++;
+        }
+
+        // Broadcast status once per second
+        auto reportElapsed = Duration(now - lastReport).count();
+        if (reportElapsed >= 1.0) {
+            lastReport = now;
+            std::lock_guard<std::mutex> lock(gameMutex);
+            std::string status =
+                "tick:"      + std::to_string(serverTick.load()) +
+                " players:"  + std::to_string(gameSpace.getPlayers().size()) +
+                " asteroids:"+ std::to_string(gameSpace.getAsteroids().size());
+            std::cout << status << "\n";
+            Broadcast(status);
         }
     }
 }
 
 // -------------------------------------------------------------------------
-// Listener - accepts TCP connections and spawns a Session per connection.
+// Listener - accepts TCP connections, spawns a Session per connection
 // -------------------------------------------------------------------------
 class Listener : public std::enable_shared_from_this<Listener> {
 public:
@@ -141,13 +179,10 @@ public:
         acceptor_.listen(net::socket_base::max_listen_connections, ec);
         if (ec) std::cerr << "Listener: " << ec.message() << "\n";
     }
-
     void Run() { Accept(); }
-
 private:
     net::io_context& ioc_;
     tcp::acceptor acceptor_;
-
     void Accept() {
         acceptor_.async_accept(
             [self = shared_from_this()](beast::error_code ec, tcp::socket socket) {
@@ -162,8 +197,16 @@ private:
 // main
 // -------------------------------------------------------------------------
 int main() {
-    std::cout << "PLATFORMZ test server | port " << PORT << "\n";
-    std::cout << "Send 'ping' -> receive 'pong'. Heartbeat every 1s.\n";
+    std::cout << "PLATFORMZ server | port " << PORT << "\n";
+
+    {
+        std::lock_guard<std::mutex> lock(gameMutex);
+        gameSpace.generate();
+        std::cout << "GameSpace generated: "
+                  << gameSpace.getAsteroids().size() << " asteroids, "
+                  << gameSpace.getPlatforms().size() << " platforms, "
+                  << gameSpace.getPlayers().size()   << " players\n";
+    }
 
     const int threads = std::max(1u, std::thread::hardware_concurrency());
     net::io_context ioc{threads};
@@ -172,7 +215,7 @@ int main() {
         ioc, tcp::endpoint{net::ip::make_address("0.0.0.0"), PORT});
     listener->Run();
 
-    std::thread(HeartbeatLoop).detach();
+    std::thread(SimulationLoop).detach();
 
     std::vector<std::thread> pool;
     for (int i = 0; i < threads - 1; i++)
