@@ -30,6 +30,10 @@ struct PlayerInput {
 //MARK: Gather
 // Sample the local input devices into a PlayerInput. Swap this out (or feed a
 // deserialized struct instead) to drive a player from the network.
+// This is the only function here that touches raylib input, so it's excluded
+// from the headless server build (PLATFORMZ_SERVER) - the server feeds players
+// deserialized PlayerInput structs through ApplyPlayerInput() instead.
+#ifndef PLATFORMZ_SERVER
 inline PlayerInput PollLocalInput() {
     PlayerInput in;
     in.lookDelta = GetMouseDelta();
@@ -42,6 +46,7 @@ inline PlayerInput PollLocalInput() {
     in.fire         = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     return in;
 }
+#endif // PLATFORMZ_SERVER
 
 //MARK: Apply
 // Apply one player's intent: look, movement/fuel, and firing. `gravity` is

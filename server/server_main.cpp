@@ -28,6 +28,7 @@
 #include <iostream>
 #include <memory>
 #include <map>
+#include <set>
 #include <mutex>
 #include <string>
 #include <thread>
