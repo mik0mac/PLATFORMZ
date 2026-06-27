@@ -36,6 +36,20 @@ int main(int argc, char** argv) {
                           // quit key - quit via the window close button or Cmd+Q.
     DisableCursor(); // captures mouse for free-look, like a standard 3D game
 
+    // MARK: AUDIO
+    // raylib's mixer must be up before any sound loads. The fxTable maps each
+    // AudioFXId (the shared client/server wire id) to a loaded sound; game
+    // events arrive as ids (locally or over the network) and index into it.
+    InitAudioDevice();
+    audioFX fxTable[FX_COUNT] = {
+        audioFX("assets/sounds/rocket_launch.wav",  0.8f), // FX_ROCKET_LAUNCH
+        audioFX("assets/sounds/explosion.wav",      1.0f), // FX_EXPLOSION
+        audioFX("assets/sounds/asteroid_break.wav", 0.9f), // FX_ASTEROID_BREAK
+        audioFX("assets/sounds/player_hit.wav",     0.9f), // FX_PLAYER_HIT
+        audioFX("assets/sounds/player_death.wav",   1.0f), // FX_PLAYER_DEATH
+    };
+    for (audioFX& fx : fxTable) fx.load();
+
     // The 3D scene is rendered into this off-screen target each frame so the
     // finished image can be sampled and distorted on the way to the screen -
     // that's what drives the damage glitch (a draw-on-top overlay can't
@@ -179,11 +193,25 @@ int main(int argc, char** argv) {
                 players[localIndex].pitch = predPitch;
                 localPlayer = &players[localIndex];
 
+                // Predict our OWN rocket-launch sound locally so it's instant
+                // instead of waiting a round-trip. Gated on synced ammo so we
+                // don't play it when the server will reject the shot (no ammo).
+                // The server's echo of this launch (owner == us) is filtered out
+                // in the audio drain below, so it never doubles.
+                if (in.fire && players[localIndex].ammo > 0)
+                    audioQueue.push(fxTable[FX_ROCKET_LAUNCH], localPlayer->position, /*isLocal=*/true);
+
                 // Hit flash: the server owns damage, so trigger the glitch when
                 // our health drops between state packets (flashIntensity() is
                 // always 0 on the client - it never ticks our flashTimer).
                 int hp = players[localIndex].health;
-                if (prevHealth >= 0 && hp < prevHealth) netHurt = 1.0f;
+                if (prevHealth >= 0 && hp < prevHealth) {
+                    netHurt = 1.0f;
+                    // Predict our own hit/death sound instantly (same filtering
+                    // as the launch above keeps the server echo from doubling).
+                    audioQueue.push(fxTable[hp > 0 ? FX_PLAYER_HIT : FX_PLAYER_DEATH],
+                                    localPlayer->position, /*isLocal=*/true);
+                }
                 prevHealth = hp;
             }
             netHurt = fmaxf(0.0f, netHurt - dt / 0.5f); // decay over flash_duration (0.5s)
@@ -229,6 +257,30 @@ int main(int argc, char** argv) {
             localPlayer = &gameSpace.getPlayers()[0];
         }
         
+        // MARK: AUDIO EVENT DRAIN
+        // Turn this frame's networked/local audio events into queued sounds.
+        // Networked: filled by applyMessage() from the packet. Local: filled by
+        // the sim (input/collisions/updateActiveObjects). We skip events we
+        // already predicted locally for ourselves (own launch / hit / death) so
+        // the server's echo of them doesn't double up; everything else (incl.
+        // our own explosions, which we can't predict) plays from the stream.
+        {
+            std::vector<Player>& players = gameSpace.getPlayers();
+            uint32_t myId = (localIndex >= 0 && localIndex < (int)players.size())
+                          ? players[localIndex].id : 0u;
+            for (const NetAudioEvent& ev : gameSpace.getAudioEvents()) {
+                if (ev.fx < 0 || ev.fx >= FX_COUNT) continue;
+                // Only filter in networked mode: that's the only mode that
+                // predicts our own events (the local host produces every event
+                // via the sim and predicts nothing, so it must play them all).
+                bool predicted = networked && ev.owner == myId && myId != 0u &&
+                    (ev.fx == FX_ROCKET_LAUNCH || ev.fx == FX_PLAYER_HIT || ev.fx == FX_PLAYER_DEATH);
+                if (predicted) continue;
+                audioQueue.push(fxTable[ev.fx], ev.pos);
+            }
+            gameSpace.getAudioEvents().clear();
+        }
+
         // MARK: AUDIO QUEUE FLUSH
         // Play all queued sound events after the state updates. Skip while
         // networked-but-not-yet-connected: localPlayer is still null until the
@@ -353,6 +405,8 @@ int main(int argc, char** argv) {
     }
 
     // --- Teardown (runs once, after the loop exits) ---
+    for (audioFX& fx : fxTable) fx.unload();
+    CloseAudioDevice();
     UnloadRenderTexture(sceneTarget);
     UnloadShader(grayscaleShader);
     CloseWindow();

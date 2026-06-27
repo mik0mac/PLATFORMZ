@@ -241,6 +241,22 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     }
     s += "]";
 
+    // Audio events (one-shot sounds: launch/explosion/break/hit/death). Each
+    // carries an owner id so clients can skip echoes of events they already
+    // predicted locally for themselves. Cleared each tick (see SimulationLoop).
+    s += ",\"audio\":[";
+    auto& audio = gameSpace.getAudioEvents();
+    for (int i = 0; i < (int)audio.size(); i++) {
+        if (i > 0) s += ",";
+        s += "{\"fx\":"  + ji(audio[i].fx);
+        s += ",\"own\":" + ju(audio[i].owner);
+        s += ",\"px\":"  + jf(audio[i].pos.x);
+        s += ",\"py\":"  + jf(audio[i].pos.y);
+        s += ",\"pz\":"  + jf(audio[i].pos.z);
+        s += "}";
+    }
+    s += "]";
+
     s += "}";
     return s;
 }
@@ -418,6 +434,11 @@ void SimulationLoop() {
         size_t   asteroidCount = 0;
         {
             std::lock_guard<std::mutex> gg(gameMutex);
+
+            // Drop last tick's audio events (already broadcast). They re-accumulate
+            // below during input apply + collisions, then BroadcastState() reads
+            // and sends them after this lock releases.
+            gameSpace.getAudioEvents().clear();
 
             // Apply each client's latest input to their player slot
             {

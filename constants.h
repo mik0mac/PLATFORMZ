@@ -1,5 +1,17 @@
 #pragma once
 
+//MARK: Audio events (shared client+server wire contract)
+// Small-int ids so the headless server can tag/serialize events without any
+// raylib audio. The client maps each id to a real audioFX via its fxTable.
+enum AudioFXId {
+    FX_ROCKET_LAUNCH = 0,
+    FX_EXPLOSION,
+    FX_ASTEROID_BREAK,
+    FX_PLAYER_HIT,
+    FX_PLAYER_DEATH,
+    FX_COUNT
+};
+
 //MARK: Physics Constants
 const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2

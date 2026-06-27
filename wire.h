@@ -198,5 +198,18 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         }
     }
 
+    // Audio events - one-shot sounds the server emitted this tick. Append (the
+    // caller drains + clears each frame); main.cpp filters echoes of events it
+    // already predicted locally and pushes the rest to the AudioQueue.
+    if (j.contains("audio")) {
+        for (const auto& jo : j["audio"]) {
+            NetAudioEvent ev;
+            ev.fx    = jo.value("fx", 0);
+            ev.owner = jo.value("own", 0u);
+            ev.pos   = vec3(jo, "px", "py", "pz");
+            gs.getAudioEvents().push_back(ev);
+        }
+    }
+
     return msg;
 }

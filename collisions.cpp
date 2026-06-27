@@ -121,6 +121,7 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                     Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
                     explosions.push_back(explosion);
+                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
 
                     hit = true;
                     break;
@@ -154,6 +155,7 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
                 explosions.push_back(explosion);
+                space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
 
                 break; // rocket already detonated this frame
             }
@@ -187,6 +189,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
 
         Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
         explosions.push_back(explosion);
+        space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
     }
 }
 
@@ -229,6 +232,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
 
                     Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
                     explosions.push_back(explosion);
+                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
 
                     hit = true;
                     break;
@@ -256,6 +260,7 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 if (SphereIntersectsSphere(asteroid.position, asteroid.size, player.position, player.radius)) {
                     player.takeDamage(asteroid.damage);
+                    if (player.isAlive) space.emitAudio(FX_PLAYER_HIT, player.position, player.id);
                     asteroid.isDestroyed = true; // asteroid breaks apart on impact with player
                 }
             }
@@ -512,6 +517,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             player.takeDamage(splashDamage);
+            if (player.isAlive) space.emitAudio(FX_PLAYER_HIT, player.position, player.id);
             // check if player has been eliminated.
             if (!player.isAlive) {
                 awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.

@@ -83,6 +83,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
                 rocket.velocity = Vector3Add(rocket.velocity, player.velocity); // inherit player's velocity
             }
             gameSpace.getRockets().push_back(rocket);
+            gameSpace.emitAudio(FX_ROCKET_LAUNCH, rocket.position, player.id);
 
             // kickback (recoil)
             Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));

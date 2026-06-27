@@ -17,6 +17,17 @@
 #include "constants.h"
 
 
+//MARK: NetAudioEvent
+// One queued sound event, source-tagged. `fx` is an AudioFXId; `owner` is the
+// attributed player's id (0 = world/none, safe since player ids start at 1).
+// Filled by the sim (server, or local host), serialized in the state packet,
+// and replayed on the client (which skips events it already predicted locally).
+struct NetAudioEvent {
+    int      fx;
+    Vector3  pos;
+    uint32_t owner;
+};
+
 //MARK: GameSpace
 class GameSpace {
 public:
@@ -162,6 +173,7 @@ public:
         for (const Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) {
                 spawnEliminationBurst(asteroid.position);
+                emitAudio(FX_ASTEROID_BREAK, asteroid.position); // owner 0 = world
             }
         }
 
@@ -171,6 +183,7 @@ public:
         for (Player& player : players) {
             if (!player.isAlive && !player.deathBurstSpawned) {
                 spawnEliminationBurst(player.position);
+                emitAudio(FX_PLAYER_DEATH, player.position, player.id);
                 player.deathBurstSpawned = true;
             }
         }
@@ -251,6 +264,15 @@ public:
     std::vector<Rocket>& getRockets() { return rockets; }
     std::vector<Explosion>& getExplosions() { return explosions; }
     std::vector<Spark>& getSparks() { return sparks; }
+    std::vector<NetAudioEvent>& getAudioEvents() { return audioEvents; }
+
+    // Queue a sound event at the source of some game action. Filled by the sim
+    // (server, or local host); the server serializes these in the state packet
+    // and clears them each tick, the local host drains them straight into the
+    // client's AudioQueue. owner = the attributed player's id (0 = world/none).
+    void emitAudio(int fx, Vector3 at, uint32_t owner = 0) {
+        audioEvents.push_back({fx, at, owner});
+    }
 
 private:
     // Mitchell's best-candidate sampling: returns a point that is well-spread
@@ -292,4 +314,5 @@ private:
     int number_of_explosions = 0; // Explosions will be generated when rockets detonate.
     std::vector<Explosion> explosions;
     std::vector<Spark> sparks; // VFX particles (jetpack exhaust, asteroid bursts); visual only.
+    std::vector<NetAudioEvent> audioEvents; // sound events this tick; serialized + cleared by the server, drained by the client.
 };
