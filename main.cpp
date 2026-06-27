@@ -15,6 +15,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h> // emscripten_run_script_string (read page URL)
+#endif
+
 
 // PLATFORMZ runs in one of two modes:
 //   ./platformz                      -> local single-player (host the sim here)
@@ -22,9 +26,25 @@
 //   ./platformz wss://host/...          server (send input, render its state)
 // The networked path reuses the exact same headers; it just doesn't run the
 // sim locally - the server owns it (see server/server_main.cpp).
+//
+// In the browser there's no command line, so the web build is always a
+// networked client and the server URL comes from the page query string.
 int main(int argc, char** argv) {
+#if defined(__EMSCRIPTEN__)
+    (void)argc; (void)argv;
+    const bool networked = true;
+    // e.g. platformz.html?server=ws://192.168.1.20:9000
+    // Falls back to the page's own host on :9000 if the param is absent.
+    const std::string serverUrl = [] {
+        const char* s = emscripten_run_script_string(
+            "(new URLSearchParams(location.search).get('server')) || "
+            "('ws://' + location.hostname + ':9000')");
+        return std::string(s ? s : "");
+    }();
+#else
     const bool networked = (argc > 1);
     const std::string serverUrl = networked ? argv[1] : std::string();
+#endif
 //MARK: SETUP
     // --- Setup (runs once) ---
     const int screenWidth = 1000;

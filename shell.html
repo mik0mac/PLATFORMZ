@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PLATFORMZ</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; color: #6ff;
+                 font-family: monospace; overflow: hidden; }
+    #status { position: fixed; top: 8px; left: 10px; z-index: 2; }
+    canvas.emscripten { display: block; margin: 0 auto; background: #000;
+                        outline: none; }
+  </style>
+</head>
+<body>
+  <div id="status">loading…</div>
+  <!-- Click the canvas to capture the mouse (pointer lock) and start audio. -->
+  <canvas class="emscripten" id="canvas" tabindex="-1"
+          oncontextmenu="event.preventDefault()"></canvas>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      setStatus: function (t) {
+        var s = document.getElementById('status');
+        if (s) s.textContent = t;
+      },
+      print:    function (t) { console.log(t); },
+      printErr: function (t) { console.error(t); }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
