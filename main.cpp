@@ -7,7 +7,7 @@
 #include "collisions.h"
 #include "camera.h"
 #include "input.h"
-#include "audio.h"     // sound effects
+#include "audio.h"     // sound FX que, load/unload, trigger
 #include "net_client.h" // multiplayer: WebSocket client
 #include "wire.h"       // multiplayer: input serialize / state apply
 
@@ -118,13 +118,49 @@ int main(int argc, char** argv) {
     // slots simply stay unoccupied until another client connects.
     std::vector<BotState> botStates;
 
-    if (networked) {
-        net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
-        TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
-    } else {
-        gameSpace.generate(); // platforms, asteroids, and player slots
-        botStates.resize(gameSpace.getPlayers().size() - 1);
-    }
+    // MARK: SCREEN STATE
+    // The loop runs in one of three screens. TITLE and GAME_OVER are simple
+    // placeholder overlays handled at the top of the loop; PLAYING is the
+    // original game body (update -> draw). Play is gated by TITLE and ends back
+    // there via GAME_OVER, so the world is set up on each PLAYING entry (not
+    // before the loop) and torn down on the way back to the title.
+    enum class GameScreen { TITLE, PLAYING, GAME_OVER };
+    GameScreen screen = GameScreen::TITLE;
+
+    // TITLE -> PLAYING: stand up a fresh run. Local hosts the sim; networked
+    // kicks off the connection (the connecting-screen guard below covers the
+    // wait) and resets the per-session prediction/flash state.
+    auto startGame = [&]() {
+        if (networked) {
+            net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
+            TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
+            myIndex = -1; inputSeq = 0; predInit = false; prevHealth = -1; netHurt = 0.0f;
+        } else {
+            gameSpace.generate(); // platforms, asteroids, and player slots
+            botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
+        }
+        screen = GameScreen::PLAYING;
+    };
+
+    // GAME_OVER -> TITLE: drop the connection (networked) and wipe the world so
+    // the next run starts clean.
+    auto returnToTitle = [&]() {
+        if (networked) net.stop();
+        gameSpace.clear();
+        screen = GameScreen::TITLE;
+    };
+
+    // Centered placeholder text helper (screenWidth is in scope).
+    auto DrawCentered = [&](const char* t, int y, int size, Color c) {
+        DrawText(t, (screenWidth - MeasureText(t, size)) / 2, y, size, c);
+    };
+
+    // "Press any key to start/continue": any key other than Escape (which is
+    // reserved for the cursor toggle), or a left-mouse click.
+    auto startPressed = [&]() {
+        int k = GetKeyPressed();
+        return (k != 0 && k != KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    };
 //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
@@ -133,6 +169,35 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        // MARK: TITLE / GAME OVER SCREENS
+        // Placeholder front/end screens. Each handles its own input + draw and
+        // skips the rest of the loop; PLAYING (below) is the original game body.
+        if (screen == GameScreen::TITLE) {
+            if (startPressed()) startGame();
+            BeginDrawing();
+                ClearBackground(BLACK);
+                DrawCentered("PLATFORMZ", 240, 80, RAYWHITE);
+                DrawCentered("Press any key to start", 360, 20, GRAY);
+            EndDrawing();
+            continue;
+        }
+        if (screen == GameScreen::GAME_OVER) {
+            if (startPressed()) returnToTitle();
+            BeginDrawing();
+                ClearBackground(BLACK);
+                // Greyscale blit of the last rendered world frame (sceneTarget
+                // persists), then the overlay - the dead-world look carries over.
+                BeginShaderMode(grayscaleShader);
+                    DrawTexturePro(sceneTarget.texture,
+                        {0, 0, (float)sceneTarget.texture.width, -(float)sceneTarget.texture.height},
+                        {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
+                EndShaderMode();
+                DrawCentered("GAME OVER", 240, 80, RED);
+                DrawCentered("Press any key to return to title", 360, 20, GRAY);
+            EndDrawing();
+            continue;
+        }
 
         // 2. UPDATE
         // Read input, mutate game state. No drawing happens here. In networked
@@ -403,23 +468,26 @@ int main(int argc, char** argv) {
             if (!player.isAlive) EndShaderMode();
 // MARK: HUD
             // text size, x, y, color.
-            // draw onscreen text HUD.
-            if (!player.isAlive) {
-                // death centered on whole screen, not just the top-left corner like the rest of the HUD
-                DrawText("YOU HAVE BEEN ELIMINATED. BETTER LUCK NEXT TIME!", 56, 700, 300, RED);
-            }
-            else {
+            // draw onscreen text HUD. (Death now transitions to the GAME_OVER
+            // screen below, so the dead frame still renders with its glitch but
+            // doesn't draw the live HUD.)
+            if (player.isAlive) {
                 // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen
                 // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
                 DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
                 DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
                 DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);
                 if (in.earthGravity) {
-                DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
+                    DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
+                }
             }
-        }
-            
+
         EndDrawing();
+
+        // The player just died: this frame already rendered with the death
+        // glitch/greyscale; flip to GAME_OVER so the next frame shows the
+        // end screen over the frozen world.
+        if (!player.isAlive) screen = GameScreen::GAME_OVER;
 
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
     }

@@ -40,6 +40,20 @@ public:
     // Rockets' IDs generated in input.h
 
 
+    // Wipe every object vector without repopulating. Used when returning to the
+    // title screen so a fresh run (local generate() or a networked reconnect)
+    // doesn't inherit stale objects - players in particular are never erased by
+    // the netcode (syncByIdNoErase), so they'd otherwise linger across sessions.
+    void clear() {
+        platforms.clear();
+        asteroids.clear();
+        players.clear();
+        rockets.clear();
+        explosions.clear();
+        sparks.clear();
+        audioEvents.clear();
+    }
+
     void generate() {
         platforms.clear();
         std::vector<Vector3> placed; // already-placed platform centers, fed to best-candidate sampling
