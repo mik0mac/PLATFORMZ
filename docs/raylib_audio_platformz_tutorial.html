@@ -1,0 +1,512 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); }
+
+.toc { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 0.5px solid var(--border); }
+.toc-btn { font-size: 12px; padding: 4px 10px; border-radius: var(--radius); border: 0.5px solid var(--border-strong); background: transparent; color: var(--text-secondary); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.toc-btn:hover, .toc-btn.active { background: var(--surface-1); color: var(--text-primary); border-color: var(--border-stronger); }
+
+.section { display: none; animation: fadeIn 0.2s ease; }
+.section.visible { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+h2 { font-size: 18px; font-weight: 500; color: var(--text-primary); margin-bottom: 0.5rem; }
+h3 { font-size: 15px; font-weight: 500; color: var(--text-primary); margin: 1.5rem 0 0.5rem; }
+p { font-size: 14px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 0.75rem; }
+ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
+li { font-size: 14px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 0.2rem; }
+strong { color: var(--text-primary); font-weight: 500; }
+
+.eyebrow { font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem; }
+
+pre { background: var(--surface-1); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 1rem; overflow-x: auto; margin: 0.75rem 0 1rem; position: relative; }
+code { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); line-height: 1.6; white-space: pre; }
+.copy-btn { position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 0.5px solid var(--border-strong); background: var(--surface-2); color: var(--text-secondary); cursor: pointer; }
+.copy-btn:hover { background: var(--surface-1); color: var(--text-primary); }
+
+.callout { border-left: 2px solid var(--border-accent); background: var(--bg-accent); border-radius: 0 var(--radius) var(--radius) 0; padding: 0.75rem 1rem; margin: 1rem 0; }
+.callout.warn { border-left-color: var(--border-warning); background: var(--bg-warning); }
+.callout.tip { border-left-color: var(--border-success); background: var(--bg-success); }
+.callout p { margin-bottom: 0; }
+
+.api-table { width: 100%; border-collapse: collapse; margin: 0.75rem 0 1rem; font-size: 13px; }
+.api-table th { text-align: left; font-weight: 500; color: var(--text-primary); padding: 6px 10px; border-bottom: 0.5px solid var(--border-strong); }
+.api-table td { padding: 6px 10px; border-bottom: 0.5px solid var(--border); color: var(--text-secondary); vertical-align: top; }
+.api-table td:first-child { font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); white-space: nowrap; }
+.api-table tr:last-child td { border-bottom: none; }
+
+.nav-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2rem; padding-top: 1.5rem; border-top: 0.5px solid var(--border); }
+.nav-btn { font-size: 13px; padding: 6px 14px; border-radius: var(--radius); border: 0.5px solid var(--border-strong); background: transparent; color: var(--text-secondary); cursor: pointer; }
+.nav-btn.primary { background: var(--surface-1); color: var(--text-primary); border-color: var(--border-stronger); }
+.nav-btn:hover { background: var(--surface-1); color: var(--text-primary); }
+
+.badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+.badge.local { background: var(--bg-success); color: var(--text-success); }
+.badge.net { background: var(--bg-warning); color: var(--text-warning); }
+.badge.both { background: var(--bg-accent); color: var(--text-accent); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0.75rem 0 1rem; }
+.card { background: var(--surface-1); border: 0.5px solid var(--border); border-radius: 12px; padding: 1rem; }
+.card-title { font-size: 13px; font-weight: 500; color: var(--text-primary); margin-bottom: 0.4rem; }
+.card-body { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+
+@media (max-width: 480px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+
+<div style="padding: 1.5rem 0">
+<div class="eyebrow">PLATFORMZ dev guide</div>
+<h2>Audio in raylib</h2>
+<p style="margin-bottom: 1.5rem">A practical guide to raylib's audio API tied to PLATFORMZ, including network-safe considerations for multiplayer.</p>
+
+<div class="toc" id="toc"></div>
+
+<div id="sections-container"></div>
+</div>
+
+<script>
+const sections = [
+  {
+    id: "init",
+    label: "Initialization",
+    content: `
+<h3>InitAudioDevice and device lifecycle</h3>
+<p>raylib wraps miniaudio under the hood. <strong>InitAudioDevice()</strong> must be called once before any audio functions, and always on the main thread. In PLATFORMZ the client calls it during setup; the headless server stub skips it entirely.</p>
+
+<pre><code class="language-cpp">// client main.cpp — call before the game loop
+InitAudioDevice();
+
+// check it worked before loading assets
+if (!IsAudioDeviceReady()) {
+    TraceLog(LOG_WARNING, "Audio device unavailable — running silent");
+}
+
+// ... game loop ...
+
+CloseAudioDevice(); // call on clean exit</code></pre>
+
+<div class="callout">
+  <p><strong>Server builds:</strong> <code>raylib_server_stub.h</code> already no-ops most rendering calls. Add matching no-ops for <code>InitAudioDevice</code>, <code>CloseAudioDevice</code>, and every audio function you use so the server compiles clean without touching your client audio code.</p>
+</div>
+
+<h3>SetMasterVolume</h3>
+<p>Sets global volume for all sounds and music. Range 0.0–1.0. Good place to wire a settings slider.</p>
+<pre><code class="language-cpp">SetMasterVolume(0.8f); // 80% global volume</code></pre>
+`
+  },
+  {
+    id: "sounds",
+    label: "Sound (short SFX)",
+    content: `
+<h3>Loading and playing one-shot sounds</h3>
+<p>Use <strong>Sound</strong> for short, frequently-triggered effects: jumps, landings, collisions. raylib loads the entire file into memory — ideal for anything under ~5 seconds.</p>
+
+<pre><code class="language-cpp">Sound jumpSfx = LoadSound("assets/jump.wav");
+Sound landSfx = LoadSound("assets/land.wav");
+Sound deathSfx = LoadSound("assets/death.wav");
+
+// Inside the game loop, triggered by game events:
+if (playerJumped) PlaySound(jumpSfx);
+if (playerLanded) PlaySound(landSfx);
+
+// On shutdown:
+UnloadSound(jumpSfx);
+UnloadSound(landSfx);
+UnloadSound(deathSfx);</code></pre>
+
+<h3>Pitch and volume per-play</h3>
+<p>You can set pitch and volume before playing to add variety without multiple files.</p>
+<pre><code class="language-cpp">// Slightly randomize jump pitch so repeated jumps feel less robotic
+SetSoundPitch(jumpSfx, 0.9f + (float)(GetRandomValue(0, 20)) / 100.f);
+PlaySound(jumpSfx);</code></pre>
+
+<h3>Simultaneous instances — PlaySoundMulti</h3>
+<p><strong>PlaySound</strong> restarts from the beginning if the sound is already playing. For events that can fire rapidly (multiple players jumping), use <strong>PlaySoundMulti</strong> instead — it uses an internal pool of 16 concurrent instances.</p>
+<pre><code class="language-cpp">// Multiple remote players can all trigger this in the same frame
+PlaySoundMulti(jumpSfx);
+
+// Check pool usage during development
+int active = GetSoundsPlaying();
+
+// Clear the pool on scene changes
+StopSoundMulti();</code></pre>
+
+<div class="callout tip">
+  <p><strong>PLATFORMZ tip:</strong> Use <code>PlaySoundMulti</code> for any SFX tied to remote player events. Local player events can use <code>PlaySound</code> directly since you control when they fire.</p>
+</div>
+
+<h3>Key Sound API</h3>
+<table class="api-table">
+  <tr><th>Function</th><th>Notes</th></tr>
+  <tr><td>LoadSound(path)</td><td>Loads wav/ogg/mp3/flac into memory</td></tr>
+  <tr><td>UnloadSound(sound)</td><td>Free memory on shutdown or scene change</td></tr>
+  <tr><td>PlaySound(sound)</td><td>Restarts if already playing</td></tr>
+  <tr><td>PlaySoundMulti(sound)</td><td>Concurrent pool — preferred for networked SFX</td></tr>
+  <tr><td>StopSound(sound)</td><td>Immediate stop</td></tr>
+  <tr><td>IsSoundPlaying(sound)</td><td>Useful for gating re-triggers</td></tr>
+  <tr><td>SetSoundVolume(sound, v)</td><td>0.0–1.0</td></tr>
+  <tr><td>SetSoundPitch(sound, p)</td><td>1.0 = normal, 0.5 = half speed, 2.0 = double</td></tr>
+  <tr><td>SetSoundPan(sound, pan)</td><td>0.0 = left, 0.5 = center, 1.0 = right</td></tr>
+</table>
+`
+  },
+  {
+    id: "music",
+    label: "Music (streaming)",
+    content: `
+<h3>Music streams for background audio</h3>
+<p>Use <strong>Music</strong> for anything long — background tracks, ambient loops. raylib streams from disk in chunks rather than loading the whole file, keeping memory usage low.</p>
+
+<pre><code class="language-cpp">Music bgTrack = LoadMusicStream("assets/music/stage1_loop.ogg");
+bgTrack.looping = true;     // default is already true
+
+PlayMusicStream(bgTrack);
+
+// In the game loop — REQUIRED every frame or audio will stutter:
+UpdateMusicStream(bgTrack);
+
+// Pause / resume:
+PauseMusicStream(bgTrack);
+ResumeMusicStream(bgTrack);
+
+// Cross-fade by fading out old, starting new:
+SetMusicVolume(bgTrack, currentFade);
+
+// On shutdown:
+UnloadMusicStream(bgTrack);</code></pre>
+
+<div class="callout warn">
+  <p><strong>UpdateMusicStream must be called every frame.</strong> Skip it and the audio buffer starves — you'll hear stuttering or silence. This is the single most common raylib audio bug.</p>
+</div>
+
+<h3>Track position and seeking</h3>
+<pre><code class="language-cpp">float positionSec = GetMusicTimePlayed(bgTrack);
+float totalSec    = GetMusicTimeLength(bgTrack);
+
+// Seek to 30 seconds in:
+SeekMusicStream(bgTrack, 30.0f);</code></pre>
+
+<h3>Key Music API</h3>
+<table class="api-table">
+  <tr><th>Function</th><th>Notes</th></tr>
+  <tr><td>LoadMusicStream(path)</td><td>Streams from disk; supports ogg, mp3, flac, wav, xm, mod</td></tr>
+  <tr><td>UnloadMusicStream(music)</td><td>Free resources on exit</td></tr>
+  <tr><td>PlayMusicStream(music)</td><td>Start from beginning</td></tr>
+  <tr><td>UpdateMusicStream(music)</td><td><strong>Call every frame</strong> — buffers the stream</td></tr>
+  <tr><td>PauseMusicStream / Resume</td><td>Freeze and continue the buffer</td></tr>
+  <tr><td>SeekMusicStream(music, t)</td><td>Jump to time in seconds</td></tr>
+  <tr><td>GetMusicTimePlayed(music)</td><td>Elapsed seconds</td></tr>
+  <tr><td>GetMusicTimeLength(music)</td><td>Total duration in seconds</td></tr>
+  <tr><td>SetMusicVolume / Pitch / Pan</td><td>Same range as Sound equivalents</td></tr>
+</table>
+`
+  },
+  {
+    id: "platformz",
+    label: "In PLATFORMZ",
+    content: `
+<h3>Suggested audio event map for PLATFORMZ</h3>
+<p>Map game state changes to audio calls. The server never plays audio — all calls live in client-side code paths, gated by whether the entity is local or remote.</p>
+
+<pre><code class="language-cpp">// In your client update loop, after applying server state:
+
+for (auto& [id, player] : players) {
+    bool isLocal = (id == localPlayerId);
+    auto& prev = prevPlayerState[id];
+
+    // Jump — all players audible, use multi for overlap safety
+    if (player.jumping && !prev.jumping)
+        PlaySoundMulti(jumpSfx);
+
+    // Land — pitch slightly lower for heavier feel
+    if (player.onGround && !prev.onGround) {
+        SetSoundPitch(landSfx, 0.85f + (float)GetRandomValue(0,15)/100.f);
+        PlaySoundMulti(landSfx);
+    }
+
+    // Death — only local player gets the full sting
+    if (player.dead && !prev.dead) {
+        if (isLocal) {
+            StopMusicStream(bgTrack);
+            PlaySound(deathSfx);
+        }
+    }
+}
+
+// Background music — only on client, not server
+UpdateMusicStream(bgTrack);</code></pre>
+
+<h3>Spatial audio approximation</h3>
+<p>raylib's pan control gives you cheap left/right positioning for other players. Map their X position relative to the local player to a 0.0–1.0 pan value.</p>
+
+<pre><code class="language-cpp">float PanForPlayer(Vector3 listenerPos, Vector3 sourcePos, float range) {
+    float dx = sourcePos.x - listenerPos.x;
+    float t  = Clamp(dx / range, -1.0f, 1.0f); // -1 to 1
+    return (t + 1.0f) * 0.5f;                  // 0.0 to 1.0
+}
+
+// Usage:
+float pan = PanForPlayer(localPlayer.pos, remotePlayer.pos, 20.0f);
+SetSoundPan(footstepSfx, pan);
+PlaySoundMulti(footstepSfx);</code></pre>
+
+<div class="callout tip">
+  <p><strong>Note:</strong> raylib doesn't have 3D positional audio built in. <code>SetSoundPan</code> + volume falloff gets you most of the way there without a full HRTF library. Add volume attenuation based on distance for a more complete effect.</p>
+</div>
+
+<h3>Volume attenuation by distance</h3>
+<pre><code class="language-cpp">float VolumeForDistance(float dist, float maxRange) {
+    return Clamp(1.0f - (dist / maxRange), 0.0f, 1.0f);
+}
+
+float dist = Vector3Distance(localPlayer.pos, remotePlayer.pos);
+SetSoundVolume(footstepSfx, VolumeForDistance(dist, 25.0f));
+SetSoundPan(footstepSfx, PanForPlayer(localPlayer.pos, remotePlayer.pos, 20.0f));
+PlaySoundMulti(footstepSfx);</code></pre>
+`
+  },
+  {
+    id: "network",
+    label: "Local vs Networked",
+    content: `
+<h3>The core principle</h3>
+<p>Audio is always client-side. The server handles authoritative state; clients decide what sounds to play based on that state. Never send audio commands over the network — send <em>game events</em> and let each client react independently.</p>
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-title">Local gameplay <span class="badge local">LAN / offline</span></div>
+    <div class="card-body">Direct state reads. Zero latency between event and sound. You know the exact frame a jump happened. Audio fires immediately with no ambiguity.</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Networked gameplay <span class="badge net">WebSocket</span></div>
+    <div class="card-body">Events arrive from the server after RTT delay. Audio must be triggered from received state diffs, not predicted local state, or sounds will double-fire on correction.</div>
+  </div>
+</div>
+
+<h3>The double-fire problem</h3>
+<p>Client-side prediction means you apply inputs locally before server confirmation. If you play a sound on both the local prediction <em>and</em> the server confirmation, the sound fires twice. Solution: track what you've already played.</p>
+
+<pre><code class="language-cpp">// Per-player audio state (client-side only)
+struct PlayerAudioState {
+    bool wasJumping = false;
+    bool wasOnGround = false;
+    bool wasDead = false;
+    uint32_t lastFootstepTick = 0;
+};
+
+std::unordered_map<uint32_t, PlayerAudioState> audioState;
+
+// In the server state reconciliation callback:
+void OnStateReceived(const GameState& newState) {
+    for (auto& [id, player] : newState.players) {
+        auto& a = audioState[id];
+        bool isLocal = (id == localPlayerId);
+
+        // Only fire on transitions from server-confirmed state
+        if (player.jumping && !a.wasJumping)
+            PlaySoundMulti(jumpSfx);
+
+        if (player.onGround && !a.wasOnGround) {
+            SetSoundPitch(landSfx, 0.9f);
+            PlaySoundMulti(landSfx);
+        }
+
+        a.wasJumping  = player.jumping;
+        a.wasOnGround = player.onGround;
+        a.wasDead     = player.dead;
+    }
+}</code></pre>
+
+<h3>Latency and perceived timing</h3>
+<p>On a LAN (your eero setup, Mac 1 wired via en5), RTT between the two machines is typically 1–3ms. Sound triggered from confirmed server state will feel instantaneous. Over WAN connections, you'll notice 50–200ms delay between the visual event and the sound — at that point you want sound tied to the <em>local prediction</em>, not server confirmation, and just avoid the double-fire by flagging it.</p>
+
+<pre><code class="language-cpp">// Hybrid approach: play sound on local prediction,
+// suppress on server confirmation if already played within N ms
+struct AudioEvent {
+    uint32_t playerId;
+    std::string type;
+    uint64_t localTimestamp; // ms since epoch
+};
+
+std::vector<AudioEvent> recentLocalEvents;
+
+bool AlreadyPlayedLocally(uint32_t id, const std::string& type, uint64_t windowMs) {
+    uint64_t now = GetTimeMs();
+    for (auto& e : recentLocalEvents)
+        if (e.playerId == id && e.type == type && (now - e.localTimestamp) < windowMs)
+            return true;
+    return false;
+}
+
+// In server reconciliation:
+if (player.jumping && !a.wasJumping) {
+    if (!AlreadyPlayedLocally(id, "jump", 200)) // 200ms window
+        PlaySoundMulti(jumpSfx);
+}</code></pre>
+
+<h3>What to never send over the network</h3>
+<table class="api-table">
+  <tr><th>Never send</th><th>Send instead</th></tr>
+  <tr><td>Audio file paths or IDs</td><td>Game event type (JUMP, LAND, DEATH)</td></tr>
+  <tr><td>PlaySound commands</td><td>Player state changes (jumping: true)</td></tr>
+  <tr><td>Volume levels</td><td>Player position (client computes attenuation)</td></tr>
+  <tr><td>Music cue triggers</td><td>Game phase (IN_ROUND, GAME_OVER)</td></tr>
+</table>
+
+<div class="callout">
+  <p><strong>Music sync:</strong> Background music doesn't need to be sample-accurate across clients. Start it on game start and let each client drift independently. If you want rough sync, broadcast the round start timestamp and use <code>SeekMusicStream</code> to align on join.</p>
+</div>
+
+<h3>Server stub additions</h3>
+<p>Add these to <code>raylib_server_stub.h</code> so the Linux headless build compiles without the audio device:</p>
+<pre><code class="language-cpp">#ifdef PLATFORMZ_SERVER_BUILD
+#define InitAudioDevice()          do {} while(0)
+#define CloseAudioDevice()         do {} while(0)
+#define IsAudioDeviceReady()       false
+#define SetMasterVolume(v)         do {} while(0)
+#define LoadSound(p)               Sound{}
+#define UnloadSound(s)             do {} while(0)
+#define PlaySound(s)               do {} while(0)
+#define PlaySoundMulti(s)          do {} while(0)
+#define StopSoundMulti()           do {} while(0)
+#define LoadMusicStream(p)         Music{}
+#define UnloadMusicStream(m)       do {} while(0)
+#define PlayMusicStream(m)         do {} while(0)
+#define UpdateMusicStream(m)       do {} while(0)
+#define SetSoundVolume(s,v)        do {} while(0)
+#define SetSoundPitch(s,p)         do {} while(0)
+#define SetSoundPan(s,p)           do {} while(0)
+#define GetSoundsPlaying()         0
+#endif</code></pre>
+`
+  },
+  {
+    id: "formats",
+    label: "Formats & tips",
+    content: `
+<h3>Supported file formats</h3>
+<table class="api-table">
+  <tr><th>Format</th><th>Sound</th><th>Music stream</th><th>Notes</th></tr>
+  <tr><td>.wav</td><td>Yes</td><td>Yes</td><td>Best for short SFX — no decode overhead</td></tr>
+  <tr><td>.ogg</td><td>Yes</td><td>Yes</td><td>Good compression, widely supported — recommended for music</td></tr>
+  <tr><td>.mp3</td><td>Yes</td><td>Yes</td><td>Higher decode cost, minor latency on first play</td></tr>
+  <tr><td>.flac</td><td>Yes</td><td>Yes</td><td>Lossless; large files — rarely worth it in games</td></tr>
+  <tr><td>.xm / .mod</td><td>No</td><td>Yes</td><td>Tracker modules — tiny files, great for retro aesthetic</td></tr>
+</table>
+
+<h3>Practical recommendations for PLATFORMZ</h3>
+<ul>
+  <li>SFX (jump, land, death, pickup): <strong>16-bit WAV at 44.1kHz</strong> — zero decode latency, files stay small for short clips</li>
+  <li>Background music: <strong>Ogg Vorbis at ~128kbps</strong> — good quality, low memory via streaming</li>
+  <li>Keep SFX under 2 seconds or the Sound pool gets bloated; anything longer is a Music stream</li>
+  <li>Normalize SFX to around -6 dBFS headroom so <code>SetMasterVolume</code> and per-sound volume have clean room to work</li>
+</ul>
+
+<h3>Asset loading strategy</h3>
+<pre><code class="language-cpp">// Load all SFX upfront at game init to avoid mid-game hitching
+struct AudioAssets {
+    Sound jump;
+    Sound land;
+    Sound death;
+    Sound pickup;
+    Music bgLoop;
+
+    void Load() {
+        jump   = LoadSound("assets/sfx/jump.wav");
+        land   = LoadSound("assets/sfx/land.wav");
+        death  = LoadSound("assets/sfx/death.wav");
+        pickup = LoadSound("assets/sfx/pickup.wav");
+        bgLoop = LoadMusicStream("assets/music/main_loop.ogg");
+        bgLoop.looping = true;
+    }
+
+    void Unload() {
+        UnloadSound(jump);
+        UnloadSound(land);
+        UnloadSound(death);
+        UnloadSound(pickup);
+        UnloadMusicStream(bgLoop);
+    }
+};
+
+AudioAssets audio;
+audio.Load(); // before main loop
+// ...
+audio.Unload(); // after CloseWindow</code></pre>
+
+<div class="callout tip">
+  <p><strong>Development tip:</strong> Wrap <code>TraceLog(LOG_INFO, "Playing: jump")</code> next to each <code>PlaySound</code> call during development — it makes audio event timing visible in the raylib console alongside your existing networking traces.</p>
+</div>
+
+<h3>Common pitfalls</h3>
+<ul>
+  <li><strong>Forgetting UpdateMusicStream</strong> — the single most common raylib audio bug</li>
+  <li><strong>PlaySound on a null Sound{}</strong> after the server stub returns an empty struct — add an <code>IsAudioDeviceReady()</code> guard</li>
+  <li><strong>Loading sounds every frame</strong> — always load at startup, never inside the loop</li>
+  <li><strong>Not unloading</strong> — memory leak on repeated scene transitions; pair every Load with an Unload</li>
+  <li><strong>PlaySound for multi-player events</strong> — use PlaySoundMulti to prevent truncation when two players jump the same frame</li>
+</ul>
+`
+  }
+];
+
+const toc = document.getElementById("toc");
+const container = document.getElementById("sections-container");
+let current = 0;
+
+function showSection(idx) {
+  document.querySelectorAll(".section").forEach(s => s.classList.remove("visible"));
+  document.querySelectorAll(".toc-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("sec-" + idx).classList.add("visible");
+  document.getElementById("btn-" + idx).classList.add("active");
+  current = idx;
+}
+
+sections.forEach((sec, i) => {
+  const btn = document.createElement("button");
+  btn.className = "toc-btn";
+  btn.id = "btn-" + i;
+  btn.textContent = sec.label;
+  btn.onclick = () => showSection(i);
+  toc.appendChild(btn);
+
+  const div = document.createElement("div");
+  div.className = "section";
+  div.id = "sec-" + i;
+  div.innerHTML = sec.content;
+
+  const nav = document.createElement("div");
+  nav.className = "nav-row";
+  if (i > 0) {
+    const prev = document.createElement("button");
+    prev.className = "nav-btn";
+    prev.textContent = "← " + sections[i-1].label;
+    prev.onclick = () => showSection(i-1);
+    nav.appendChild(prev);
+  }
+  if (i < sections.length - 1) {
+    const next = document.createElement("button");
+    next.className = "nav-btn primary";
+    next.textContent = sections[i+1].label + " →";
+    next.onclick = () => showSection(i+1);
+    nav.appendChild(next);
+  }
+  div.appendChild(nav);
+
+  div.querySelectorAll("pre").forEach(pre => {
+    const btn = document.createElement("button");
+    btn.className = "copy-btn";
+    btn.textContent = "Copy";
+    btn.onclick = () => {
+      navigator.clipboard.writeText(pre.querySelector("code").textContent.trim());
+      btn.textContent = "Copied";
+      setTimeout(() => btn.textContent = "Copy", 1500);
+    };
+    pre.appendChild(btn);
+  });
+
+  container.appendChild(div);
+});
+
+showSection(0);
+</script>

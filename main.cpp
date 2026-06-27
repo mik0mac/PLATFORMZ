@@ -7,6 +7,7 @@
 #include "collisions.h"
 #include "camera.h"
 #include "input.h"
+#include "audio.h"     // sound effects
 #include "net_client.h" // multiplayer: WebSocket client
 #include "wire.h"       // multiplayer: input serialize / state apply
 

@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "Mac",
+            "includePath": [
+                "${workspaceFolder}",
+                "${workspaceFolder}/third_party/IXWebSocket",
+                "/opt/homebrew/include"
+            ],
+            "defines": [
+                "IXWEBSOCKET_USE_TLS",
+                "IXWEBSOCKET_USE_SECURE_TRANSPORT"
+            ],
+            "macFrameworkPath": [
+                "/System/Library/Frameworks",
+                "/Library/Frameworks"
+            ],
+            "compilerPath": "/usr/bin/g++",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "macos-clang-arm64"
+        }
+    ],
+    "version": 4
+}
