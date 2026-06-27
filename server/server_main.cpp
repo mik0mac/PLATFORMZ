@@ -70,6 +70,11 @@ struct ConnectedClient {
     uint32_t lastSeq    = 0;    // sequence number of last processed input
     PlayerInput lastInput{};    // most recent input received; applied each tick
     bool hasInput       = false;// true once first packet arrives
+    // Fire is a one-frame edge from the client (IsMouseButtonPressed). Latch it
+    // here when any packet reports fire=true, so the trailing fire=false packet
+    // can't overwrite the press before the sim tick consumes it. Consumed (and
+    // cleared) once per shot in SimulationLoop.
+    bool firePending    = false;
 };
 
 // -------------------------------------------------------------------------
@@ -125,11 +130,34 @@ static PlayerInput parseInput(const std::string& json) {
     return in;
 }
 
+// Static-world snapshot - sent once in the welcome packet (platforms never move
+// or change after generate(), so there's no reason to put them in every tick).
+static std::string buildPlatformsArray() {
+    std::string s = "[";
+    auto& platforms = gameSpace.getPlatforms();
+    for (int i = 0; i < (int)platforms.size(); i++) {
+        const Platform& p = platforms[i];
+        if (i > 0) s += ",";
+        s += "{\"px\":" + jf(p.position.x);
+        s += ",\"py\":" + jf(p.position.y);
+        s += ",\"pz\":" + jf(p.position.z);
+        s += ",\"sx\":" + jf(p.size.x);
+        s += ",\"sy\":" + jf(p.size.y);
+        s += ",\"sz\":" + jf(p.size.z);
+        s += "}";
+    }
+    s += "]";
+    return s;
+}
+
 // -------------------------------------------------------------------------
 // State serialization - build the JSON state packet sent to all clients.
 // Each client gets the same world state but with their own lastSeq injected.
+// `connectedSlots` are the player indices currently occupied by a client; each
+// player carries an "active" flag so clients can skip rendering empty slots.
 // -------------------------------------------------------------------------
-static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq) {
+static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
+                                    const std::set<int>& connectedSlots) {
     std::string s;
     s.reserve(1024);
     s += "{\"type\":\"state\"";
@@ -155,6 +183,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq) {
         s += ",\"fuel\":"   + jf(p.fuel);
         s += ",\"ammo\":"   + ji(p.ammo);
         s += ",\"alive\":"  + jb(p.isAlive);
+        s += ",\"active\":" + jb(connectedSlots.count(i) > 0); // slot occupied?
         s += "}";
     }
     s += "]";
@@ -252,10 +281,13 @@ public:
                           << ". Active: " << clients.size() << "\n";
             }
 
-            // Send welcome packet with assigned playerId
+            // Send welcome with the assigned slot + the static platform layout
+            // (platforms never change after generate(), so this is the only time
+            // we send them - the client renders from it instead of generate()).
             std::string welcome = "{\"type\":\"welcome\",\"playerId\":"
                 + std::to_string(playerId) + ",\"tick\":"
-                + std::to_string(serverTick.load()) + "}";
+                + std::to_string(serverTick.load())
+                + ",\"platforms\":" + buildPlatformsArray() + "}";
             beast::error_code wec;
             self->ws_.write(net::buffer(welcome), wec);
 
@@ -301,7 +333,12 @@ private:
                         uint32_t seq = parseUInt(msg, "seq", 0);
                         // Discard out-of-order packets
                         if (seq > it->second.lastSeq || !it->second.hasInput) {
-                            it->second.lastInput = parseInput(msg);
+                            PlayerInput parsed = parseInput(msg);
+                            // Latch fire: a press only appears in one packet, and
+                            // the next (fire=false) packet would otherwise overwrite
+                            // it before the tick reads it. Sticky until consumed.
+                            if (parsed.fire) it->second.firePending = true;
+                            it->second.lastInput = parsed;
                             it->second.lastSeq = seq;
                             it->second.hasInput = true;
                         }
@@ -327,8 +364,12 @@ private:
 // -------------------------------------------------------------------------
 void BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
+    // Which player slots are occupied, so clients can hide empty ones.
+    std::set<int> connectedSlots;
+    for (auto& [ws, client] : clients) connectedSlots.insert(client.playerId);
+
     for (auto& [ws, client] : clients) {
-        std::string packet = buildStatePacket(tick, client.lastSeq);
+        std::string packet = buildStatePacket(tick, client.lastSeq, connectedSlots);
         static_cast<Session*>(ws)->Send(packet);
     }
 }
@@ -340,11 +381,15 @@ void BroadcastState(uint32_t tick) {
 // -------------------------------------------------------------------------
 static void ApplyInputToPlayer(Player& player, const PlayerInput& in,
                                float dt, float gravity) {
-    // Network sends absolute yaw/pitch; convert to delta for updateLook()
-    // by computing the difference from current values.
+    // Network sends absolute yaw/pitch; convert to the delta updateLook() wants.
+    // updateLook adds the delta on yaw but SUBTRACTS it on pitch, so the two
+    // axes need opposite-signed numerators to both land on the absolute target
+    // (yaw += d -> d = target - yaw; pitch -= d -> d = pitch - target). Using
+    // target - pitch for both made pitch an unstable x2/tick recurrence that
+    // pinned it to the +89 clamp - which is why rockets always fired straight up.
     Vector2 lookDelta{
         (in.lookDelta.x - player.yaw)   / player.lookSensitivity,
-        (in.lookDelta.y - player.pitch)  / player.lookSensitivity
+        (player.pitch - in.lookDelta.y) / player.lookSensitivity
     };
     PlayerInput adjusted = in;
     adjusted.lookDelta = lookDelta;
@@ -383,7 +428,13 @@ void SimulationLoop() {
                     if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
                     Player& player = players[client.playerId];
                     float gravity = client.lastInput.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
-                    ApplyInputToPlayer(player, client.lastInput, TICK_DT, gravity);
+                    // Consume the latched fire edge exactly once (shoot() still
+                    // gates on ammo/cooldown), then clear it so a held button
+                    // doesn't re-fire every tick from a stale lastInput.fire.
+                    PlayerInput input = client.lastInput;
+                    input.fire = client.firePending;
+                    client.firePending = false;
+                    ApplyInputToPlayer(player, input, TICK_DT, gravity);
                 }
             }
 

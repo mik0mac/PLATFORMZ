@@ -283,6 +283,11 @@ public:
     int maxHealth = PLAYER_MAX_HEALTH; // Player's maximum health, can be increased by pickups
     bool isAlive = true; // Player is alive if health > 0.
     bool deathBurstSpawned = false; // VFX guard: the one-time elimination spark burst fires once (players aren't erased).
+    // Multiplayer: is this slot occupied by a connected client? Defaults true so
+    // local single-player and test bots always render; the server sets it per
+    // slot in the broadcast (see buildStatePacket), and the client skips drawing
+    // unoccupied slots (gamespace.h draw()). Not used by the local sim.
+    bool isConnected = true;
     int ammo = PLAYER_STARTING_AMMO;
     int maxAmmo = PLAYER_MAX_AMMO; // Player's maximum ammo, can be increased by pickups
     float fireRate = PLAYER_FIRE_RATE; // Shots per second, can be increased by pickups

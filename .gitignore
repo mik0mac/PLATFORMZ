@@ -1,2 +1,5 @@
 WireframeTests
 platformz
+build/
+net_smoke
+server/gameserver

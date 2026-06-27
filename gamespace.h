@@ -195,6 +195,9 @@ public:
         // passes its index to skip it; other players (e.g. test bots, or
         // remote players in multiplayer) are drawn normally.
         for (int i = 0; i < (int)players.size(); ++i) {
+            // Multiplayer: skip unoccupied slots entirely (no body, no reticle).
+            // Always true in local mode, so bots and the local human still draw.
+            if (!players[i].isConnected) continue;
             if (i == localPlayerIndex) {
                 // First-person: own body is skipped, but the reticle still draws
                 // as the player's crosshair, floating out along their aim.

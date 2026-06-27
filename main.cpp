@@ -7,9 +7,21 @@
 #include "collisions.h"
 #include "camera.h"
 #include "input.h"
+#include "net_client.h" // multiplayer: WebSocket client
+#include "wire.h"       // multiplayer: input serialize / state apply
+
+#include <string>
 
 
-int main() {
+// PLATFORMZ runs in one of two modes:
+//   ./platformz                      -> local single-player (host the sim here)
+//   ./platformz ws://host:9000       -> networked client of an authoritative
+//   ./platformz wss://host/...          server (send input, render its state)
+// The networked path reuses the exact same headers; it just doesn't run the
+// sim locally - the server owns it (see server/server_main.cpp).
+int main(int argc, char** argv) {
+    const bool networked = (argc > 1);
+    const std::string serverUrl = networked ? argv[1] : std::string();
 //MARK: SETUP
     // --- Setup (runs once) ---
     const int screenWidth = 1000;
@@ -17,6 +29,8 @@ int main() {
     const int textHeight = 20;
     InitWindow(screenWidth, screenHeight, "PLATFORMZ");
     SetTargetFPS(60);
+    SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
+                          // quit key - quit via the window close button or Cmd+Q.
     DisableCursor(); // captures mouse for free-look, like a standard 3D game
 
     // The 3D scene is rendered into this off-screen target each frame so the
@@ -46,17 +60,35 @@ int main() {
 
     // Game state lives here, declared once, mutated every frame
     GameSpace gameSpace; // The main game space containing platforms, asteroids, and players
-    gameSpace.generate(); // Generate the game space with platforms, asteroids, and players
 
-    CollisionGrid collisionGrid; // Spatial grid, rebuilt each frame in RunCollisionChecks
+    CollisionGrid collisionGrid; // Spatial grid, rebuilt each frame in RunCollisionChecks (local mode only)
 
-    // One wander-bot per non-local player (players[1..]). Index 0 is the local
-    // human. The players vector isn't resized during the loop, so these stay
-    // 1:1 with players[i+1]. Empty when there's only one player (bots disabled).
-    std::vector<BotState> botStates(gameSpace.getPlayers().size() - 1);
+    // --- Networking (networked mode only) ---
+    NetClient net;
+    int       myIndex   = -1;     // our player slot, from the server's welcome packet
+    uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
+    float     predYaw   = 0.0f;   // locally-predicted look (mouse drives this every
+    float     predPitch = 0.0f;   // frame so aiming is instant, not server-round-trip)
+    bool      predInit  = false;  // seed predYaw/predPitch from the server spawn once
+    int       prevHealth = -1;    // last frame's health, to detect a server-side hit
+    float     netHurt   = 0.0f;   // client hit-flash intensity (the server owns damage,
+                                  // so flashIntensity() is always 0 here - drive it locally)
+
+    // One wander-bot per non-local player (players[1..]) - LOCAL MODE ONLY.
+    // Index 0 is the local human. In networked mode there are no bots; empty
+    // slots simply stay unoccupied until another client connects.
+    std::vector<BotState> botStates;
+
+    if (networked) {
+        net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
+        TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
+    } else {
+        gameSpace.generate(); // platforms, asteroids, and player slots
+        botStates.resize(gameSpace.getPlayers().size() - 1);
+    }
 //MARK: MAIN LOOP
     // --- The loop itself ---
-    while (!WindowShouldClose()) {  // true when user hits X, presses Esc, etc.
+    while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
 
         // 1. TIME
         // dt = seconds since last frame. Multiply all movement by this
@@ -64,63 +96,141 @@ int main() {
         float dt = GetFrameTime();
 
         // 2. UPDATE
-        // Read input, mutate game state. No drawing happens here.
-        // Player is the source of truth for movement/look - the camera is
-        // synced FROM the player after this, never the other way around.
-        Player& player = gameSpace.getPlayers()[0]; // single-player for now
+        // Read input, mutate game state. No drawing happens here. In networked
+        // mode the SERVER owns the sim - we only send input and apply the state
+        // it broadcasts. In local mode we host the sim ourselves (unchanged).
+        PlayerInput in{};                  // this frame's local intent (also read by the HUD)
+        Player*     localPlayer = nullptr; // the player the camera + HUD follow (null until connected)
+        int         localIndex  = networked ? myIndex : 0;
 
-        // Gather this frame's intent into a source-agnostic struct, then apply
-        // it. For a networked player the same struct would arrive over the wire
-        // and feed the identical ApplyPlayerInput() path (see input.h).
-        PlayerInput in = PollLocalInput();
-        float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
-        ApplyPlayerInput(player, in, dt, gravity, gameSpace);
+        if (networked) {
+            // Gather input and predict look locally. Position is server-
+            // authoritative, but a mouse-look that waited a full round-trip
+            // would be unusable - so we accumulate yaw/pitch from the mouse here
+            // (same math as Player::updateLook) and send the absolute values.
+            in = PollLocalInput();
+            if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
+            predYaw   += in.lookDelta.x * 0.0025f;   // 0.0025 = Player::lookSensitivity
+            predPitch -= in.lookDelta.y * 0.0025f;
+            predPitch  = Clamp(predPitch, -89.0f * DEG2RAD, 89.0f * DEG2RAD);
 
-        // Drive the test bots (players[1..]) through the same input path with
-        // randomly-generated wander input. Bots always use moon gravity - they
-        // never hold the earth-gravity key.
-        std::vector<Player>& players = gameSpace.getPlayers();
-        for (int i = 1; i < (int)players.size(); ++i) {
-            PlayerInput botIn = MakeBotInput(players[i], botStates[i - 1], dt);
-            ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
+            if (net.isOpen())
+                net.send(serializeInput(inputSeq++, in, predYaw, predPitch));
+
+            // Apply the newest server state to our local GameSpace.
+            for (const std::string& frame : net.poll()) {
+                ServerMessage m = applyMessage(frame, gameSpace);
+                if (m.type == ServerMessage::Type::Welcome) {
+                    myIndex = m.playerId;
+                    TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
+                }
+            }
+            localIndex = myIndex;
+
+            std::vector<Player>& players = gameSpace.getPlayers();
+            if (localIndex >= 0 && localIndex < (int)players.size()) {
+                // Seed prediction from the server spawn orientation once so the
+                // first frame doesn't snap the view.
+                if (!predInit) {
+                    predYaw = players[localIndex].yaw;
+                    predPitch = players[localIndex].pitch;
+                    predInit = true;
+                }
+                // Override the local player's look with the prediction (the
+                // server echo lags); all other fields stay server-authoritative.
+                players[localIndex].yaw   = predYaw;
+                players[localIndex].pitch = predPitch;
+                localPlayer = &players[localIndex];
+
+                // Hit flash: the server owns damage, so trigger the glitch when
+                // our health drops between state packets (flashIntensity() is
+                // always 0 on the client - it never ticks our flashTimer).
+                int hp = players[localIndex].health;
+                if (prevHealth >= 0 && hp < prevHealth) netHurt = 1.0f;
+                prevHealth = hp;
+            }
+            netHurt = fmaxf(0.0f, netHurt - dt / 0.5f); // decay over flash_duration (0.5s)
+            // Distinguish players visually (you = default cyan, others = magenta),
+            // matching the convention GameSpace::generate() uses in local mode.
+            for (int i = 0; i < (int)players.size(); ++i) {
+                if (i == localIndex) continue;
+                players[i].color_outline = {255, 0, 200, 255};
+                players[i].color_fill    = {255, 0, 200, 40};
+            }
+            // Tick reticles: snap ours, smooth everyone else's.
+            for (int i = 0; i < (int)players.size(); ++i)
+                players[i].updateReticle(dt, i != localIndex);
+        } else {
+            // --- LOCAL SINGLE-PLAYER: host the sim (original game loop) ---
+            Player& player = gameSpace.getPlayers()[0];
+
+            // Gather this frame's intent into a source-agnostic struct, then
+            // apply it - the same struct the networked server applies remotely.
+            in = PollLocalInput();
+            if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
+            float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
+            ApplyPlayerInput(player, in, dt, gravity, gameSpace);
+
+            // Drive the test bots (players[1..]) through the same input path with
+            // randomly-generated wander input. Bots always use moon gravity - they
+            // never hold the earth-gravity key.
+            std::vector<Player>& players = gameSpace.getPlayers();
+            for (int i = 1; i < (int)players.size(); ++i) {
+                PlayerInput botIn = MakeBotInput(players[i], botStates[i - 1], dt);
+                ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
+            }
+
+            // Jetpack exhaust: spawn spark particles streaming down out of each
+            // thrusting player's bottom. Visual only - emitted here (game-state
+            // phase) so velocity/jetpack state is current; ticked in updatePositions.
+            for (Player& pl : players) {
+                if (!(pl.isUsingJetpack && pl.hasFuel())) continue;
+                float want = PLAYER_EXHAUST_RATE * dt;          // fractional count -> integer with random carry
+                int n = (int)want;
+                if (RandomFloat(0.0f, 1.0f) < (want - (float)n)) n++;
+                if (n <= 0) continue;
+                Vector3 origin = pl.position;
+                origin.y -= pl.radius;                          // bottom of the body
+                SpawnSparkCone(gameSpace.getSparks(), origin, {0, -1, 0}, PLAYER_EXHAUST_CONE,
+                               PLAYER_EXHAUST_SPEED_MIN, PLAYER_EXHAUST_SPEED_MAX, n,
+                               Color{255, 200, 80, 255},
+                               PLAYER_EXHAUST_LIFETIME_MIN, PLAYER_EXHAUST_LIFETIME_MAX,
+                               Vector3Scale(pl.velocity, PLAYER_EXHAUST_INHERIT));
+            }
+
+            gameSpace.updatePositions(dt);
+            RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
+            gameSpace.updateActiveObjects();                // erase destroyed/finished
+
+            // Reticles follow the player's FINAL (post-collision) position;
+            // smoothed for non-local players, snapped for the local one.
+            for (int i = 0; i < (int)players.size(); ++i)
+                players[i].updateReticle(dt, i != 0); // index 0 is the local player
+
+            localPlayer = &gameSpace.getPlayers()[0];
         }
-
-        // Jetpack exhaust: spawn spark particles streaming down out of each
-        // thrusting player's bottom. Visual only - emitted here (game-state
-        // phase) so velocity/jetpack state is current; ticked in updatePositions.
-        for (Player& pl : players) {
-            if (!(pl.isUsingJetpack && pl.hasFuel())) continue;
-            float want = PLAYER_EXHAUST_RATE * dt;          // fractional count -> integer with random carry
-            int n = (int)want;
-            if (RandomFloat(0.0f, 1.0f) < (want - (float)n)) n++;
-            if (n <= 0) continue;
-            Vector3 origin = pl.position;
-            origin.y -= pl.radius;                          // bottom of the body
-            SpawnSparkCone(gameSpace.getSparks(), origin, {0, -1, 0}, PLAYER_EXHAUST_CONE,
-                           PLAYER_EXHAUST_SPEED_MIN, PLAYER_EXHAUST_SPEED_MAX, n,
-                           Color{255, 200, 80, 255},
-                           PLAYER_EXHAUST_LIFETIME_MIN, PLAYER_EXHAUST_LIFETIME_MAX,
-                           Vector3Scale(pl.velocity, PLAYER_EXHAUST_INHERIT));
-        }
-
-        gameSpace.updatePositions(dt);
-
-        // Collision detection and response:
-        RunCollisionChecks(gameSpace, collisionGrid);
-
-        // Remove destroyed asteroids and rockets, finished explosions, etc.
-        gameSpace.updateActiveObjects();
-
-        // Reticles follow the player's FINAL (post-collision) position; smoothed
-        // for non-local players so their indicator can't jump, snapped for the
-        // local player so the crosshair stays centered and responsive.
-        for (int i = 0; i < (int)players.size(); ++i)
-            players[i].updateReticle(dt, i != 0); // index 0 is the local player
 
         if (IsKeyPressed(KEY_ESCAPE)) {
             // toggle cursor capture so you can alt-tab / quit comfortably
             if (IsCursorHidden()) EnableCursor(); else DisableCursor();
         }
+
+        // Networked mode before the server's welcome/first state arrives: there's
+        // no local player yet, so show a connecting screen and skip the world draw.
+        if (localPlayer == nullptr) {
+            BeginDrawing();
+                ClearBackground(BLACK);
+                const char* msg = net.isOpen() ? "JOINING GAME..." : "CONNECTING TO SERVER...";
+                DrawText(msg, 20, 20, 20, RAYWHITE);
+                DrawText(serverUrl.c_str(), 20, 48, 14, DARKGRAY);
+                if (!net.lastError().empty())
+                    DrawText(net.lastError().c_str(), 20, 70, 14, RED);
+            EndDrawing();
+            continue;
+        }
+        // From here the local player exists; alias it so the draw code below is
+        // identical for both modes (local mode set localPlayer = players[0]).
+        Player& player = *localPlayer;
 //MARK:DRAW
         // 3. DRAW
         // Two passes: first render the 3D world into sceneTarget (capture),
@@ -134,7 +244,7 @@ int main() {
         BeginTextureMode(sceneTarget);
             ClearBackground(BLACK);
             BeginMode3D(CameraFromPlayer(player));
-                gameSpace.draw(0); // skip drawing the local player (index 0)
+                gameSpace.draw(localIndex); // skip drawing our own body (first-person)
             EndMode3D();
         EndTextureMode();
 
@@ -142,7 +252,9 @@ int main() {
         BeginDrawing();
             ClearBackground(BLACK);
 
-            float hurt = player.flashIntensity(); // 1.0 just after a hit -> 0.0
+            // Networked: damage is server-side, so flashIntensity() is always 0
+            // here - use the locally-tracked netHurt (set on a health drop above).
+            float hurt = networked ? netHurt : player.flashIntensity(); // 1.0 just after a hit -> 0.0
             Texture2D tex = sceneTarget.texture;
             // Render textures are stored Y-flipped, so every source rect that
             // samples this texture uses a NEGATIVE height to flip it upright.

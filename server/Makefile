@@ -16,6 +16,11 @@ CXX      := g++
 SERVERDIR := $(shell pwd)
 GAMEDIR   := $(shell pwd)/..
 
+# On macOS, Boost lives under the Homebrew prefix (e.g. /opt/homebrew), not in
+# the default system paths. Add it when brew is present. On Linux/CI brew is
+# absent so BREW_PREFIX is empty and this is a no-op (Boost is in /usr/include).
+BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+
 # When gamespace.h / collisions.h do #include "raylib.h" (and raymath.h, rlgl.h),
 # those directives must physically find a file - a predefined include guard does
 # NOT skip the lookup. server/ provides shim headers of those exact names (each
@@ -31,7 +36,16 @@ CXXFLAGS  := -std=c++17 -O2 -Wall \
               -I "$(GAMEDIR)" \
               -DPLATFORMZ_SERVER
 
-LDFLAGS   := -lboost_system -lpthread
+LDFLAGS   := -lpthread
+
+ifneq ($(BREW_PREFIX),)
+# macOS/Homebrew: Boost.System is header-only here (no libboost_system to link).
+CXXFLAGS += -I$(BREW_PREFIX)/include
+LDFLAGS  += -L$(BREW_PREFIX)/lib
+else
+# Linux/CI: link the distro's Boost.System.
+LDFLAGS  += -lboost_system
+endif
 
 # server_main.cpp + collisions.cpp (game logic, no rendering)
 SRCS     := server_main.cpp ../collisions.cpp
