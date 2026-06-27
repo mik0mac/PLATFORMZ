@@ -14,8 +14,8 @@ public:
     audioFX(const std::string& file, float volume = 1.0f, bool localOnly = false)
         : filename(file), baseVolume(volume), localPlayerOnly(localOnly) {}
 
-    float baseVolume;  // a trim control to balance the loudness of different FX
-    bool localPlayerOnly; // if true, only play for the local player (no network echo)
+    float baseVolume;
+    bool localPlayerOnly;
 
     void load() {
         sound = LoadSound(filename.c_str());
@@ -38,7 +38,7 @@ public:
 
         SetSoundVolume(sound, volume * baseVolume);
         SetSoundPan(sound, pan);
-        PlaySoundMulti(sound);
+        PlaySound(sound);
     }
 
 private:
@@ -51,25 +51,24 @@ private:
 // ---------------------------------------------------------------------------
 
 struct AudioEvent {
-    audioFX* fx;         // which sound to play
-    Vector3  sourcePos;  // world position of the sound source
+    audioFX* fx;
+    Vector3  sourcePos;
 };
 
-static std::vector<AudioEvent> audioQueue;
-
-// Push an event onto the queue.
-// isLocal: pass true when triggering from input.h (local player action),
-//          false when triggered from server state reconciliation (remote players).
-inline void pushAudio(audioFX& fx, Vector3 sourcePos, bool isLocal = false) {
-    if (fx.localPlayerOnly && !isLocal) return;
-    audioQueue.push_back({ &fx, sourcePos });
-}
-
-// Call once per frame after all state updates, before the next input poll.
-// listenerPos is the local player's current world position.
-inline void flushAudioQueue(Vector3 listenerPos) {
-    for (auto& event : audioQueue) {
-        event.fx->trigger(event.sourcePos, listenerPos);
+class AudioQueue {
+public:
+    void push(audioFX& fx, Vector3 sourcePos, bool isLocal = false) {
+        if (fx.localPlayerOnly && !isLocal) return;
+        queue.push_back({ &fx, sourcePos });
     }
-    audioQueue.clear();
-}
+
+    void flush(Vector3 listenerPos) {
+        for (auto& event : queue) {
+            event.fx->trigger(event.sourcePos, listenerPos);
+        }
+        queue.clear();
+    }
+
+private:
+    std::vector<AudioEvent> queue;
+};

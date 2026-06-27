@@ -64,6 +64,8 @@ int main(int argc, char** argv) {
 
     CollisionGrid collisionGrid; // Spatial grid, rebuilt each frame in RunCollisionChecks (local mode only)
 
+    AudioQueue audioQueue; // queue of sound events to play after all state updates.
+
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
@@ -210,6 +212,10 @@ int main(int argc, char** argv) {
 
             localPlayer = &gameSpace.getPlayers()[0];
         }
+        
+        // MARK: AUDIO QUEUE FLUSH
+        // Play all queued sound events after the state updates.
+        audioQueue.flush(localPlayer->position);
 
         if (IsKeyPressed(KEY_ESCAPE)) {
             // toggle cursor capture so you can alt-tab / quit comfortably
