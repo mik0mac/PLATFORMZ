@@ -10,6 +10,15 @@ const int GAMESPACE_NUMBER_OF_PLATFORMS = 16; // Number of platforms in the game
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 8; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 2; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
 
+//MARK: Networking (client interpolation) Constants
+// How far in the past remote entities are rendered, so we interpolate between
+// real snapshots instead of extrapolating. Bigger = smoother under jitter but
+// more visual latency. ~2-5 server ticks (1 tick = 1/60s) is a good range.
+const float NET_INTERP_DELAY = 0.08f; // seconds
+// Exponential rate the local camera eases toward the server position (per sec).
+// High enough to feel responsive, enough to kill single-frame position jitter.
+const float NET_CAM_SMOOTH_RATE = 20.0f;
+
 //MARK: Wall Constants
 const float WALL_ELASTICITY_PLAYER = 0.8f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const float WALL_ELASTICITY_ASTEROID = 1.01f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
