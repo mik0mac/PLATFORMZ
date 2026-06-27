@@ -45,4 +45,37 @@ clean:
 clean-all: clean
 	rm -rf build
 
-.PHONY: all run clean clean-all
+# --- Web (Emscripten / WASM) build ----------------------------------------
+# Builds the browser client. Requires the emsdk toolchain (emcc on PATH) and a
+# web build of raylib (compiled with emcc for PLATFORM_WEB). Point RAYLIB_WEB_DIR
+# at that raylib checkout (it must contain src/libraylib.a + the raylib headers):
+#   make web RAYLIB_WEB_DIR=/path/to/raylib
+#
+# No IXWebSocket / Apple frameworks here: the browser backend in net_client.h
+# uses the JS WebSocket API (-lwebsocket.js), and emcc auto-defines __EMSCRIPTEN__
+# which selects that backend + the query-string server URL in main.cpp.
+# nlohmann/json is header-only, so the same brew include path works under emcc.
+EMCC           := emcc
+RAYLIB_WEB_DIR ?= $(HOME)/raylib
+RAYLIB_WEB_INC ?= $(RAYLIB_WEB_DIR)/src
+RAYLIB_WEB_LIB ?= $(RAYLIB_WEB_DIR)/src/libraylib.a
+WEB_OUT        := web/platformz.html
+
+WEB_CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(RAYLIB_WEB_INC)
+# -sASYNCIFY lets the existing blocking while(!WindowShouldClose()) loop yield to
+# the browser. It can be dropped once the loop uses emscripten_set_main_loop().
+WEB_LDFLAGS  := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY \
+                -lwebsocket.js \
+                --preload-file assets \
+                --shell-file shell.html
+
+web: $(SRCS) $(HDRS) shell.html | webdir
+	$(EMCC) $(WEB_CXXFLAGS) $(SRCS) $(RAYLIB_WEB_LIB) -o $(WEB_OUT) $(WEB_LDFLAGS)
+
+webdir:
+	mkdir -p web
+
+clean-web:
+	rm -f web/platformz.html web/platformz.js web/platformz.wasm web/platformz.data
+
+.PHONY: all run clean clean-all web webdir clean-web
