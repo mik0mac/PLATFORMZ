@@ -12,6 +12,8 @@
 #include "wire.h"       // multiplayer: input serialize / state apply
 
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 
 // PLATFORMZ runs in one of two modes:
@@ -120,6 +122,15 @@ int main(int argc, char** argv) {
             if (net.isOpen())
                 net.send(serializeInput(inputSeq++, in, predYaw, predPitch));
 
+            // Snapshot asteroid positions by id BEFORE applying state. The server
+            // destroys and erases an asteroid within one tick, so it never sends
+            // dead=true - an asteroid simply vanishes from the synced set. We spawn
+            // its break-up burst client-side at the last position we knew for any id
+            // that disappears this frame (sparks aren't networked - purely local VFX).
+            std::unordered_map<uint32_t, Vector3> prevAsteroidPos;
+            for (const Asteroid& a : gameSpace.getAsteroids())
+                prevAsteroidPos[a.id] = a.position;
+
             // Apply the newest server state to our local GameSpace.
             for (const std::string& frame : net.poll()) {
                 ServerMessage m = applyMessage(frame, gameSpace);
@@ -129,6 +140,29 @@ int main(int argc, char** argv) {
                 }
             }
             localIndex = myIndex;
+
+            // Asteroid break-up bursts: any id we had last frame that's now gone
+            // was destroyed on the server. Spawn the same burst the local sim does.
+            {
+                std::unordered_set<uint32_t> present;
+                for (const Asteroid& a : gameSpace.getAsteroids()) present.insert(a.id);
+                for (const auto& [id, pos] : prevAsteroidPos)
+                    if (present.find(id) == present.end())
+                        gameSpace.spawnEliminationBurst(pos);
+            }
+
+            // Player elimination bursts. Players are never erased (alive=false is
+            // synced and persists), so a per-player flag stops the burst re-firing.
+            for (Player& player : gameSpace.getPlayers()) {
+                if (!player.isAlive && !player.deathBurstSpawned) {
+                    gameSpace.spawnEliminationBurst(player.position);
+                    player.deathBurstSpawned = true;
+                }
+            }
+
+            // Tick the bursts: the server owns every other object, but sparks are
+            // a local-only effect, so the client drifts/fades/retires them itself.
+            gameSpace.updateSparks(dt);
 
             std::vector<Player>& players = gameSpace.getPlayers();
             if (localIndex >= 0 && localIndex < (int)players.size()) {
@@ -183,24 +217,6 @@ int main(int argc, char** argv) {
                 ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
             }
 
-            // Jetpack exhaust: spawn spark particles streaming down out of each
-            // thrusting player's bottom. Visual only - emitted here (game-state
-            // phase) so velocity/jetpack state is current; ticked in updatePositions.
-            for (Player& pl : players) {
-                if (!(pl.isUsingJetpack && pl.hasFuel())) continue;
-                float want = PLAYER_EXHAUST_RATE * dt;          // fractional count -> integer with random carry
-                int n = (int)want;
-                if (RandomFloat(0.0f, 1.0f) < (want - (float)n)) n++;
-                if (n <= 0) continue;
-                Vector3 origin = pl.position;
-                origin.y -= pl.radius;                          // bottom of the body
-                SpawnSparkCone(gameSpace.getSparks(), origin, {0, -1, 0}, PLAYER_EXHAUST_CONE,
-                               PLAYER_EXHAUST_SPEED_MIN, PLAYER_EXHAUST_SPEED_MAX, n,
-                               Color{255, 200, 80, 255},
-                               PLAYER_EXHAUST_LIFETIME_MIN, PLAYER_EXHAUST_LIFETIME_MAX,
-                               Vector3Scale(pl.velocity, PLAYER_EXHAUST_INHERIT));
-            }
-
             gameSpace.updatePositions(dt);
             RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
             gameSpace.updateActiveObjects();                // erase destroyed/finished
@@ -214,8 +230,12 @@ int main(int argc, char** argv) {
         }
         
         // MARK: AUDIO QUEUE FLUSH
-        // Play all queued sound events after the state updates.
-        audioQueue.flush(localPlayer->position);
+        // Play all queued sound events after the state updates. Skip while
+        // networked-but-not-yet-connected: localPlayer is still null until the
+        // first server packet (the connecting-screen guard below handles that
+        // frame), and nothing has queued a sound yet anyway.
+        if (localPlayer != nullptr)
+            audioQueue.flush(localPlayer->position);
 
         if (IsKeyPressed(KEY_ESCAPE)) {
             // toggle cursor capture so you can alt-tab / quit comfortably

@@ -132,17 +132,36 @@ public:
         }
     }
 
+    // The standard one-time spherical spark burst spawned when an asteroid breaks
+    // apart or a player is eliminated. Centralized so the local sim
+    // (updateActiveObjects) and the networked client (main.cpp) spawn an
+    // identical effect. Visual only - pushes into the sparks vector.
+    void spawnEliminationBurst(Vector3 at) {
+        Color burst = {255, 180, 60, 255}; // hot orange break-up
+        SpawnSparkBurst(sparks, at, ASTEROID_BURST_SPEED_MIN, ASTEROID_BURST_SPEED_MAX,
+                        ASTEROID_BURST_COUNT, burst,
+                        SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
+    }
+
+    // Tick the VFX sparks (drift + fade) and drop dead ones, nothing else. The
+    // networked client uses this because the server owns every other object's
+    // lifecycle, but sparks are a purely local effect that is never serialized -
+    // so the client must integrate and retire them on its own.
+    void updateSparks(float dt) {
+        for (Spark& spark : sparks) {
+            spark.update(dt);
+        }
+        sparks.erase(std::remove_if(sparks.begin(), sparks.end(),
+            [](const Spark& spark) { return !spark.isActive; }), sparks.end());
+    }
+
     void updateActiveObjects() {
         // Spawn a one-time spherical spark burst for each asteroid about to be
         // removed. Done here so it fires regardless of what destroyed it (rocket
         // splash, player impact, ...) - a single centralized hook.
-        Color burst = {255, 180, 60, 255}; // hot orange break-up (shared by both bursts)
         for (const Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) {
-                SpawnSparkBurst(sparks, asteroid.position,
-                                ASTEROID_BURST_SPEED_MIN, ASTEROID_BURST_SPEED_MAX,
-                                ASTEROID_BURST_COUNT, burst,
-                                SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
+                spawnEliminationBurst(asteroid.position);
             }
         }
 
@@ -151,10 +170,7 @@ public:
         // the burst from re-firing every frame.
         for (Player& player : players) {
             if (!player.isAlive && !player.deathBurstSpawned) {
-                SpawnSparkBurst(sparks, player.position,
-                                ASTEROID_BURST_SPEED_MIN, ASTEROID_BURST_SPEED_MAX,
-                                ASTEROID_BURST_COUNT, burst,
-                                SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
+                spawnEliminationBurst(player.position);
                 player.deathBurstSpawned = true;
             }
         }

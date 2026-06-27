@@ -223,8 +223,8 @@ inline void DrawShadedPolyhedron(Vector3 center, float radius, const Vector3 ver
     }
 }
 
-// Regular dodecahedron body, upright. Jetpack exhaust is now a spawned spark
-// particle system (see SpawnSparkCone / main.cpp), not drawn here.
+// Regular dodecahedron body, upright. (The jetpack exhaust plume was deprecated
+// and archived in docs/exhaust-plume-archive.md.)
 inline void DrawPlayerDodeca(const Player& player) {
     Color outline, fill;
     PlayerFlashColors(player, outline, fill);

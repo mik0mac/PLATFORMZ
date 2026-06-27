@@ -526,8 +526,8 @@ private:
 };
 
 //MARK: Spark (VFX particle)
-// A lightweight visual-only particle (no collision). Streams out as jetpack
-// exhaust or an asteroid-destruction burst, drifts, and fades over its
+// A lightweight visual-only particle (no collision). Spawned as a one-time
+// asteroid-destruction / player-elimination burst, drifts, and fades over its
 // lifetime. Mirrors Explosion's "tick + isActive" lifecycle so GameSpace can
 // own/update/erase it through the same pipeline.
 class Spark {
@@ -553,32 +553,9 @@ public:
     float fade() const { return lifetime > 0.0f ? Clamp(1.0f - age / lifetime, 0.0f, 1.0f) : 0.0f; }
 };
 
-//MARK: Spark emitters (reused by jetpack exhaust and asteroid bursts)
-// Emit `count` sparks from `origin` within a cone of half-angle `coneAngle`
-// (radians) around `dir`. Small angle + dir = {0,-1,0} gives an exhaust plume;
-// `inheritVel` (e.g. the emitter's velocity) is added to every spark so the
-// stream trails the mover. Visual only - pushes into the sparks vector.
-inline void SpawnSparkCone(std::vector<Spark>& out, Vector3 origin, Vector3 dir,
-                           float coneAngle, float speedMin, float speedMax,
-                           int count, Color color, float lifeMin, float lifeMax,
-                           Vector3 inheritVel = {0, 0, 0}) {
-    Vector3 n = Vector3Normalize(dir);
-    Vector3 up = (fabsf(n.y) < 0.99f) ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-    Vector3 u = Vector3Normalize(Vector3CrossProduct(up, n)); // basis in the cone's base plane
-    Vector3 v = Vector3CrossProduct(n, u);
-    for (int i = 0; i < count; i++) {
-        float az = RandomFloat(0.0f, 2.0f * PI);
-        float polar = coneAngle * sqrtf(RandomFloat(0.0f, 1.0f)); // denser toward the axis
-        Vector3 radial = Vector3Add(Vector3Scale(u, cosf(az)), Vector3Scale(v, sinf(az)));
-        Vector3 d = Vector3Add(Vector3Scale(n, cosf(polar)), Vector3Scale(radial, sinf(polar)));
-        Spark s;
-        s.position = origin;
-        s.velocity = Vector3Add(Vector3Scale(d, RandomFloat(speedMin, speedMax)), inheritVel);
-        s.lifetime = RandomFloat(lifeMin, lifeMax);
-        s.color = color;
-        out.push_back(s);
-    }
-}
+//MARK: Spark emitter (asteroid / player elimination bursts)
+// (A cone emitter for the jetpack exhaust plume was deprecated and archived in
+// docs/exhaust-plume-archive.md.)
 
 // Emit `count` sparks uniformly in all directions from `origin` - a one-time
 // spherical puff (e.g. an asteroid breaking apart, or a player elimination).

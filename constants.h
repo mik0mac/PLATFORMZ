@@ -41,14 +41,6 @@ const float PLATFORM_MAX_DEPTH = PLATFORM_MAX_WIDTH; // Maximum depth of the pla
 // prototype silhouettes (DART, DELTA, LANDER, POD) are archived in
 // docs/player-shapes-archive.md.
 
-// Jetpack exhaust: spawned spark particles streaming down out of the bottom
-// while the jetpack fires (see SpawnSparkCone / main.cpp emission).
-const float PLAYER_EXHAUST_RATE = 140.0f;     // sparks spawned per second while thrusting
-const float PLAYER_EXHAUST_CONE = 0.35f;      // cone half-angle around straight-down, radians
-const float PLAYER_EXHAUST_SPEED_MIN = 8.0f;  // spark ejection speed, units/sec
-const float PLAYER_EXHAUST_SPEED_MAX = 16.0f;
-const float PLAYER_EXHAUST_INHERIT = 0.3f;    // fraction of player velocity added to each spark
-
 // The player is a sphere (rendered as a dodecahedron, DrawPlayer in shapes.h)
 // centered on player.position; the camera sits at that center. PLAYER_SCALE
 // tunes the size about the center point.
@@ -131,15 +123,12 @@ const float EXPLOSION_EXPANSION_RATE = 15.0f; // How quickly the explosion expan
 const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as pushback force
 
 //MARK: Spark VFX Constants
-// Sparks are pure visual particles (no collision). Shared physics/draw; lifetime
-// is split so jetpack exhaust and elimination bursts tune independently.
+// Sparks are pure visual particles (no collision). Shared physics/draw, spawned
+// as one-time elimination bursts. (The jetpack exhaust plume that also used
+// sparks was deprecated - see docs/exhaust-plume-archive.md.)
 const float SPARK_GRAVITY = 6.0f;        // downward accel on sparks, units/s^2 (0 = none)
 const float SPARK_DRAG = 1.5f;           // velocity damping per second
 const float SPARK_STREAK_LENGTH = 0.6f;  // length of the drawn streak, units
-
-// Jetpack exhaust spark lifetime (short - sparks fade fast behind the player).
-const float PLAYER_EXHAUST_LIFETIME_MIN = 0.30f;
-const float PLAYER_EXHAUST_LIFETIME_MAX = 0.70f;
 
 // Elimination-burst spark lifetime (longer - debris lingers). Used by both the
 // asteroid-destruction and player-elimination bursts.
