@@ -724,10 +724,10 @@ int main(int argc, char** argv) {
                     screen = GameScreen::GAME_OVER;
                 }
             }
-            else {
-                // Reset the game-over timer if more than one player is alive.  Like another player joined the game.
-                gameOverTimer = GAME_OVER_TIMER; // Reset the timer to the initial value
-            }
+            // else {
+            //     // Reset the game-over timer if more than one player is alive.  Like another player joined the game.
+            //     gameOverTimer = GAME_OVER_TIMER; // Reset the timer to the initial value
+            // }
         }
         
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.

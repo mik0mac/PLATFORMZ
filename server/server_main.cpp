@@ -220,6 +220,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"fuel\":"   + jf(p.fuel);
         s += ",\"ammo\":"   + ji(p.ammo);
         s += ",\"alive\":"  + jb(p.isAlive);
+        s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
         s += ",\"active\":" + jb(connectedSlots.count(i) > 0); // slot occupied?
         s += "}";
     }
@@ -240,6 +241,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"vz\":"   + jf(a.velocity.z);
         s += ",\"size\":" + jf(a.size);
         s += ",\"hp\":"   + ji(a.health);
+        s += ",\"flash\":" + jf(a.flashTimer); // hot-glow damage flash for the client
         s += ",\"dead\":" + jb(a.isDestroyed);
         s += "}";
     }
