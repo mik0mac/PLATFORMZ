@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
 
-        // MARK: TITLE / GAME OVER SCREENS
+        // MARK: TITLE GAMEOVER SCREENS
         // Placeholder front/end screens. Each handles its own input + draw and
         // skips the rest of the loop; PLAYING (below) is the original game body.
         if (screen == GameScreen::TITLE) {
@@ -211,28 +211,31 @@ int main(int argc, char** argv) {
         if (screen == GameScreen::GAME_OVER) {
             if (startPressed()) returnToTitle();
             BeginDrawing();
-                ClearBackground(BLACK);
-                // Greyscale blit of the last rendered world frame (sceneTarget
-                // persists), then the overlay - the dead-world look carries over.
-                if (grayscaleOK) BeginShaderMode(grayscaleShader);
-                    DrawTexturePro(sceneTarget.texture,
-                        {0, 0, (float)sceneTarget.texture.width, -(float)sceneTarget.texture.height},
-                        {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
-                if (grayscaleOK) EndShaderMode();
-                DrawCentered("GAME OVER", 240, 80, RED);
-                // Show the local player's score and survival status (alive/dead).
-                for (Player& p : gameSpace.getPlayers()) {
-                    if (p.id == myIndex) {
-                        if (p.isAlive) {
-                            DrawCentered("You survived!", 360, 20, BLUE);
-                        }
-                        else {
-                            DrawCentered("You were eliminated.", 360, 20, RED);
-                        }
-                        DrawCentered(TextFormat("SCORE: %d", p.score), 400, 20, GRAY);
+            ClearBackground(BLACK);
+            
+            std::vector<Player>& players = gameSpace.getPlayers();
+            int localIndex = networked ? myIndex : 0;
+            for (int i = 0; i < (int)players.size(); ++i) {
+                if (i == localIndex) {
+                    if (players[i].isAlive) {
+                        DrawCentered("GAME OVER", 240, 80, BLUE);
+                        DrawCentered("You survived!", 360, 20, BLUE);
                     }
+                    else {
+                        // Greyscale blit of the last rendered world frame (sceneTarget
+                        // persists), then the overlay - the dead-world look carries over.
+                        if (grayscaleOK) BeginShaderMode(grayscaleShader);
+                            DrawTexturePro(sceneTarget.texture,
+                                {0, 0, (float)sceneTarget.texture.width, -(float)sceneTarget.texture.height},
+                                {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
+                        if (grayscaleOK) EndShaderMode();
+                        DrawCentered("GAME OVER", 240, 80, RED);
+                        DrawCentered("You were eliminated.", 360, 20, RED);
+                    }
+                    DrawCentered(TextFormat("SCORE: %d", players[i].score), 400, 20, GRAY);
                 }
-                DrawCentered("Press any key to return to title", 440, 20, GRAY);
+            }
+            DrawCentered("Press any key to return to title", 440, 20, GRAY);
             EndDrawing();
             continue;
         }

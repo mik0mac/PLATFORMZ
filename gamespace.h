@@ -122,6 +122,7 @@ public:
         sparks.clear(); // VFX particles, spawned by jetpack exhaust / asteroid bursts.
     };
 
+    // MARK: Update Objects
     void updatePositions(float dt) {
         // Update platforms (for moving platforms, future use)
         for (Platform& platform : platforms) {
@@ -202,6 +203,7 @@ public:
             }
         }
 
+        // MARK: Remove Objects
         // Remove destroyed asteroids
         asteroids.erase(std::remove_if(asteroids.begin(), asteroids.end(),
             [](const Asteroid& asteroid) { return asteroid.isDestroyed; }), asteroids.end());
@@ -241,6 +243,7 @@ public:
             // Multiplayer: skip unoccupied slots entirely (no body, no reticle).
             // Always true in local mode, so bots and the local human still draw.
             if (!players[i].isConnected) continue;
+            if (!players[i].isAlive) continue; // Dead players don't draw (no body, no reticle).
             if (i == localPlayerIndex) {
                 // First-person: own body is skipped, but the reticle still draws
                 // as the player's crosshair, floating out along their aim.
