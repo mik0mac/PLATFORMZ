@@ -165,8 +165,8 @@ Two windows = two players; terminal 1's log should climb to `players 2`.
 ---
 
 ## 5. Controls
-WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold the
-earth-gravity key (LEFT_SUPER/⌘) for stronger gravity · Esc toggle cursor capture.
+WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
+Left Shift for stronger (earth) gravity · Esc toggle cursor capture.
 
 ---
 

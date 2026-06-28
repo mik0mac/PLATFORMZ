@@ -42,7 +42,7 @@ inline PlayerInput PollLocalInput() {
     if (IsKeyDown(KEY_D)) in.moveAxis.x += 1.0f;
     if (IsKeyDown(KEY_A)) in.moveAxis.x -= 1.0f;
     in.jetpack      = IsKeyDown(KEY_SPACE);
-    in.earthGravity = IsKeyDown(KEY_LEFT_SUPER); // = COMMAND.
+    in.earthGravity = IsKeyDown(KEY_LEFT_SHIFT); // hold for stronger (earth) gravity
     in.fire         = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     return in;
 }

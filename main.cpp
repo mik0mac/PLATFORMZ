@@ -54,7 +54,9 @@ int main(int argc, char** argv) {
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
                           // quit key - quit via the window close button or Cmd+Q.
-    DisableCursor(); // captures mouse for free-look, like a standard 3D game
+    EnableCursor(); // start on the TITLE screen with a free cursor; the mouse is
+                    // captured on entry to PLAYING (startGame) and freed again on
+                    // the menu screens (returnToTitle / game-over trigger)
 
     // MARK: AUDIO
     // raylib's mixer must be up before any sound loads. The fxTable maps each
@@ -152,6 +154,7 @@ int main(int argc, char** argv) {
     // before the loop) and torn down on the way back to the title.
     enum class GameScreen { TITLE, PLAYING, GAME_OVER };
     GameScreen screen = GameScreen::TITLE;
+    float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
 
     // TITLE -> PLAYING: stand up a fresh run. Local hosts the sim; networked
     // kicks off the connection (the connecting-screen guard below covers the
@@ -165,6 +168,7 @@ int main(int argc, char** argv) {
             gameSpace.generate(); // platforms, asteroids, and player slots
             botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
         }
+        DisableCursor(); // capture the mouse for free-look while playing
         screen = GameScreen::PLAYING;
     };
 
@@ -173,6 +177,7 @@ int main(int argc, char** argv) {
     auto returnToTitle = [&]() {
         if (networked) net.stop();
         gameSpace.clear();
+        EnableCursor(); // free the cursor for the title menu
         screen = GameScreen::TITLE;
     };
 
@@ -220,6 +225,8 @@ int main(int argc, char** argv) {
                     if (players[i].isAlive) {
                         DrawCentered("GAME OVER", 240, 80, BLUE);
                         DrawCentered("You survived!", 360, 20, BLUE);
+                        DrawCentered(TextFormat("SCORE: %d", players[localIndex].score), 400, 20, GRAY);
+                        DrawCentered("Press any key to return to title", 440, 20, GRAY);
                     }
                     else {
                         // Greyscale blit of the last rendered world frame (sceneTarget
@@ -231,11 +238,12 @@ int main(int argc, char** argv) {
                         if (grayscaleOK) EndShaderMode();
                         DrawCentered("GAME OVER", 240, 80, RED);
                         DrawCentered("You were eliminated.", 360, 20, RED);
+                        DrawCentered(TextFormat("SCORE: %d", players[localIndex].score), 400, 20, RED);
+                        DrawCentered("Press any key to return to title", 440, 20, RED);
                     }
-                    DrawCentered(TextFormat("SCORE: %d", players[i].score), 400, 20, GRAY);
                 }
             }
-            DrawCentered("Press any key to return to title", 440, 20, GRAY);
+            
             EndDrawing();
             continue;
         }
@@ -538,11 +546,21 @@ int main(int argc, char** argv) {
 
         
         int remaining_players = 0;
+        // determine number of remaining players (bots included).
         for (const Player& p : gameSpace.getPlayers()) {
             if (p.isAlive) remaining_players++;
         }
+        // If there's only one player left, start the game-over countdown.
         if (remaining_players <= 1) {
-            screen = GameScreen::GAME_OVER;
+            gameOverTimer -= dt;
+            if (gameOverTimer <= 0.0f) {
+                EnableCursor(); // free the cursor for the game-over menu
+                screen = GameScreen::GAME_OVER;
+            }
+        }
+        else {
+            // Reset the game-over timer if more than one player is alive.  Like another player joined the game.
+            gameOverTimer = GAME_OVER_TIMER; // Reset the timer to the initial value
         }
         
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.

@@ -87,7 +87,7 @@ only `main.cpp` and `collisions.cpp` as translation units.
   keep writing depth.
 - **Player is authoritative; the camera derives from it**, never the reverse.
 - **Units:** 1 unit = 1 meter. Gravity constants live in `main.cpp`
-  (`MOON_GRAVITY = 1.62`, `EARTH_GRAVITY = 9.81`); hold the toggle key for earth
+  (`MOON_GRAVITY = 1.62`, `EARTH_GRAVITY = 9.81`); hold Left Shift for earth
   gravity. Gravity is applied once, in `Player::updateVelocity`.
 - Files are sectioned with `//MARK:` comments.
 - raylib/raymath helpers are preferred for color/vector math (e.g.
@@ -95,8 +95,8 @@ only `main.cpp` and `collisions.cpp` as translation units.
   `Vector3Reflect`, `Clamp`).
 
 ## Controls
-WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold the
-earth-gravity key (LEFT_SUPER/⌘) for stronger gravity · Esc toggle cursor capture.
+WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
+Left Shift for stronger (earth) gravity · Esc toggle cursor capture.
 
 ## Web build (Emscripten / WASM) — gotchas
 `make web RAYLIB_WEB_DIR=$HOME/raylib` builds the browser client; the shell is
