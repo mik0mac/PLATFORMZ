@@ -85,6 +85,32 @@ CollisionGrid collisionGrid;
 std::mutex    gameMutex;
 std::atomic<uint32_t> serverTick{0};
 
+//MARK: Match phase
+// The world doesn't exist until a client starts a match; after one ends, any
+// client can start another. The sim only ticks while PLAYING; LOBBY and GAMEOVER
+// are idle (still broadcast, so clients see the phase + connected slots). All
+// gameSpace mutation stays on the sim thread: a client "start" message just sets
+// startRequested, which the sim loop consumes.
+enum class Phase { LOBBY, PLAYING, GAMEOVER };
+std::atomic<Phase> gamePhase{Phase::LOBBY};
+std::atomic<bool>  startRequested{false};
+int matchStartConnected = 0; // connected count at match start (sim thread only); sets the last-man-standing threshold
+
+// Map preset carried by a start request (boundary half-size + object counts).
+// Written by the io thread when a "start" arrives, read by the sim thread when
+// it consumes startRequested (the flag is the synchronization point).
+std::atomic<float> pendingHalf{GAMESPACE_HALF_SIZE};
+std::atomic<int>   pendingPlat{GAMESPACE_NUMBER_OF_PLATFORMS};
+std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
+
+static const char* phaseString(Phase p) {
+    switch (p) {
+        case Phase::PLAYING:  return "playing";
+        case Phase::GAMEOVER: return "gameover";
+        default:              return "lobby";
+    }
+}
+
 // ws pointer -> client record. Protected by clientMutex.
 // Using map so iteration order is stable (useful for state serialization).
 std::map<void*, ConnectedClient> clients;
@@ -150,6 +176,16 @@ static std::string buildPlatformsArray() {
     return s;
 }
 
+// Welcome packet: the client's assigned slot + the current static platform layout
+// (empty in the lobby; populated once a match has generated a world). Sent on
+// connect and re-sent to everyone when a match (re)starts so they rebuild it.
+static std::string buildWelcome(int playerId) {
+    return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
+         + ",\"tick\":" + std::to_string(serverTick.load())
+         + ",\"half\":" + jf(gameSpace.getWalls().halfSize) // boundary size for this match
+         + ",\"platforms\":" + buildPlatformsArray() + "}";
+}
+
 // -------------------------------------------------------------------------
 // State serialization - build the JSON state packet sent to all clients.
 // Each client gets the same world state but with their own lastSeq injected.
@@ -163,6 +199,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     s += "{\"type\":\"state\"";
     s += ",\"tick\":"  + ju(tick);
     s += ",\"seq\":"   + ju(lastSeq);
+    s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
 
     // Players
     s += ",\"players\":[";
@@ -297,15 +334,11 @@ public:
                           << ". Active: " << clients.size() << "\n";
             }
 
-            // Send welcome with the assigned slot + the static platform layout
-            // (platforms never change after generate(), so this is the only time
-            // we send them - the client renders from it instead of generate()).
-            std::string welcome = "{\"type\":\"welcome\",\"playerId\":"
-                + std::to_string(playerId) + ",\"tick\":"
-                + std::to_string(serverTick.load())
-                + ",\"platforms\":" + buildPlatformsArray() + "}";
+            // Send welcome with the assigned slot + the current platform layout
+            // (empty in the lobby; the client renders from it instead of running
+            // generate()). Re-sent to everyone when a match (re)starts.
             beast::error_code wec;
-            self->ws_.write(net::buffer(welcome), wec);
+            self->ws_.write(net::buffer(buildWelcome(playerId)), wec);
 
             self->Read();
         });
@@ -338,6 +371,19 @@ private:
 
                 std::string msg = beast::buffers_to_string(self->buffer_.data());
                 self->buffer_.consume(self->buffer_.size());
+
+                // Control message: a client asking to start/restart a match. Any
+                // client may send it. Flagged here and performed by the sim loop
+                // so all gameSpace mutation stays on a single thread.
+                if (msg.find("\"type\":\"start\"") != std::string::npos) {
+                    // Map preset chosen by the requesting client (first press wins).
+                    pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
+                    pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
+                    pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
+                    startRequested = true; // release: set after the preset values above
+                    self->Read();
+                    return;
+                }
 
                 // Parse input packet and store as this client's latest input.
                 // The sim loop reads lastInput each tick; if packets arrive
@@ -432,38 +478,84 @@ void SimulationLoop() {
 
         uint32_t tick;
         size_t   asteroidCount = 0;
+        bool     justStarted = false; // a match began this tick -> resend welcomes below
         {
             std::lock_guard<std::mutex> gg(gameMutex);
+
+            // Consume a pending start/restart request: build a fresh world and
+            // reset the existing player slots (ids stay stable so connected
+            // clients keep their slot mapping across a restart), then begin.
+            if (startRequested.exchange(false)) {
+                gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), pendingRoid.load());
+                gameSpace.generateWorld();
+                gameSpace.resetPlayersForMatch();
+                { std::lock_guard<std::mutex> gc(clientMutex); matchStartConnected = (int)clients.size(); }
+                gamePhase = Phase::PLAYING;
+                justStarted = true;
+                std::cout << "Match started (" << matchStartConnected << " connected)\n";
+            }
 
             // Drop last tick's audio events (already broadcast). They re-accumulate
             // below during input apply + collisions, then BroadcastState() reads
             // and sends them after this lock releases.
             gameSpace.getAudioEvents().clear();
 
-            // Apply each client's latest input to their player slot
-            {
-                std::lock_guard<std::mutex> gc(clientMutex);
-                auto& players = gameSpace.getPlayers();
-                for (auto& [ws, client] : clients) {
-                    if (!client.hasInput) continue;
-                    if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
-                    Player& player = players[client.playerId];
-                    float gravity = client.lastInput.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
-                    // Consume the latched fire edge exactly once (shoot() still
-                    // gates on ammo/cooldown), then clear it so a held button
-                    // doesn't re-fire every tick from a stale lastInput.fire.
-                    PlayerInput input = client.lastInput;
-                    input.fire = client.firePending;
-                    client.firePending = false;
-                    ApplyInputToPlayer(player, input, TICK_DT, gravity);
+            // Only simulate while a match is in progress; LOBBY/GAMEOVER are idle.
+            if (gamePhase.load() == Phase::PLAYING) {
+                // Apply each client's latest input to their player slot
+                {
+                    std::lock_guard<std::mutex> gc(clientMutex);
+                    auto& players = gameSpace.getPlayers();
+                    for (auto& [ws, client] : clients) {
+                        if (!client.hasInput) continue;
+                        if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
+                        Player& player = players[client.playerId];
+                        float gravity = client.lastInput.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
+                        // Consume the latched fire edge exactly once (shoot() still
+                        // gates on ammo/cooldown), then clear it so a held button
+                        // doesn't re-fire every tick from a stale lastInput.fire.
+                        PlayerInput input = client.lastInput;
+                        input.fire = client.firePending;
+                        client.firePending = false;
+                        ApplyInputToPlayer(player, input, TICK_DT, gravity);
+                    }
+                }
+
+                gameSpace.updatePositions(TICK_DT);
+                RunCollisionChecks(gameSpace, collisionGrid);
+                gameSpace.updateActiveObjects();
+
+                // Last-player-standing: end the match when <= threshold connected
+                // players remain alive. threshold is 1 for a multi-player match and
+                // 0 for a solo start, so a lone player's match ends only when they
+                // die (not instantly). Only connected slots count - empty slots are
+                // inert and never "win".
+                {
+                    std::lock_guard<std::mutex> gc(clientMutex);
+                    auto& players = gameSpace.getPlayers();
+                    int aliveConnected = 0;
+                    for (auto& [ws, client] : clients) {
+                        if (client.playerId >= 0 && client.playerId < (int)players.size()
+                            && players[client.playerId].isAlive) aliveConnected++;
+                    }
+                    int threshold = matchStartConnected >= 2 ? 1 : 0;
+                    if (aliveConnected <= threshold) {
+                        gamePhase = Phase::GAMEOVER;
+                        std::cout << "Match over (alive " << aliveConnected << ")\n";
+                    }
                 }
             }
 
-            gameSpace.updatePositions(TICK_DT);
-            RunCollisionChecks(gameSpace, collisionGrid);
-            gameSpace.updateActiveObjects();
             tick = ++serverTick;
             asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
+        }
+
+        // On (re)start, hand every client the fresh world (their slot + the new
+        // platform layout) so they rebuild it. Done off gameMutex like BroadcastState.
+        if (justStarted) {
+            std::lock_guard<std::mutex> gc(clientMutex);
+            for (auto& [ws, client] : clients)
+                static_cast<Session*>(ws)->Send(buildWelcome(client.playerId));
         }
 
         // Broadcast authoritative state to all clients every tick.
@@ -521,11 +613,13 @@ int main() {
 
     {
         std::lock_guard<std::mutex> lock(gameMutex);
-        gameSpace.generate();
-        std::cout << "GameSpace: "
-                  << gameSpace.getAsteroids().size() << " asteroids, "
-                  << gameSpace.getPlatforms().size() << " platforms, "
-                  << gameSpace.getPlayers().size()   << " player slots\n";
+        // Boot into the LOBBY: create player slots only (so clients can connect
+        // and be listed), but no world. A client "start" message generates the
+        // world and begins the match (see SimulationLoop).
+        gameSpace.spawnPlayers();
+        std::cout << "GameSpace: lobby ready, "
+                  << gameSpace.getPlayers().size()
+                  << " player slots (waiting for a player to start)\n";
     }
 
     const int threads = std::max(1u, std::thread::hardware_concurrency());

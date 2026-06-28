@@ -48,10 +48,29 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 //MARK: Inbound - parsed result
 struct ServerMessage {
     enum class Type { None, Welcome, State, Unknown };
+    // Server match phase, carried in every state packet. Drives the networked
+    // client's screen: Lobby -> TITLE, Playing -> PLAYING, GameOver -> GAME_OVER.
+    enum class Phase { Unknown, Lobby, Playing, GameOver };
     Type     type     = Type::None;
     int      playerId = -1; // Welcome: our assigned slot (index into players[])
     uint32_t tick     = 0;  // State/Welcome
+    Phase    phase    = Phase::Unknown; // State only
 };
+
+//MARK: Outbound - start request
+// Asks the server to start (or restart) a match with the chosen map preset
+// (boundary half-size + platform/asteroid counts). Any connected client may send
+// it; the server applies the preset, generates a fresh world, and flips to the
+// PLAYING phase. First press wins for the round.
+inline std::string serializeStart(float half, int platforms, int asteroids) {
+    nlohmann::json j = {
+        {"type", "start"},
+        {"half", half},
+        {"plat", platforms},
+        {"roid", asteroids}
+    };
+    return j.dump();
+}
 
 namespace wire_detail {
 
@@ -108,6 +127,11 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.type     = ServerMessage::Type::Welcome;
         msg.playerId = j.value("playerId", -1);
         msg.tick     = j.value("tick", 0u);
+        // Boundary size for this match (the server picked it from the start
+        // request's map preset). Sync it so the client renders the right cube -
+        // walls aren't in the per-tick state packet.
+        if (j.contains("half"))
+            gs.getWalls().halfSize = j.value("half", gs.getWalls().halfSize);
         // Platforms are static and arrive once, here. Rebuild from scratch
         // (clear first) so a reconnect that re-sends welcome doesn't duplicate.
         if (j.contains("platforms")) {
@@ -126,6 +150,12 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
 
     msg.type = ServerMessage::Type::State;
     msg.tick = j.value("tick", 0u);
+    // Match phase (server-authoritative) - drives the networked client's screen.
+    const std::string phase = j.value("phase", "");
+    msg.phase = phase == "playing"  ? ServerMessage::Phase::Playing
+              : phase == "gameover" ? ServerMessage::Phase::GameOver
+              : phase == "lobby"    ? ServerMessage::Phase::Lobby
+                                    : ServerMessage::Phase::Unknown;
 
     // Players - a fixed, persistent set of slots; never erased (also Player
     // isn't move-assignable, so erase(remove_if) wouldn't compile).

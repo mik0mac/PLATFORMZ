@@ -1,5 +1,8 @@
 #pragma once
 
+#include <unordered_map> // mapSizePresets
+#include <string>        // mapSizePresets key
+
 //MARK: Audio events (shared client+server wire contract)
 // Small-int ids so the headless server can tag/serialize events without any
 // raylib audio. The client maps each id to a real audioFX via its fxTable.
@@ -25,6 +28,20 @@ const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, un
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 4; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
+
+struct mapSizePreset {
+    float halfSize;
+    int numPlatforms;
+    int numAsteroids;
+};
+
+// inline: one definition shared across all TUs (constants.h is included by
+// main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
+inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
+    {"SMALL",  {30.0f, 24, 12}}, // 30 platforms, 12 asteroids
+    {"MEDIUM", {60.0f, 48, 18}}, // 36 platforms, 18 asteroids
+    {"LARGE",  {90.0f, 96, 24}}  // 48 platforms, 24 asteroids
+};
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
 
