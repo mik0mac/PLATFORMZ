@@ -103,8 +103,9 @@ public:
             // Non-local players (index 1+, the test bots) get a distinct magenta
             // palette so they read clearly against the cyan local-player look.
             if (i > 0) {
-                player.color_outline = {255, 0, 200, 255};
-                player.color_fill = {255, 0, 200, 40};
+                player.color_outline = BOT_OUTLINE_COLOR;
+                player.color_fill = BOT_FILL_COLOR;
+                player.isBot = true; // Mark this player as a bot
             }
 
             // player direction starts facing towards the center of the game space.
@@ -274,6 +275,15 @@ public:
     // need direct access to these vectors. Returned by reference so callers
     // can both iterate and mutate (e.g. taking damage, marking destroyed,
     // pushing new rockets/explosions) without GameSpace exposing raw members.
+    // Set the boundary size and object density before generate() - used by the
+    // title screen's map-size presets (small/medium/large). Local play only;
+    // networked games take their world from the server.
+    void configureMap(float halfSize, int platforms, int asteroids) {
+        walls.halfSize   = halfSize;
+        num_of_platforms = platforms;
+        num_of_asteroids = asteroids;
+    }
+
     Walls& getWalls() { return walls; }
     std::vector<Platform>& getPlatforms() { return platforms; }
     std::vector<Asteroid>& getAsteroids() { return asteroids; }

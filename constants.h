@@ -24,7 +24,7 @@ const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 2; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
+const int GAMESPACE_NUMBER_OF_PLAYERS = 4; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
 
@@ -108,6 +108,18 @@ const float BOT_REROLL_MAX_SECONDS = 4.0f; // max time before a bot re-rolls its
 const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target heading, radians/sec
 
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
+
+// Placeholder bot display names (NATO phonetic alphabet). Used by the title
+// screen's players panel to label bot-filled slots.
+const char* const BOT_NAME_STRINGS[] = {
+    "ALPHA","BRAVO","CHARLIE","DELTA","ECHO","FOXTROT","GOLF","HOTEL","INDIA",
+    "JULIETT","KILO","LIMA","MIKE","NOVEMBER","OSCAR","PAPA","QUEBEC","ROMEO",
+    "SIERRA","TANGO","UNIFORM","VICTOR","WHISKEY","XRAY","YANKEE","ZULU"
+};
+const int BOT_NAME_COUNT = sizeof(BOT_NAME_STRINGS) / sizeof(BOT_NAME_STRINGS[0]);
+
+const Color BOT_OUTLINE_COLOR = {255, 0, 200, 255}; // Magenta outline for bots.
+const Color BOT_FILL_COLOR = {255, 0, 200, 40}; // Magenta fill for bots.
 
 //MARK: Asteroid Constants
 const int ASTEROID_STARTING_HEALTH = 50;
