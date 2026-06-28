@@ -7,6 +7,7 @@
 #include "collisions.h"
 #include "camera.h"
 #include "input.h"
+#include "ui.h"        // immediate-mode menu widgets (title screen)
 #include "audio.h"     // sound FX que, load/unload, trigger
 #include "net_client.h" // multiplayer: WebSocket client
 #include "wire.h"       // multiplayer: input serialize / state apply
@@ -156,15 +157,24 @@ int main(int argc, char** argv) {
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
 
+    // Title-screen menu state (widgets live in ui.h). The name is local-only for
+    // now (input + visuals); syncing it over the network is a later step.
+    std::string playerName  = "PLAYER";
+    bool        nameFocused = false; // text field has keyboard focus
+    bool        showControls = false; // controls popup is open
+
     // TITLE -> PLAYING: stand up a fresh run. Local hosts the sim; networked
     // kicks off the connection (the connecting-screen guard below covers the
     // wait) and resets the per-session prediction/flash state.
-    auto startGame = [&]() {
+    // halfSize/platforms/asteroids set the local map preset (small/medium/large);
+    // ignored when networked, where the server owns the world.
+    auto startGame = [&](float halfSize, int platforms, int asteroids) {
         if (networked) {
             net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
             TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
             myIndex = -1; inputSeq = 0; predInit = false; prevHealth = -1; netHurt = 0.0f;
         } else {
+            gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
             gameSpace.generate(); // platforms, asteroids, and player slots
             botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
         }
@@ -205,11 +215,81 @@ int main(int argc, char** argv) {
         // Placeholder front/end screens. Each handles its own input + draw and
         // skips the rest of the loop; PLAYING (below) is the original game body.
         if (screen == GameScreen::TITLE) {
-            if (startPressed()) startGame();
+            // Esc closes the controls popup (no cursor toggle on the menu).
+            if (showControls && IsKeyPressed(KEY_ESCAPE)) showControls = false;
+            // Snapshot the popup state at frame start: CLOSE is only handled if the
+            // popup was ALREADY open, so the click that opens it can't also close
+            // it on the same frame (CONTROLS and CLOSE overlap on screen).
+            const bool controlsWasOpen = showControls;
+            const bool uiEnabled = !showControls; // the popup is modal
+
             BeginDrawing();
                 ClearBackground(BLACK);
-                DrawCentered("PLATFORMZ", 240, 80, RAYWHITE);
-                DrawCentered("Press any key to start", 360, 20, GRAY);
+                UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE);
+
+                // Name entry (local-only for now).
+                UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
+                Rectangle nameBox = {350, 240, 300, 40};
+                UiTextField(nameBox, playerName, nameFocused, 16, 20);
+
+                // Players panel: GAMESPACE_NUMBER_OF_PLAYERS slots - slot 1 is the
+                // local human, the rest are bot-filled (local play spawns exactly
+                // 1 human + N-1 bots). Networked shows only you; the real connected
+                // list is deferred lobby work. Panel height tracks the row count.
+                const int   rowsShown = networked ? 1 : GAMESPACE_NUMBER_OF_PLAYERS;
+                const float rowH = 24.0f, headerH = 30.0f;
+                Rectangle playersBox = {350, 300, 300, headerH + rowsShown * rowH + 10.0f};
+                UiPanel(playersBox);
+                DrawText("PLAYERS", (int)playersBox.x + 10, (int)playersBox.y + 8, 14, ui::OUTLINE);
+                for (int i = 0; i < rowsShown; ++i) {
+                    int ry = (int)(playersBox.y + headerH + i * rowH);
+                    if (i == 0)
+                        DrawText(TextFormat("1. %s (YOU)", playerName.empty() ? "PLAYER" : playerName.c_str()),
+                                 (int)playersBox.x + 10, ry, 18, RAYWHITE);
+                    else
+                        DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT]),
+                                 (int)playersBox.x + 10, ry, 18, ui::OUTLINE);
+                }
+
+                // Start buttons, placed below the (variable-height) panel. Local:
+                // pick a map size. Networked: one START (server owns the world).
+                float startY = playersBox.y + playersBox.height + 20.0f;
+                if (networked) {
+                    Rectangle b = {400, startY, 200, 50};
+                    if (uiEnabled && UiButton(b, "START"))
+                        startGame(GAMESPACE_HALF_SIZE, GAMESPACE_NUMBER_OF_PLATFORMS, GAMESPACE_NUMBER_OF_ASTEROIDS);
+                } else {
+                    Rectangle bs = {210, startY, 180, 50};
+                    Rectangle bm = {410, startY, 180, 50};
+                    Rectangle bl = {610, startY, 180, 50};
+                    if (uiEnabled && UiButton(bs, "SMALL"))  startGame(30.0f, 12, 10);
+                    if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(45.0f, 24, 14);
+                    if (uiEnabled && UiButton(bl, "LARGE"))
+                        startGame(GAMESPACE_HALF_SIZE, GAMESPACE_NUMBER_OF_PLATFORMS, GAMESPACE_NUMBER_OF_ASTEROIDS);
+                }
+
+                Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
+                if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) showControls = true;
+
+                // Controls popup, drawn last so it sits on top.
+                if (showControls) {
+                    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.7f));
+                    Rectangle m = {250, 170, 500, 360};
+                    UiPanel(m);
+                    UiTextCentered("CONTROLS", screenWidth, (int)m.y + 20, 30, ui::OUTLINE);
+                    const char* lines[] = {
+                        "WASD          move",
+                        "Mouse         look",
+                        "Left click    fire rocket",
+                        "Space         jetpack (up)",
+                        "Left Shift    stronger (earth) gravity",
+                        "Esc           toggle cursor capture",
+                    };
+                    int ly = (int)m.y + 80;
+                    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
+                    Rectangle closeBtn = {(float)(screenWidth / 2 - 70), m.y + m.height - 60, 140, 40};
+                    if (controlsWasOpen && UiButton(closeBtn, "CLOSE")) showControls = false;
+                }
             EndDrawing();
             continue;
         }
@@ -546,12 +626,15 @@ int main(int argc, char** argv) {
 
         
         int remaining_players = 0;
+        int remaining_humans = 0;
+        int remaining_bots = 0;
         // determine number of remaining players (bots included).
         for (const Player& p : gameSpace.getPlayers()) {
             if (p.isAlive) remaining_players++;
+            if (p.isBot) remaining_bots++; else remaining_humans++;
         }
-        // If there's only one player left, start the game-over countdown.
-        if (remaining_players <= 1) {
+        // If there's only one player left or only bots left, start the game-over countdown.
+        if (remaining_players <= 1 || remaining_humans <= 0) {
             gameOverTimer -= dt;
             if (gameOverTimer <= 0.0f) {
                 EnableCursor(); // free the cursor for the game-over menu
