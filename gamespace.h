@@ -54,7 +54,11 @@ public:
         audioEvents.clear();
     }
 
-    void generate() {
+    // Generate the static/dynamic WORLD (platforms + asteroids) and clear the
+    // transient object pools - but NOT players. Split out of generate() so the
+    // networked server can (re)build a fresh world for a match while keeping the
+    // existing player slots (and their ids) stable across a restart.
+    void generateWorld() {
         platforms.clear();
         std::vector<Vector3> placed; // already-placed platform centers, fed to best-candidate sampling
         placed.reserve(num_of_platforms);
@@ -63,7 +67,7 @@ public:
             Platform platform;
             //MARK: Platform ID
             platform.id = nextID++;
-            
+
             // size and position are generated randomly:
             platform.generateSize(); // Random width and depth, thin height for a platform
             platform.position = bestCandidatePosition(placed, platformBuffer); // spread platforms, avoid clustering
@@ -76,7 +80,7 @@ public:
             Asteroid asteroid;
             //MARK: Asteroid ID
             asteroid.id = nextID++;
-            
+
             // size, position, and velocity are generated randomly:
             asteroid.generateSize(); // Random size for the asteroid
             float buffer = walls.halfSize * boundaryBufferAsteroids;
@@ -85,43 +89,76 @@ public:
             asteroid.generateVelocity(); // Random velocity in each direction
             asteroids.push_back(asteroid);
         }
+        rockets.clear();    // Rockets will be generated when the player shoots.
+        explosions.clear(); // Explosions will be generated when rockets detonate.
+        sparks.clear();     // VFX particles, spawned by jetpack exhaust / asteroid bursts.
+    }
+
+    // Spawn the player at a fresh start point: on top of a random platform (or
+    // the origin if none) facing the center, velocity zeroed. Shared by the
+    // initial spawn (spawnPlayers) and a match reset (resetPlayersForMatch).
+    void placePlayer(Player& player) {
+        if (!platforms.empty()) {
+            int platformIndex = static_cast<int>(RandomFloat(0, platforms.size() - 1));
+            Platform& startPlatform = platforms[platformIndex];
+            player.position = Vector3Add(startPlatform.position, Vector3{0, startPlatform.size.y / 2 + player.radius, 0}); // on top of the platform
+        } else {
+            player.position = {0.0f, 0.0f, 0.0f}; // no platforms (lobby): start at the center
+        }
+        player.startingPosition = player.position;
+        // Face the center of the game space.
+        Vector3 toCenter = Vector3Subtract({0, 0, 0}, player.position);
+        player.yaw = atan2f(toCenter.z, toCenter.x); // angle in the XZ plane
+        player.pitch = 0.0f; // look horizontally
+        player.velocity = {0.0f, 0.0f, 0.0f};
+    }
+
+    // Create the player slots (fresh ids). index 0 is the local human; index 1+
+    // get the magenta bot palette and isBot flag (the local sim's wander-bots; in
+    // networked play they're just non-local slots). Used by generate() and, with
+    // no world yet, by the server's lobby boot.
+    void spawnPlayers() {
         players.clear();
         for (int i = 0; i < number_of_players; ++i) {
             Player player;
             //MARK: Player ID
             player.id = nextPlayerID++;
-            // chose a random platform and place the player on top of it as the starting position
-            if (!platforms.empty()) {
-                int platformIndex = static_cast<int>(RandomFloat(0, platforms.size() - 1));
-                Platform& startPlatform = platforms[platformIndex];
-                player.position = Vector3Add(startPlatform.position, Vector3{0, startPlatform.size.y / 2 + player.radius, 0}); // Position player on top of the platform
-            } else {
-                player.position = {0.0f, 0.0f, 0.0f}; // If no platforms, start at the center of the game space
-            }
-            player.startingPosition = player.position; // Store the initial position of the player
-
-            // Non-local players (index 1+, the test bots) get a distinct magenta
-            // palette so they read clearly against the cyan local-player look.
             if (i > 0) {
                 player.color_outline = BOT_OUTLINE_COLOR;
                 player.color_fill = BOT_FILL_COLOR;
-                player.isBot = true; // Mark this player as a bot
+                player.isBot = true;
             }
-
-            // player direction starts facing towards the center of the game space.
-            Vector3 toCenter = Vector3Subtract({0, 0, 0}, player.position);
-            player.yaw = atan2f(toCenter.z, toCenter.x); // Yaw is the angle in the XZ plane, so use atan2 with z and x.
-            player.pitch = 0.0f; // Start looking horizontally, no pitch.
-
-            // player velocity starts at zero.  Default speed is set in the Player class.
-            // player health, fuel, and ammo start at their default values defined in the Player class.
-            
+            placePlayer(player);
             players.push_back(player);
         }
-        rockets.clear(); // Rockets will be generated when the player shoots.
-        explosions.clear(); // Explosions will be generated when rockets detonate.
-        sparks.clear(); // VFX particles, spawned by jetpack exhaust / asteroid bursts.
+    }
+
+    void generate() {
+        generateWorld();
+        spawnPlayers();
     };
+
+    // Reset the EXISTING player slots for a fresh match without changing their
+    // ids/count (Player isn't copy-assignable - const members - so reset fields
+    // individually). Keeps the server's slot<->client mapping stable across a
+    // restart. Call after generateWorld() so placePlayer has platforms to use.
+    void resetPlayersForMatch() {
+        for (Player& p : players) {
+            p.health  = PLAYER_STARTING_HEALTH;
+            p.fuel    = PLAYER_STARTING_FUEL;
+            p.ammo    = PLAYER_STARTING_AMMO;
+            p.isAlive = true;
+            p.score   = 0;
+            p.deathBurstSpawned = false;
+            p.flashTimer    = 0.0f;
+            p.coolDownTime  = 0.0f;
+            p.isUsingJetpack = false;
+            placePlayer(p); // reposition on the new platforms + zero velocity/orientation
+        }
+        rockets.clear();
+        explosions.clear();
+        sparks.clear();
+    }
 
     // MARK: Update Objects
     void updatePositions(float dt) {

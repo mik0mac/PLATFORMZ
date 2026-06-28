@@ -163,30 +163,60 @@ int main(int argc, char** argv) {
     bool        nameFocused = false; // text field has keyboard focus
     bool        showControls = false; // controls popup is open
 
-    // TITLE -> PLAYING: stand up a fresh run. Local hosts the sim; networked
-    // kicks off the connection (the connecting-screen guard below covers the
-    // wait) and resets the per-session prediction/flash state.
-    // halfSize/platforms/asteroids set the local map preset (small/medium/large);
-    // ignored when networked, where the server owns the world.
+    // Networked client connects once, on launch: the title screen then acts as a
+    // live lobby (the server owns the world and only starts it on request). Local
+    // mode has no server.
+    if (networked) {
+        net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
+        TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
+    }
+
+    // START from the title. Local: stand up a fresh run with the chosen map preset
+    // (small/medium/large). Networked: ask the server to start/restart a match -
+    // the screen flips to PLAYING when the server's phase says so (see the loop).
     auto startGame = [&](float halfSize, int platforms, int asteroids) {
         if (networked) {
-            net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
-            TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
-            myIndex = -1; inputSeq = 0; predInit = false; prevHealth = -1; netHurt = 0.0f;
-        } else {
-            gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
-            gameSpace.generate(); // platforms, asteroids, and player slots
-            botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
+            // Send the chosen map preset; the server applies it before generating
+            // the world (first press wins for the round).
+            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids));
+            return;
         }
+        gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
+        gameSpace.generate(); // platforms, asteroids, and player slots
+        botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
         DisableCursor(); // capture the mouse for free-look while playing
         screen = GameScreen::PLAYING;
     };
 
-    // GAME_OVER -> TITLE: drop the connection (networked) and wipe the world so
-    // the next run starts clean.
+    // Networked: the server's phase just went PLAYING (we started, a peer started,
+    // or we joined a running match). Reset per-match prediction/flash state (NOT
+    // inputSeq - it stays monotonic across matches so the server doesn't discard
+    // our packets) and enter the match. myIndex persists; predInit=false re-seeds
+    // the look from the server's spawn orientation.
+    auto enterNetworkedMatch = [&]() {
+        predInit = false; prevHealth = -1; netHurt = 0.0f;
+        DisableCursor();
+        screen = GameScreen::PLAYING;
+    };
+
+    // Networked: drain server frames (apply state, track our slot), returning the
+    // latest match phase. Used by the lobby/game-over screens, which otherwise
+    // wouldn't poll the socket, so they can react to phase changes.
+    auto pumpNet = [&]() -> ServerMessage::Phase {
+        ServerMessage::Phase phase = ServerMessage::Phase::Unknown;
+        for (const std::string& frame : net.poll()) {
+            ServerMessage m = applyMessage(frame, gameSpace);
+            if (m.type == ServerMessage::Type::Welcome) myIndex = m.playerId;
+            else if (m.type == ServerMessage::Type::State) phase = m.phase;
+        }
+        return phase;
+    };
+
+    // GAME_OVER/title -> TITLE. Local: wipe the world for a clean restart.
+    // Networked: stay connected (back to the lobby) so START can restart; the
+    // server owns the world and resyncs it. The NetClient dtor closes on exit.
     auto returnToTitle = [&]() {
-        if (networked) net.stop();
-        gameSpace.clear();
+        if (!networked) gameSpace.clear();
         EnableCursor(); // free the cursor for the title menu
         screen = GameScreen::TITLE;
     };
@@ -215,6 +245,13 @@ int main(int argc, char** argv) {
         // Placeholder front/end screens. Each handles its own input + draw and
         // skips the rest of the loop; PLAYING (below) is the original game body.
         if (screen == GameScreen::TITLE) {
+            // Networked: the title screen is the lobby - pump the server so the
+            // player list stays live and we follow the server into a match (we
+            // started it, a peer did, or we joined one already running).
+            if (networked && pumpNet() == ServerMessage::Phase::Playing) {
+                enterNetworkedMatch();
+                continue;
+            }
             // Esc closes the controls popup (no cursor toggle on the menu).
             if (showControls && IsKeyPressed(KEY_ESCAPE)) showControls = false;
             // Snapshot the popup state at frame start: CLOSE is only handled if the
@@ -232,40 +269,69 @@ int main(int argc, char** argv) {
                 Rectangle nameBox = {350, 240, 300, 40};
                 UiTextField(nameBox, playerName, nameFocused, 16, 20);
 
-                // Players panel: GAMESPACE_NUMBER_OF_PLAYERS slots - slot 1 is the
-                // local human, the rest are bot-filled (local play spawns exactly
-                // 1 human + N-1 bots). Networked shows only you; the real connected
-                // list is deferred lobby work. Panel height tracks the row count.
-                const int   rowsShown = networked ? 1 : GAMESPACE_NUMBER_OF_PLAYERS;
+                // Players panel. Local: GAMESPACE_NUMBER_OF_PLAYERS slots - slot 1
+                // is the human, the rest bot-filled (local play spawns 1 human +
+                // N-1 bots). Networked: the live lobby - connected slots from the
+                // server (isConnected), yours marked (YOU). Panel height tracks the
+                // row count.
+                std::vector<Player>& titlePlayers = gameSpace.getPlayers();
+                int rowsShown;
+                if (networked) {
+                    rowsShown = 0;
+                    for (const Player& p : titlePlayers) if (p.isConnected) rowsShown++;
+                    if (rowsShown == 0) rowsShown = 1; // "waiting" line
+                } else {
+                    rowsShown = GAMESPACE_NUMBER_OF_PLAYERS;
+                }
                 const float rowH = 24.0f, headerH = 30.0f;
                 Rectangle playersBox = {350, 300, 300, headerH + rowsShown * rowH + 10.0f};
                 UiPanel(playersBox);
                 DrawText("PLAYERS", (int)playersBox.x + 10, (int)playersBox.y + 8, 14, ui::OUTLINE);
-                for (int i = 0; i < rowsShown; ++i) {
-                    int ry = (int)(playersBox.y + headerH + i * rowH);
-                    if (i == 0)
-                        DrawText(TextFormat("1. %s (YOU)", playerName.empty() ? "PLAYER" : playerName.c_str()),
-                                 (int)playersBox.x + 10, ry, 18, RAYWHITE);
-                    else
-                        DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT]),
-                                 (int)playersBox.x + 10, ry, 18, ui::OUTLINE);
+                if (networked) {
+                    int row = 0;
+                    for (int i = 0; i < (int)titlePlayers.size(); ++i) {
+                        if (!titlePlayers[i].isConnected) continue;
+                        int ry = (int)(playersBox.y + headerH + row * rowH);
+                        bool you = (i == myIndex);
+                        DrawText(TextFormat("%d. %s%s", i + 1,
+                                            you ? (playerName.empty() ? "PLAYER" : playerName.c_str())
+                                                : TextFormat("PLAYER %d", i + 1),
+                                            you ? " (YOU)" : ""),
+                                 (int)playersBox.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
+                        row++;
+                    }
+                    if (row == 0)
+                        DrawText("Waiting for players...", (int)playersBox.x + 10,
+                                 (int)(playersBox.y + headerH), 18, GRAY);
+                } else {
+                    for (int i = 0; i < rowsShown; ++i) {
+                        int ry = (int)(playersBox.y + headerH + i * rowH);
+                        if (i == 0)
+                            DrawText(TextFormat("1. %s (YOU)", playerName.empty() ? "PLAYER" : playerName.c_str()),
+                                     (int)playersBox.x + 10, ry, 18, RAYWHITE);
+                        else
+                            DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT]),
+                                     (int)playersBox.x + 10, ry, 18, ui::OUTLINE);
+                    }
                 }
 
-                // Start buttons, placed below the (variable-height) panel. Local:
-                // pick a map size. Networked: one START (server owns the world).
+                // Start buttons (map-size presets) below the variable-height panel.
+                // Same three sizes in both modes: local generates the world; in
+                // networked play the chosen preset rides the start request and the
+                // server builds it (first press wins). Networked gates on being
+                // connected with a slot; local is always ready.
                 float startY = playersBox.y + playersBox.height + 20.0f;
-                if (networked) {
-                    Rectangle b = {400, startY, 200, 50};
-                    if (uiEnabled && UiButton(b, "START"))
-                        startGame(GAMESPACE_HALF_SIZE, GAMESPACE_NUMBER_OF_PLATFORMS, GAMESPACE_NUMBER_OF_ASTEROIDS);
-                } else {
+                bool ready = !networked || (net.isOpen() && myIndex >= 0);
+                if (ready) {
                     Rectangle bs = {210, startY, 180, 50};
                     Rectangle bm = {410, startY, 180, 50};
                     Rectangle bl = {610, startY, 180, 50};
-                    if (uiEnabled && UiButton(bs, "SMALL"))  startGame(30.0f, 12, 10);
-                    if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(45.0f, 24, 14);
-                    if (uiEnabled && UiButton(bl, "LARGE"))
-                        startGame(GAMESPACE_HALF_SIZE, GAMESPACE_NUMBER_OF_PLATFORMS, GAMESPACE_NUMBER_OF_ASTEROIDS);
+                    if (uiEnabled && UiButton(bs, "SMALL"))  startGame(mapSizePresets["SMALL"].halfSize, mapSizePresets["SMALL"].numPlatforms, mapSizePresets["SMALL"].numAsteroids);
+                    if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(mapSizePresets["MEDIUM"].halfSize, mapSizePresets["MEDIUM"].numPlatforms, mapSizePresets["MEDIUM"].numAsteroids);
+                    if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
+                } else {
+                    UiTextCentered(net.isOpen() ? "JOINING..." : "CONNECTING...",
+                                   screenWidth, (int)startY + 14, 20, GRAY);
                 }
 
                 Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
@@ -294,6 +360,12 @@ int main(int argc, char** argv) {
             continue;
         }
         if (screen == GameScreen::GAME_OVER) {
+            // Networked: keep pumping the server. If a match (re)starts (a peer
+            // pressed START, or we did after returning to the lobby), follow it in.
+            if (networked && pumpNet() == ServerMessage::Phase::Playing) {
+                enterNetworkedMatch();
+                continue;
+            }
             if (startPressed()) returnToTitle();
             BeginDrawing();
             ClearBackground(BLACK);
@@ -335,6 +407,7 @@ int main(int argc, char** argv) {
         PlayerInput in{};                  // this frame's local intent (also read by the HUD)
         Player*     localPlayer = nullptr; // the player the camera + HUD follow (null until connected)
         int         localIndex  = networked ? myIndex : 0;
+        ServerMessage::Phase netPhase = ServerMessage::Phase::Unknown; // latest server phase (networked); drives the game-over edge below
 
         if (networked) {
             // Gather input and predict look locally. Position is server-
@@ -365,6 +438,8 @@ int main(int argc, char** argv) {
                 if (m.type == ServerMessage::Type::Welcome) {
                     myIndex = m.playerId;
                     TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
+                } else if (m.type == ServerMessage::Type::State) {
+                    netPhase = m.phase; // track phase so we can detect the match ending
                 }
             }
             localIndex = myIndex;
@@ -625,25 +700,34 @@ int main(int argc, char** argv) {
         // MARK: game over trigger
 
         
-        int remaining_players = 0;
-        int remaining_humans = 0;
-        int remaining_bots = 0;
-        // determine number of remaining players (bots included).
-        for (const Player& p : gameSpace.getPlayers()) {
-            if (p.isAlive) remaining_players++;
-            if (p.isBot) remaining_bots++; else remaining_humans++;
-        }
-        // If there's only one player left or only bots left, start the game-over countdown.
-        if (remaining_players <= 1 || remaining_humans <= 0) {
-            gameOverTimer -= dt;
-            if (gameOverTimer <= 0.0f) {
+        if (networked) {
+            // Networked: the SERVER decides when the match ends (last-player-
+            // standing among connected players). Follow its phase into GAME_OVER.
+            if (netPhase == ServerMessage::Phase::GameOver) {
                 EnableCursor(); // free the cursor for the game-over menu
                 screen = GameScreen::GAME_OVER;
             }
-        }
-        else {
-            // Reset the game-over timer if more than one player is alive.  Like another player joined the game.
-            gameOverTimer = GAME_OVER_TIMER; // Reset the timer to the initial value
+        } else {
+            int remaining_players = 0;
+            int remaining_humans = 0;
+            int remaining_bots = 0;
+            // determine number of remaining players (bots included).
+            for (const Player& p : gameSpace.getPlayers()) {
+                if (p.isAlive) remaining_players++;
+                if (p.isBot) remaining_bots++; else remaining_humans++;
+            }
+            // If there's only one player left or only bots left, start the game-over countdown.
+            if (remaining_players <= 1 || remaining_humans <= 0) {
+                gameOverTimer -= dt;
+                if (gameOverTimer <= 0.0f) {
+                    EnableCursor(); // free the cursor for the game-over menu
+                    screen = GameScreen::GAME_OVER;
+                }
+            }
+            else {
+                // Reset the game-over timer if more than one player is alive.  Like another player joined the game.
+                gameOverTimer = GAME_OVER_TIMER; // Reset the timer to the initial value
+            }
         }
         
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
