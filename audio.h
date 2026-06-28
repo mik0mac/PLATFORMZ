@@ -26,16 +26,21 @@ public:
         UnloadSound(sound);
     }
 
-    void trigger(Vector3 sourcePos, Vector3 listenerPos, float minDist = 1.0f, float maxDist = 40.0f) {
+    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection, float minDist = 1.0f, float maxDist = 80.0f) {
         float dist = Vector3Distance(sourcePos, listenerPos);
         if (dist > maxDist) return;
 
-        float d = fmaxf(dist, minDist);
-        float volume = Clamp((minDist * minDist) / (d * d), 0.0f, 1.0f);
+        // float d = fmaxf(dist, minDist);
+        // float volume = Clamp((minDist * minDist) / (d * d), 0.0f, 1.0f);
+        float volume = 1.0f - dist / maxDist; // linear falloff
+        volume = Clamp(volume, 0.125f, 1.0f);
 
-        float dx = sourcePos.x - listenerPos.x;
+        float dx = sourcePos.x - listenerDirection.x;
         float pan = (Clamp(dx / maxDist, -1.0f, 1.0f) + 1.0f) * 0.5f;
 
+        //testing
+        // volume = 1.0f;
+        // pan = 0.5f;
         SetSoundVolume(sound, volume * baseVolume);
         SetSoundPan(sound, pan);
         PlaySound(sound);
@@ -62,9 +67,9 @@ public:
         queue.push_back({ &fx, sourcePos });
     }
 
-    void flush(Vector3 listenerPos) {
+    void flush(Player& player) {
         for (auto& event : queue) {
-            event.fx->trigger(event.sourcePos, listenerPos);
+            event.fx->trigger(event.sourcePos, player.position, player.ForwardFlat());
         }
         queue.clear();
     }
