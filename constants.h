@@ -9,8 +9,12 @@ enum AudioFXId {
     FX_ASTEROID_BREAK,
     FX_PLAYER_HIT,
     FX_PLAYER_DEATH,
+    FX_NO_AMMO,
     FX_COUNT
 };
+
+const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  The distance at which the sound is the softest.
+const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
 
 //MARK: Physics Constants
 const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
@@ -81,7 +85,7 @@ const float PLAYER_ACCELERATION_WALK = 7.5f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 16.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 12.0f; // units/sec^
 
-const int PLAYER_MAX_AMMO = 100;
+const int PLAYER_MAX_AMMO = 2;
 const int PLAYER_STARTING_AMMO = PLAYER_MAX_AMMO;
 const int PLAYER_MAX_HEALTH = 100;
 const int PLAYER_STARTING_HEALTH = PLAYER_MAX_HEALTH;

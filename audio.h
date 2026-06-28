@@ -11,11 +11,12 @@
 
 class audioFX {
 public:
-    audioFX(const std::string& file, float volume = 1.0f, bool localOnly = false)
-        : filename(file), baseVolume(volume), localPlayerOnly(localOnly) {}
+    audioFX(const std::string& file, float volume = 1.0f, bool localOnly = false, bool spacial = true)
+        : filename(file), baseVolume(volume), localPlayerOnly(localOnly), spacial(spacial) {}
 
     float baseVolume;
     bool localPlayerOnly;
+    bool spacial;
 
     void load() {
         sound = LoadSound(filename.c_str());
@@ -26,17 +27,22 @@ public:
         UnloadSound(sound);
     }
 
-    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection, float minDist = 1.0f, float maxDist = 80.0f) {
-        float dist = Vector3Distance(sourcePos, listenerPos);
-        if (dist > maxDist) return;
+    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection, bool spacial = true) {
+        // for sounds that don't need to exist in 3D space.
+        if (!spacial) {
+            SetSoundVolume(sound, baseVolume);
+            SetSoundPan(sound, 0.5f);
+            PlaySound(sound);
+            return;
+        }
 
-        // float d = fmaxf(dist, minDist);
-        // float volume = Clamp((minDist * minDist) / (d * d), 0.0f, 1.0f);
-        float volume = 1.0f - dist / maxDist; // linear falloff
-        volume = Clamp(volume, 0.125f, 1.0f);
+        float dist = Vector3Distance(sourcePos, listenerPos);
+
+        float volume = 1.0f - dist / AUDIO_MAX_DISTANCE; // linear falloff
+        volume = Clamp(volume, AUDIO_MIN_VOLUME, 1.0f);
 
         float dx = sourcePos.x - listenerDirection.x;
-        float pan = (Clamp(dx / maxDist, -1.0f, 1.0f) + 1.0f) * 0.5f;
+        float pan = (Clamp(dx / AUDIO_MAX_DISTANCE, -1.0f, 1.0f) + 1.0f) * 0.5f;
 
         //testing
         // volume = 1.0f;

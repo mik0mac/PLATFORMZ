@@ -65,9 +65,10 @@ int main(int argc, char** argv) {
     audioFX fxTable[FX_COUNT] = {
         audioFX("assets/sounds/rocket_launch.wav",  1.0f), // FX_ROCKET_LAUNCH
         audioFX("assets/sounds/explosion.wav",      1.0f), // FX_EXPLOSION
-        audioFX("assets/sounds/asteroid_break.wav", 1.0f), // FX_ASTEROID_BREAK
-        audioFX("assets/sounds/player_hit.wav",     1.0f), // FX_PLAYER_HIT
-        audioFX("assets/sounds/player_death.wav",   1.0f), // FX_PLAYER_DEATH
+        audioFX("assets/sounds/asteroid_break.wav", 1.0f, true, false), // FX_ASTEROID_BREAK (this is more of a bonus sound now)
+        audioFX("assets/sounds/player_hit.wav",     1.0f, true, false), // FX_PLAYER_HIT (local player only, not spatial)
+        audioFX("assets/sounds/player_death.wav",   1.0f, true, false), // FX_PLAYER_DEATH (local player only, not spatial)
+        audioFX("assets/sounds/no_ammo.wav",        0.5f, true, false)  // FX_NO_AMMO (local player only, not spatial)
     };
     for (audioFX& fx : fxTable) fx.load();
 
@@ -362,7 +363,12 @@ int main(int argc, char** argv) {
                 bool predicted = networked && ev.owner == myId && myId != 0u &&
                     (ev.fx == FX_ROCKET_LAUNCH || ev.fx == FX_PLAYER_HIT || ev.fx == FX_PLAYER_DEATH);
                 if (predicted) continue;
-                audioQueue.push(fxTable[ev.fx], ev.pos);
+                // Mark the event as local when we own it, so AudioQueue::push
+                // doesn't drop our own localPlayerOnly sounds (e.g. FX_NO_AMMO,
+                // and local-mode hit/death). Events owned by other players keep
+                // isLocal=false and their localPlayerOnly sounds stay filtered.
+                bool isLocal = ev.owner == myId && myId != 0u;
+                audioQueue.push(fxTable[ev.fx], ev.pos, isLocal);
             }
             gameSpace.getAudioEvents().clear();
         }
