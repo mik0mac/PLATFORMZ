@@ -89,6 +89,10 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));
             player.velocity = Vector3Add(player.velocity, kickback);
         }
+        else {
+            // no ammo, play a SFX.
+            gameSpace.emitAudio(FX_NO_AMMO, player.position, player.id);
+        }
     }
 }
 
