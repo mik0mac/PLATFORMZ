@@ -21,9 +21,9 @@ const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 me
 const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
 
 //MARK: GameSpace Constants
-const float GAMESPACE_HALF_SIZE = 40.0f; // half-size of the game space cube, units.  Also used by Walls.
-const int GAMESPACE_NUMBER_OF_PLATFORMS = 16; // Number of platforms in the game space
-const int GAMESPACE_NUMBER_OF_ASTEROIDS = 8; // Number of asteroids in the game space
+const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
+const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
+const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 2; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
 
 //MARK: Networking (client interpolation) Constants
@@ -45,7 +45,7 @@ const float PLATFORM_ELASTICITY_PLAYER = 0.25f; // For bouncy platforms, 0.0 - 1
 const float PLATFORM_ELASTICITY_ASTEROID = 1.0f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
 
 const float PLATFORM_MIN_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 12.0f; // 5.0f; // Minimum width of the platform
-const float PLATFORM_MAX_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
+const float PLATFORM_MAX_WIDTH = 18.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
 const float PLATFORM_MIN_HEIGHT = 0.25f; // Minimum height of the platform
 const float PLATFORM_MAX_HEIGHT = 0.25f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
@@ -85,7 +85,7 @@ const float PLAYER_ACCELERATION_WALK = 7.5f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 16.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 12.0f; // units/sec^
 
-const int PLAYER_MAX_AMMO = 2;
+const int PLAYER_MAX_AMMO = 100;
 const int PLAYER_STARTING_AMMO = PLAYER_MAX_AMMO;
 const int PLAYER_MAX_HEALTH = 100;
 const int PLAYER_STARTING_HEALTH = PLAYER_MAX_HEALTH;
@@ -108,7 +108,7 @@ const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target hea
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 
 //MARK: Asteroid Constants
-const int ASTEROID_STARTING_HEALTH = 25;
+const int ASTEROID_STARTING_HEALTH = 50;
 const int ASTEROID_DAMAGE = 20;
 const int ASTEROID_SCORE_AWARD = 100;
 const float ASTEROID_FUEL_AWARD = 20.0f;
