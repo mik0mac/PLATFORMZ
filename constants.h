@@ -83,6 +83,8 @@ const float PLAYER_SCALE = 2.0f;         // proportional size multiplier
 const float PLAYER_BASE_RADIUS = 1.0f;   // body/collider radius in units, before scale
 const float PLAYER_RADIUS = PLAYER_BASE_RADIUS * PLAYER_SCALE; // == 2.0 (preserves current size)
 
+const int PLAYER_DAMAGE = 10; // Damage dealt to other players or asteroids when colliding.
+
 //MARK: Reticle Constants
 // The reticle is a purely visual in-world object (no collision): the player's
 // aiming device and, to others, an indicator of where they are looking. It is

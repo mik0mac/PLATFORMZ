@@ -259,9 +259,25 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                 if (asteroid.isDestroyed) continue;
 
                 if (SphereIntersectsSphere(asteroid.position, asteroid.size, player.position, player.radius)) {
+                    // damage and audio FX.
                     player.takeDamage(asteroid.damage);
                     if (player.isAlive) space.emitAudio(FX_PLAYER_HIT, player.position, player.id);
-                    asteroid.isDestroyed = true; // asteroid breaks apart on impact with player
+                    asteroid.takeDamage(player.damage);
+                    // if (asteroid.isDestroyed) space.emitAudio(FX_ASTEROID_HIT, asteroid.position, asteroid.id);
+
+                    // velocity bounce: asteroid bounces off the player, player bounces off the asteroid.
+                    // The objects need to be pushed clear of each other so they don't re-collide next frame.
+                    Vector3 offset = Vector3Subtract(player.position, asteroid.position);
+                    float dist = Vector3Length(offset);
+                    if (dist > 1e-4f) {
+                        Vector3 normal = Vector3Scale(offset, 1.0f / dist);
+                        asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), 1.0f); // asteroid bounces off the player, same elasticity as the walls
+                        player.velocity = Vector3Scale(Vector3Reflect(player.velocity, normal), 1.0f); // player bounces off the asteroid, same elasticity as the walls
+                        // push clear of the overlap
+                        float overlap = (asteroid.size + player.radius) - dist;
+                        asteroid.position = Vector3Subtract(asteroid.position, Vector3Scale(normal, overlap *0.5f));
+                        player.position = Vector3Add(player.position, Vector3Scale(normal, overlap *0.5f));
+                    }
                 }
             }
         });
@@ -421,6 +437,36 @@ void CheckPlayerWallCollisions(GameSpace& space) {
         // if (hitWall) {
         //     player.takeDamage(walls.damage);
         // }
+    }
+}
+
+//MARK: Player vs Player
+void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
+    auto& players = space.getPlayers();
+
+    for (int i = 0; i < (int)players.size(); i++) {
+        Player& playerA = players[i];
+        if (!playerA.isAlive) continue;
+
+        for (int j = i + 1; j < (int)players.size(); j++) {
+            Player& playerB = players[j];
+            if (!playerB.isAlive) continue;
+
+            if (SphereIntersectsSphere(playerA.position, playerA.radius, playerB.position, playerB.radius)) {
+                // Both players take damage on collision.
+                playerA.takeDamage(playerB.damage);
+                playerB.takeDamage(playerA.damage);
+
+                if (playerA.isAlive) space.emitAudio(FX_PLAYER_HIT, playerA.position, playerA.id);
+                if (playerB.isAlive) space.emitAudio(FX_PLAYER_HIT, playerB.position, playerB.id);
+
+                // Push both players away from each other on impact.
+                Vector3 pushDirection = Vector3Normalize(Vector3Subtract(playerA.position, playerB.position));
+                float pushStrength = 1.0f; // Adjust this value to control the push strength
+                playerA.velocity = Vector3Add(playerA.velocity, Vector3Scale(pushDirection, pushStrength));
+                playerB.velocity = Vector3Add(playerB.velocity, Vector3Scale(pushDirection, -pushStrength));
+            }
+        }
     }
 }
 

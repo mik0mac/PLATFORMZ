@@ -176,6 +176,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.fuel     = jo.value("fuel", 0.0f);
                 p.ammo     = jo.value("ammo", 0);
                 p.isAlive  = jo.value("alive", true);
+                p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
                 p.isConnected = jo.value("active", true); // hide empty slots client-side
             });
     }
@@ -195,6 +196,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 a.velocity    = vec3(jo, "vx", "vy", "vz");
                 a.size        = jo.value("size", a.size);
                 a.health      = jo.value("hp", a.health);
+                a.flashTimer  = jo.value("flash", 0.0f); // server-driven hot-glow damage flash
                 a.isDestroyed = jo.value("dead", false);
             });
     }
