@@ -26,6 +26,8 @@ const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 2; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
 
+const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
+
 //MARK: Networking (client interpolation) Constants
 // How far in the past remote entities are rendered, so we interpolate between
 // real snapshots instead of extrapolating. Bigger = smoother under jitter but
