@@ -61,11 +61,12 @@ int main(int argc, char** argv) {
     // AudioFXId (the shared client/server wire id) to a loaded sound; game
     // events arrive as ids (locally or over the network) and index into it.
     InitAudioDevice();
+    SetMasterVolume(1.0f);
     audioFX fxTable[FX_COUNT] = {
-        audioFX("assets/sounds/rocket_launch.wav",  0.8f), // FX_ROCKET_LAUNCH
+        audioFX("assets/sounds/rocket_launch.wav",  1.0f), // FX_ROCKET_LAUNCH
         audioFX("assets/sounds/explosion.wav",      1.0f), // FX_EXPLOSION
-        audioFX("assets/sounds/asteroid_break.wav", 0.9f), // FX_ASTEROID_BREAK
-        audioFX("assets/sounds/player_hit.wav",     0.9f), // FX_PLAYER_HIT
+        audioFX("assets/sounds/asteroid_break.wav", 1.0f), // FX_ASTEROID_BREAK
+        audioFX("assets/sounds/player_hit.wav",     1.0f), // FX_PLAYER_HIT
         audioFX("assets/sounds/player_death.wav",   1.0f), // FX_PLAYER_DEATH
     };
     for (audioFX& fx : fxTable) fx.load();
@@ -372,7 +373,7 @@ int main(int argc, char** argv) {
         // first server packet (the connecting-screen guard below handles that
         // frame), and nothing has queued a sound yet anyway.
         if (localPlayer != nullptr)
-            audioQueue.flush(localPlayer->position);
+            audioQueue.flush(localPlayer ? *localPlayer : gameSpace.getPlayers()[0]);
 
         if (IsKeyPressed(KEY_ESCAPE)) {
             // toggle cursor capture so you can alt-tab / quit comfortably
