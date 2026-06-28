@@ -98,6 +98,33 @@ only `main.cpp` and `collisions.cpp` as translation units.
 WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold the
 earth-gravity key (LEFT_SUPER/⌘) for stronger gravity · Esc toggle cursor capture.
 
+## Web build (Emscripten / WASM) — gotchas
+`make web RAYLIB_WEB_DIR=$HOME/raylib` builds the browser client; the shell is
+`shell.html` (baked in at compile time, so re-run after editing it). The web raylib
+at `~/raylib` is built as **OpenGL ES2 / WebGL1** (GLSL ES 100). Things that bite
+on the web but not native (see `docs/multiplayer-testing.md` for the full setup):
+
+- **Shaders need a GLSL ES 100 variant.** A desktop `#version 330` shader will not
+  compile under WebGL1, leaving `BeginShaderMode` with no valid program — which
+  breaks *every* draw inside the shader block. Provide an ES100 version under
+  `#if defined(__EMSCRIPTEN__)` (`#version 100` + `precision mediump float;`,
+  `varying` not `in`, `gl_FragColor` not `out`, `texture2D()` not `texture()`) and
+  guard usage with `IsShaderValid(s) && s.id != rlGetShaderIdDefault()` so a failed
+  shader degrades gracefully instead of breaking the frame. See the grayscale
+  shader in `main.cpp` for the pattern.
+- **`emcc` needs `EMSDK_PYTHON`** set to a ≥3.10 python or it fails its assert and
+  silently leaves the old wasm (`export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14`).
+  `./rebuild-all.sh` sets this and force-rebuilds all three binaries.
+- **Audio + `Module.HEAPF32`.** The Makefile passes `-sEXPORTED_RUNTIME_METHODS=HEAPF32`
+  because raylib 5.5's miniaudio reads `Module.HEAPF32.buffer` in its Web Audio
+  callback, which emscripten 6.x no longer attaches by default. `shell.html` also
+  resumes the suspended AudioContext on the first gesture (browsers start it
+  suspended; the title screen can be started with a key, which miniaudio's
+  click/touchend-only auto-unlock misses).
+- **Pointer lock.** `shell.html` requests pointer lock explicitly on canvas
+  mousedown (Safari ignores raylib's deferred request); `IsCursorHidden()` gates
+  game input, so without the lock the game is uncontrollable.
+
 ## Known quirks — leave as-is unless asked
 - `Rocket::updatePos` has a commented-out gravity line — intentional (rockets
   fly straight). Leave it.

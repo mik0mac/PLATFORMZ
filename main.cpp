@@ -80,9 +80,25 @@ int main(int argc, char** argv) {
 
     // Greyscale post-process, used on death. Fragment-only shader (the 0 vertex
     // arg means "use raylib's default vertex shader"); kept inline so there's no
-    // extra file to ship. #version 330 = OpenGL 3.3, raylib's desktop context.
-    // colDiffuse is applied AFTER the luminance, so any draw tint still shows
-    // through (e.g. the glitch's red/blue split copies keep a faint fringe).
+    // extra file to ship. colDiffuse is applied AFTER the luminance, so any draw
+    // tint still shows through (e.g. the glitch's red/blue split copies keep a
+    // faint fringe). Two dialects: desktop is OpenGL 3.3 (GLSL 330); the web build
+    // (raylib PLATFORM_WEB = OpenGL ES2 / WebGL1) needs GLSL ES 100, else this
+    // won't compile and BeginShaderMode would bind no valid program.
+#if defined(__EMSCRIPTEN__)
+    const char* grayscaleFrag =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "varying vec2 fragTexCoord;\n"
+        "varying vec4 fragColor;\n"
+        "uniform sampler2D texture0;\n"
+        "uniform vec4 colDiffuse;\n"
+        "void main() {\n"
+        "    vec4 texel = texture2D(texture0, fragTexCoord);\n"
+        "    float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));\n" // Rec.601 luma
+        "    gl_FragColor = vec4(vec3(lum), texel.a) * colDiffuse * fragColor;\n"
+        "}\n";
+#else
     const char* grayscaleFrag =
         "#version 330\n"
         "in vec2 fragTexCoord;\n"
@@ -95,7 +111,15 @@ int main(int argc, char** argv) {
         "    float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));\n" // Rec.601 luma
         "    finalColor = vec4(vec3(lum), texel.a) * colDiffuse * fragColor;\n"
         "}\n";
+#endif
     Shader grayscaleShader = LoadShaderFromMemory(0, grayscaleFrag);
+    // Composite through the shader only if it actually compiled+linked. On failure
+    // raylib leaves an unusable program; BeginShaderMode would then break every
+    // draw inside it (the glitch FX). When invalid we skip it and still show the
+    // glitch - degrading to "no greyscale" instead of "nothing". Guards every
+    // BeginShaderMode(grayscaleShader) below.
+    const bool grayscaleOK = IsShaderValid(grayscaleShader) &&
+                             grayscaleShader.id != rlGetShaderIdDefault();
 
     // Game state lives here, declared once, mutated every frame
     GameSpace gameSpace; // The main game space containing platforms, asteroids, and players
@@ -190,13 +214,25 @@ int main(int argc, char** argv) {
                 ClearBackground(BLACK);
                 // Greyscale blit of the last rendered world frame (sceneTarget
                 // persists), then the overlay - the dead-world look carries over.
-                BeginShaderMode(grayscaleShader);
+                if (grayscaleOK) BeginShaderMode(grayscaleShader);
                     DrawTexturePro(sceneTarget.texture,
                         {0, 0, (float)sceneTarget.texture.width, -(float)sceneTarget.texture.height},
                         {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
-                EndShaderMode();
+                if (grayscaleOK) EndShaderMode();
                 DrawCentered("GAME OVER", 240, 80, RED);
-                DrawCentered("Press any key to return to title", 360, 20, GRAY);
+                // Show the local player's score and survival status (alive/dead).
+                for (Player& p : gameSpace.getPlayers()) {
+                    if (p.id == myIndex) {
+                        if (p.isAlive) {
+                            DrawCentered("You survived!", 360, 20, BLUE);
+                        }
+                        else {
+                            DrawCentered("You were eliminated.", 360, 20, RED);
+                        }
+                        DrawCentered(TextFormat("SCORE: %d", p.score), 400, 20, GRAY);
+                    }
+                }
+                DrawCentered("Press any key to return to title", 440, 20, GRAY);
             EndDrawing();
             continue;
         }
@@ -436,7 +472,7 @@ int main(int argc, char** argv) {
             const float DEATH_GLITCH = 0.5f;
             if (!player.isAlive) hurt = DEATH_GLITCH;
 
-            if (!player.isAlive) BeginShaderMode(grayscaleShader);
+            if (!player.isAlive && grayscaleOK) BeginShaderMode(grayscaleShader);
             if (hurt <= 0.0f) {
                 // Clean path: one flipped full-screen blit.
                 DrawTexturePro(tex, {0, 0, (float)tex.width, -(float)tex.height},
@@ -472,12 +508,12 @@ int main(int argc, char** argv) {
                     DrawRectangle(0, sy, screenWidth, sh, {255, 255, 255, a});
                 }
             }
-            if (!player.isAlive) EndShaderMode();
+            if (!player.isAlive && grayscaleOK) EndShaderMode();
 // MARK: HUD
             // text size, x, y, color.
-            // draw onscreen text HUD. (Death now transitions to the GAME_OVER
-            // screen below, so the dead frame still renders with its glitch but
-            // doesn't draw the live HUD.)
+            // draw onscreen text HUD. (Death transitions to the GAME_OVER screen
+            // below, which owns all death text, so the dead frame renders only its
+            // glitched/greyscale frozen world here - no live HUD, no death text.)
             if (player.isAlive) {
                 // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen
                 // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
@@ -489,13 +525,23 @@ int main(int argc, char** argv) {
                 }
             }
 
+
         EndDrawing();
 
         // The player just died: this frame already rendered with the death
         // glitch/greyscale; flip to GAME_OVER so the next frame shows the
         // end screen over the frozen world.
-        if (!player.isAlive) screen = GameScreen::GAME_OVER;
+        // MARK: game over trigger
 
+        
+        int remaining_players = 0;
+        for (const Player& p : gameSpace.getPlayers()) {
+            if (p.isAlive) remaining_players++;
+        }
+        if (remaining_players <= 1) {
+            screen = GameScreen::GAME_OVER;
+        }
+        
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
     }
 

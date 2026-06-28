@@ -27,6 +27,56 @@
       print:    function (t) { console.log(t); },
       printErr: function (t) { console.error(t); }
     };
+
+    // Pointer lock: capture the mouse for free-look. raylib's web DisableCursor()
+    // uses emscripten's *deferred* pointer-lock request, which Chrome fires on the
+    // first click but Safari does not reliably trigger - so the cursor never
+    // captures and the game (which gates input on IsCursorHidden()) stays
+    // uncontrollable. We request it explicitly & synchronously inside the
+    // mousedown gesture, which Safari honors. raylib reads the real
+    // 'pointerlockchange' event, so its IsCursorHidden() state stays in sync no
+    // matter who initiated the lock.
+    (function () {
+      var canvas = document.getElementById('canvas');
+      var requestLock = canvas.requestPointerLock || canvas.webkitRequestPointerLock;
+      function locked() {
+        return document.pointerLockElement === canvas ||
+               document.webkitPointerLockElement === canvas;
+      }
+      canvas.addEventListener('mousedown', function () {
+        if (locked() || !requestLock) return;
+        var r = requestLock.call(canvas);
+        if (r && typeof r.catch === 'function') r.catch(function () {}); // Chrome returns a Promise
+      });
+      // Surface the case where Safari refuses the lock (e.g. security) instead of
+      // failing silently - over plain-HTTP LAN this is the most likely culprit.
+      function onErr() {
+        Module.setStatus('Pointer lock was blocked. In Safari, try localhost or ' +
+                         'an HTTPS server; otherwise click the canvas again.');
+      }
+      document.addEventListener('pointerlockerror', onErr);
+      document.addEventListener('webkitpointerlockerror', onErr);
+    })();
+
+    // Audio unlock: browsers create the Web Audio context suspended until a user
+    // gesture. raylib's miniaudio only auto-unlocks on 'click'/'touchend', so a
+    // player who starts the game with a key (the title screen accepts any key)
+    // never triggers it and the game is silent. Resume every miniaudio device
+    // context directly on the first mouse OR key gesture. Left attached so it also
+    // re-resumes if the context is suspended after the tab is backgrounded; resume
+    // on an already-running context is a cheap no-op.
+    (function () {
+      function resumeAudio() {
+        var ma = window.miniaudio;
+        if (!ma || !ma.devices) return;
+        ma.devices.forEach(function (d) {
+          if (d && d.webaudio && d.webaudio.state !== 'running') d.webaudio.resume();
+        });
+      }
+      ['mousedown', 'keydown', 'touchend'].forEach(function (ev) {
+        document.addEventListener(ev, resumeAudio, true);
+      });
+    })();
   </script>
   {{{ SCRIPT }}}
 </body>

@@ -64,7 +64,12 @@ WEB_OUT        := web/platformz.html
 WEB_CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(RAYLIB_WEB_INC)
 # -sASYNCIFY lets the existing blocking while(!WindowShouldClose()) loop yield to
 # the browser. It can be dropped once the loop uses emscripten_set_main_loop().
+# -sEXPORTED_RUNTIME_METHODS=HEAPF32: raylib 5.5's bundled miniaudio reads
+# `Module.HEAPF32.buffer` in its Web Audio callback, but emscripten 6.x no longer
+# attaches HEAPF32 to Module by default - without this export it's undefined and
+# the audio callback throws every frame (silent game). See miniaudio.h ScriptNode.
 WEB_LDFLAGS  := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY \
+                -sEXPORTED_RUNTIME_METHODS=HEAPF32 \
                 -lwebsocket.js \
                 --preload-file assets \
                 --shell-file shell.html
