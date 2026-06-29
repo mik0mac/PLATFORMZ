@@ -216,7 +216,10 @@ int main(int argc, char** argv) {
         ServerMessage::Phase phase = ServerMessage::Phase::Unknown;
         for (const std::string& frame : net.poll()) {
             ServerMessage m = applyMessage(frame, gameSpace);
-            if (m.type == ServerMessage::Type::Welcome) myIndex = m.playerId;
+            if (m.type == ServerMessage::Type::Welcome) {
+                myIndex = m.playerId;
+                net.send(serializeName(playerName)); // attach our display name to the slot
+            }
             else if (m.type == ServerMessage::Type::State) phase = m.phase;
         }
         return phase;
@@ -277,7 +280,11 @@ int main(int argc, char** argv) {
                 // Name entry (local-only for now).
                 UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
                 Rectangle nameBox = {350, 240, 300, 40};
-                UiTextField(nameBox, playerName, nameFocused, 16, 20);
+                // Push every edit to the server so the latest typed name wins
+                // (the welcome already sent a baseline before this field changed).
+                if (UiTextField(nameBox, playerName, nameFocused, 16, 20) &&
+                    networked && net.isOpen())
+                    net.send(serializeName(playerName));
 
                 // Players panel. Local: GAMESPACE_NUMBER_OF_PLAYERS slots - slot 1
                 // is the human, the rest bot-filled (local play spawns 1 human +
@@ -384,32 +391,37 @@ int main(int argc, char** argv) {
             Color scoreColor = BLUE;
             std::vector<Player>& players = gameSpace.getPlayers();
             int localIndex = networked ? myIndex : 0;
-            for (int i = 0; i < (int)players.size(); ++i) {
-                if (i == localIndex) {
-                    if (players[i].isAlive) {
-                        DrawCentered("GAME OVER", 240, 80, BLUE);
-                        DrawCentered("You survived!", 360, 20, BLUE);
-                        scoreColor = GRAY;
-                    }
-                    else {
-                        // Greyscale blit of the last rendered world frame (sceneTarget
-                        // persists), then the overlay - the dead-world look carries over.
-                        if (grayscaleOK) BeginShaderMode(grayscaleShader);
-                            DrawTexturePro(sceneTarget.texture,
-                                {0, 0, (float)sceneTarget.texture.width, -(float)sceneTarget.texture.height},
-                                {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
-                        if (grayscaleOK) EndShaderMode();
-                        DrawCentered("GAME OVER", 240, 80, RED);
-                        DrawCentered("You were eliminated.", 360, 20, RED);
-                    }
+            // Outcome banner for the local player.
+            if (localIndex >= 0 && localIndex < (int)players.size()) {
+                if (players[localIndex].isAlive) {
+                    DrawCentered("GAME OVER", 240, 80, BLUE);
+                    DrawCentered("You survived!", 360, 20, BLUE);
+                    scoreColor = GRAY;
                 }
-                DrawCentered(TextFormat("SCORES:"), 400, 20, scoreColor);
-                for (int i = 0; i < (int)players.size(); ++i) {
-                    DrawCentered(TextFormat("%s: %d", players[i].name.c_str(), players[i].score),
-                                    440 + i * 20, 20, scoreColor);
+                else {
+                    // Greyscale blit of the last rendered world frame (sceneTarget
+                    // persists), then the overlay - the dead-world look carries over.
+                    if (grayscaleOK) BeginShaderMode(grayscaleShader);
+                        DrawTexturePro(sceneTarget.texture,
+                            {0, 0, (float)sceneTarget.texture.width, -(float)sceneTarget.texture.height},
+                            {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
+                    if (grayscaleOK) EndShaderMode();
+                    DrawCentered("GAME OVER", 240, 80, RED);
+                    DrawCentered("You were eliminated.", 360, 20, RED);
                 }
-                DrawCentered("Press any key to return to title.", 440, 20, BLUE);
             }
+
+            // Scoreboard - every connected player by name (drawn once). Empty
+            // slots in the fixed player vector are skipped via isConnected.
+            DrawCentered("SCORES:", 400, 20, scoreColor);
+            int scoreRow = 0;
+            for (int i = 0; i < (int)players.size(); ++i) {
+                if (networked && !players[i].isConnected) continue;
+                DrawCentered(TextFormat("%s: %d", players[i].name.c_str(), players[i].score),
+                                440 + scoreRow * 20, 20, scoreColor);
+                ++scoreRow;
+            }
+            DrawCentered("Press any key to return to title.", 440 + scoreRow * 20 + 10, 20, BLUE);
             
             EndDrawing();
             continue;
