@@ -101,6 +101,11 @@ private:
 // vs platform.
 bool SphereIntersectsSphere(Vector3 posA, float radiusA, Vector3 posB, float radiusB);
 bool SphereIntersectsBox(Vector3 spherePos, float sphereRadius, Vector3 boxCenter, Vector3 boxSize);
+// Swept sphere (radius) travelling p0 -> p1 against an AABB (box expanded by
+// radius, slab method). Returns true on overlap and sets tHit to the entry
+// parameter in [0,1] (the impact point is Vector3Lerp(p0, p1, tHit)). Used so a
+// fast rocket - or one spawned past a thin platform - can't tunnel through.
+bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 boxSize, float radius, float& tHit);
 
 //MARK: Collision response (game rules)
 // Each function loops the relevant object pairs using the spatial grid,
@@ -114,6 +119,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
+void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerWallCollisions(GameSpace& space);
 void CheckAsteroidWallCollisions(GameSpace& space);
 

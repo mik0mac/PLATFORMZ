@@ -50,6 +50,45 @@ bool SphereIntersectsBox(Vector3 spherePos, float sphereRadius, Vector3 boxCente
     return distSqr <= (sphereRadius * sphereRadius);
 }
 
+bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 boxSize, float radius, float& tHit) {
+    // Treat the moving sphere as a point against the box grown by `radius`
+    // (Minkowski sum), then ray/slab-clip the segment p0->p1 against that AABB.
+    Vector3 halfExtents = Vector3Add(Vector3Scale(boxSize, 0.5f), {radius, radius, radius});
+    Vector3 boxMin = Vector3Subtract(boxCenter, halfExtents);
+    Vector3 boxMax = Vector3Add(boxCenter, halfExtents);
+
+    // Degenerate (zero-length) segment, or p0 already inside the expanded box:
+    // fall back to the static overlap test and report the impact at the start.
+    Vector3 d = Vector3Subtract(p1, p0);
+    if (Vector3LengthSqr(d) < 1e-12f) {
+        tHit = 0.0f;
+        return SphereIntersectsBox(p0, radius, boxCenter, boxSize);
+    }
+
+    float tMin = 0.0f, tMax = 1.0f;
+    const float* o = &p0.x;
+    const float* dir = &d.x;
+    const float* bMin = &boxMin.x;
+    const float* bMax = &boxMax.x;
+    for (int axis = 0; axis < 3; axis++) {
+        if (fabsf(dir[axis]) < 1e-8f) {
+            // Segment is parallel to this slab - reject if it starts outside it.
+            if (o[axis] < bMin[axis] || o[axis] > bMax[axis]) return false;
+        } else {
+            float inv = 1.0f / dir[axis];
+            float t1 = (bMin[axis] - o[axis]) * inv;
+            float t2 = (bMax[axis] - o[axis]) * inv;
+            if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+            if (t1 > tMin) tMin = t1;
+            if (t2 < tMax) tMax = t2;
+            if (tMin > tMax) return false;
+        }
+    }
+
+    tHit = tMin;
+    return true;
+}
+
 //MARK: Spawn Explosion
 // avoid repeated code in CheckRocketAsteroidCollisions, CheckRocketPlatformCollisions, and CheckRocketWallCollisions
 Explosion spawnExplosion(Vector3 position, Player* owner) {
@@ -148,12 +187,16 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
         if (rocket.isDestroyed) continue;
 
         for (Platform& platform : platforms) {
-            // Rocket treated as a small sphere (its size.x), same as the
-            // rocket-vs-asteroid check.
-            if (SphereIntersectsBox(rocket.position, rocket.size, platform.position, platform.size)) {
+            // Swept test along the rocket's travel this frame (prevPosition ->
+            // position), so a fast rocket - or one spawned past a thin platform
+            // on a downward shot - detonates on the platform instead of tunneling.
+            float tHit = 0.0f;
+            if (SegmentIntersectsBox(rocket.prevPosition, rocket.position, platform.position, platform.size, rocket.size, tHit)) {
                 rocket.isDestroyed = true;
 
-                Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
+                // Detonate at the entry point on the platform, not past it.
+                Vector3 impact = Vector3Lerp(rocket.prevPosition, rocket.position, tHit);
+                Explosion explosion = spawnExplosion(impact, rocket.owner);
                 explosions.push_back(explosion);
                 space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
 
@@ -365,11 +408,11 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 // critically - stops the check from re-firing every frame while
                 // overlapping, which previously flipped velocity.y back and
                 // forth and killed the bounce.
-                if (player.velocity.y < 0.0f) {
+                if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))) {
                     float platformTop = platform.position.y + (platform.size.y / 2.0f);
                     // Pop the player out onto the surface first, so next frame
                     // doesn't re-detect the overlap and cancel the response.
-                    player.position.y = platformTop + player.radius;
+                    // player.position.y = platformTop + player.radius;
 
                     if (platform.isBouncy) {
                         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
@@ -378,7 +421,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     }
                 }
                 // un-comment to work on bouncing off the underside of a platform.
-                // else if (player.velocity.y > 0.0f) {
+                // else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
                 //     // If the player is moving up into the platform, the should cancel out y velocity.
                 //     float platformBottom = platform.position.y - (platform.size.y / 2.0f);
                 //     // Pop the player out below the platform to prevent re-detection next frame.
@@ -460,11 +503,22 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                 if (playerA.isAlive) space.emitAudio(FX_PLAYER_HIT, playerA.position, playerA.id);
                 if (playerB.isAlive) space.emitAudio(FX_PLAYER_HIT, playerB.position, playerB.id);
 
-                // Push both players away from each other on impact.
-                Vector3 pushDirection = Vector3Normalize(Vector3Subtract(playerA.position, playerB.position));
-                float pushStrength = 1.0f; // Adjust this value to control the push strength
-                playerA.velocity = Vector3Add(playerA.velocity, Vector3Scale(pushDirection, pushStrength));
-                playerB.velocity = Vector3Add(playerB.velocity, Vector3Scale(pushDirection, -pushStrength));
+                // Separate the two so they don't stay overlapped and re-damage
+                // every frame (mirrors the asteroid-vs-player response). Push
+                // each clear by half the overlap along the contact normal, and
+                // add a velocity bump so they keep drifting apart.
+                Vector3 offset = Vector3Subtract(playerA.position, playerB.position);
+                float dist = Vector3Length(offset);
+                if (dist > 1e-4f) {
+                    Vector3 normal = Vector3Scale(offset, 1.0f / dist);
+                    float overlap = (playerA.radius + playerB.radius) - dist;
+                    playerA.position = Vector3Add(playerA.position, Vector3Scale(normal, overlap * 0.5f));
+                    playerB.position = Vector3Subtract(playerB.position, Vector3Scale(normal, overlap * 0.5f));
+
+                    float pushStrength = 1.0f; // velocity bump along the contact normal
+                    playerA.velocity = Vector3Add(playerA.velocity, Vector3Scale(normal, pushStrength));
+                    playerB.velocity = Vector3Subtract(playerB.velocity, Vector3Scale(normal, pushStrength));
+                }
             }
         }
     }
@@ -591,6 +645,7 @@ void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
     CheckRocketPlayerCollisions(space, grid);
     ApplyExplosionSplashDamage(space, grid); // after rocket detonation checks so this-frame explosions resolve immediately
     CheckAsteroidPlayerCollisions(space, grid);
+    CheckPlayerPlayerCollisions(space, grid);
     CheckAsteroidPlatformCollisions(space, grid);
     CheckPlayerPlatformCollisions(space, grid);
     CheckPlayerWallCollisions(space);

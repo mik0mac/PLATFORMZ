@@ -156,6 +156,7 @@ int main(int argc, char** argv) {
     enum class GameScreen { TITLE, PLAYING, GAME_OVER };
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
+    bool  netMatchOver  = false; // networked: latched once the server reports the match ended, so the gameOverTimer countdown survives packet-less frames
 
     // Title-screen menu state (widgets live in ui.h). The name is local-only for
     // now (input + visuals); syncing it over the network is a later step.
@@ -184,6 +185,14 @@ int main(int argc, char** argv) {
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.generate(); // platforms, asteroids, and player slots
         botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
+        // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
+        // (Networked mode takes isBot from the server over the wire instead.)
+        std::vector<Player>& ps = gameSpace.getPlayers();
+        for (size_t i = 1; i < ps.size(); ++i) {
+            ps[i].isBot = true;
+            ps[i].color_outline = BOT_OUTLINE_COLOR;
+            ps[i].color_fill    = BOT_FILL_COLOR;
+        }
         DisableCursor(); // capture the mouse for free-look while playing
         screen = GameScreen::PLAYING;
     };
@@ -195,6 +204,7 @@ int main(int argc, char** argv) {
     // the look from the server's spawn orientation.
     auto enterNetworkedMatch = [&]() {
         predInit = false; prevHealth = -1; netHurt = 0.0f;
+        netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
         DisableCursor();
         screen = GameScreen::PLAYING;
     };
@@ -702,18 +712,31 @@ int main(int argc, char** argv) {
         
         if (networked) {
             // Networked: the SERVER decides when the match ends (last-player-
-            // standing among connected players). Follow its phase into GAME_OVER.
-            if (netPhase == ServerMessage::Phase::GameOver) {
-                EnableCursor(); // free the cursor for the game-over menu
-                screen = GameScreen::GAME_OVER;
+            // standing). Mirror the local death-FX delay - count down before the
+            // menu so the frozen end state (greyscale/glitch) is visible first.
+            if (netPhase == ServerMessage::Phase::Playing) {
+                // match (re)started or still live - cancel any pending countdown
+                netMatchOver = false; gameOverTimer = GAME_OVER_TIMER;
+            } else if (netPhase == ServerMessage::Phase::GameOver) {
+                netMatchOver = true; // latch: survives packet-less (Unknown) frames
+            }
+            if (netMatchOver) {
+                gameOverTimer -= dt;
+                if (gameOverTimer <= 0.0f) {
+                    EnableCursor(); // free the cursor for the game-over menu
+                    screen = GameScreen::GAME_OVER;
+                }
             }
         } else {
             int remaining_players = 0;
             int remaining_humans = 0;
             int remaining_bots = 0;
-            // determine number of remaining players (bots included).
+            // determine number of remaining ALIVE players (bots included). Only
+            // alive players count toward the human/bot tally - otherwise a dead
+            // human still counts as a human and remaining_humans never hits 0.
             for (const Player& p : gameSpace.getPlayers()) {
-                if (p.isAlive) remaining_players++;
+                if (!p.isAlive) continue;
+                remaining_players++;
                 if (p.isBot) remaining_bots++; else remaining_humans++;
             }
             // If there's only one player left or only bots left, start the game-over countdown.

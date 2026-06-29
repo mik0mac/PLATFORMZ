@@ -113,21 +113,18 @@ public:
         player.velocity = {0.0f, 0.0f, 0.0f};
     }
 
-    // Create the player slots (fresh ids). index 0 is the local human; index 1+
-    // get the magenta bot palette and isBot flag (the local sim's wander-bots; in
-    // networked play they're just non-local slots). Used by generate() and, with
-    // no world yet, by the server's lobby boot.
+    // Create the player slots (fresh ids). Mode-neutral: makes no bot
+    // assumptions, since this is shared by the local client AND the authoritative
+    // server. Bot-ness is owned by whoever runs the sim - local mode marks/colors
+    // its wander-bots in main.cpp's startGame; networked play takes isBot from the
+    // server over the wire. Used by generate() and, with no world yet, by the
+    // server's lobby boot.
     void spawnPlayers() {
         players.clear();
         for (int i = 0; i < number_of_players; ++i) {
             Player player;
             //MARK: Player ID
             player.id = nextPlayerID++;
-            if (i > 0) {
-                player.color_outline = BOT_OUTLINE_COLOR;
-                player.color_fill = BOT_FILL_COLOR;
-                player.isBot = true;
-            }
             placePlayer(player);
             players.push_back(player);
         }
