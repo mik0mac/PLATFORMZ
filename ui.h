@@ -1,0 +1,96 @@
+// ui.h
+//
+// Tiny hand-rolled, immediate-mode 2D widgets for the menu screens - the 2D
+// analogue of shapes.h (which owns the 3D look). raylib core has no widgets, so
+// these draw the game's "shaded wire" aesthetic in screen space: a low-alpha
+// translucent fill under a bright opaque border, cyan to match the elements.
+//
+// Immediate mode: call a widget every frame; it draws and returns this frame's
+// interaction. Any persistent state (text-field focus) is owned by the caller
+// and passed in by reference, so there's no hidden global UI context. Pure 2D -
+// depends only on raylib, no shapes.h / 3D coupling.
+
+#pragma once
+
+#include "raylib.h"
+#include <string>
+
+//MARK: Theme
+// Defaults match the cyan element palette (color_outline {0,255,200}). Callers
+// can override per-widget where a different accent is wanted (e.g. a modal).
+namespace ui {
+inline const Color OUTLINE = {0, 255, 200, 255}; // opaque bright border / caret
+inline const Color FILL    = {0, 255, 200, 40};  // translucent fill (idle)
+inline const Color FILL_HI = {0, 255, 200, 90};  // translucent fill (hover)
+inline const Color TEXT     = RAYWHITE;
+inline const float BORDER   = 2.0f;
+inline const int   PAD      = 10; // left text padding inside fields/buttons
+}
+
+//MARK: Panel
+// The building block: translucent fill under an opaque border. In 2D there's no
+// depth to fight (unlike shapes.h's BeginTranslucentFill), so a plain rect pair
+// is enough.
+inline void UiPanel(Rectangle r, Color outline = ui::OUTLINE, Color fill = ui::FILL) {
+    DrawRectangleRec(r, fill);
+    DrawRectangleLinesEx(r, ui::BORDER, outline);
+}
+
+//MARK: Button
+// Panel + centered label; brightens on hover. Returns true on the frame the
+// mouse is pressed while hovering.
+inline bool UiButton(Rectangle r, const char* label, int fontSize = 20) {
+    bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
+    UiPanel(r, ui::OUTLINE, hovered ? ui::FILL_HI : ui::FILL);
+    int tw = MeasureText(label, fontSize);
+    DrawText(label,
+             (int)(r.x + (r.width  - tw) / 2.0f),
+             (int)(r.y + (r.height - fontSize) / 2.0f),
+             fontSize, ui::TEXT);
+    return hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+}
+
+//MARK: Text field
+// Click in to focus, click out (or click another field) to defocus. While
+// focused, typed printable chars append (up to maxLen) and Backspace deletes;
+// a caret blinks at the end. `focused` is caller-owned so multiple fields don't
+// share focus. Returns true if the text changed this frame.
+inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
+                        size_t maxLen = 16, int fontSize = 20) {
+    bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) focused = hovered; // click toggles focus
+
+    bool changed = false;
+    if (focused) {
+        int c = GetCharPressed();
+        while (c > 0) {
+            if (c >= 32 && c <= 125 && text.size() < maxLen) {
+                text.push_back((char)c);
+                changed = true;
+            }
+            c = GetCharPressed();
+        }
+        if (IsKeyPressed(KEY_BACKSPACE) && !text.empty()) {
+            text.pop_back();
+            changed = true;
+        }
+    }
+
+    UiPanel(r, focused ? ui::OUTLINE : Fade(ui::OUTLINE, 0.6f),
+               (hovered || focused) ? ui::FILL_HI : ui::FILL);
+    int tx = (int)(r.x + ui::PAD);
+    int ty = (int)(r.y + (r.height - fontSize) / 2.0f);
+    DrawText(text.c_str(), tx, ty, fontSize, ui::TEXT);
+    // Blinking caret while focused (0.5s on / 0.5s off).
+    if (focused && fmodf((float)GetTime(), 1.0f) < 0.5f) {
+        int caretX = tx + MeasureText(text.c_str(), fontSize) + 2;
+        DrawRectangle(caretX, ty, 2, fontSize, ui::OUTLINE);
+    }
+    return changed;
+}
+
+//MARK: Centered text
+// Reusable centered label (centers within [0, areaWidth]).
+inline void UiTextCentered(const char* t, int areaWidth, int y, int fontSize, Color c) {
+    DrawText(t, (areaWidth - MeasureText(t, fontSize)) / 2, y, fontSize, c);
+}
