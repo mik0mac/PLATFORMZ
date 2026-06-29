@@ -62,6 +62,20 @@ struct ServerMessage {
 // (boundary half-size + platform/asteroid counts). Any connected client may send
 // it; the server applies the preset, generates a fresh world, and flips to the
 // PLAYING phase. First press wins for the round.
+//MARK: Outbound - name
+// Tells the server the display name to attach to our player slot. Sent on
+// welcome (so the server has a baseline) and whenever the title-screen field
+// changes, so the latest typed name wins. The server stores it per slot and
+// echoes it back in every state packet's player entry (see applyMessage below),
+// so all clients render the same names on the lobby + scoreboard.
+inline std::string serializeName(const std::string& name) {
+    nlohmann::json j = {
+        {"type", "name"},
+        {"name", name}
+    };
+    return j.dump();
+}
+
 inline std::string serializeStart(float half, int platforms, int asteroids) {
     nlohmann::json j = {
         {"type", "start"},
@@ -179,6 +193,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.isBot    = jo.value("bot", false); // server-owned: which slots are bots (absent on older packets)
                 p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
                 p.isConnected = jo.value("active", true); // hide empty slots client-side
+                p.name     = jo.value("name", std::string("Player")); // server-owned display name
+                p.score    = jo.value("score", p.score); // server-owned score (kept stable if absent)
             });
     }
 
