@@ -331,11 +331,13 @@ inline void DrawReticleBrackets(const Reticle& ret, Vector3 fwd, Vector3 right, 
 inline void DrawReticle(const Player& player) {
     const Reticle& ret = player.reticle;
 
-    // Orthonormal aim basis. Guard the near-vertical case where Forward() is
-    // parallel to world-up (cross product would collapse).
-    Vector3 fwd = player.Forward();
-    Vector3 up0 = (fabsf(fwd.y) < 0.99f) ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up0));
+    // Orthonormal aim basis, built from world-up so it matches the camera's own
+    // up = {0,1,0} and stays screen-aligned. Pitch is clamped to 89° (see
+    // elements.h), so cross(fwd, worldUp) is always small-but-nonzero near
+    // vertical and never collapses - no reference-up switch needed (switching it
+    // would snap the basis and visibly rotate the reticle).
+    Vector3 fwd   = player.Forward();
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, Vector3{0, 1, 0}));
     Vector3 up    = Vector3Normalize(Vector3CrossProduct(right, fwd));
 
     // Apply roll (rotation about the aim axis) to the in-plane basis.
