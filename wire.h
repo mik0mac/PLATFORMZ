@@ -176,6 +176,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.fuel     = jo.value("fuel", 0.0f);
                 p.ammo     = jo.value("ammo", 0);
                 p.isAlive  = jo.value("alive", true);
+                p.isBot    = jo.value("bot", false); // server-owned: which slots are bots (absent on older packets)
                 p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
                 p.isConnected = jo.value("active", true); // hide empty slots client-side
             });

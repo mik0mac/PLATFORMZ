@@ -77,6 +77,10 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             // Tied to player.radius so it scales with PLAYER_SCALE.
             float muzzleOffset = player.radius + rocket.size + ROCKET_MUZZLE_CLEARANCE;
             rocket.position  = Vector3Add(eyePos, Vector3Scale(aim, muzzleOffset));
+            // Seed the swept-collision start at the eye, not the muzzle, so the
+            // first segment covers the eye -> muzzle gap. A platform the player
+            // is standing on straddles that gap on a downward shot.
+            rocket.prevPosition = eyePos;
             rocket.direction = aim;
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             if (rocket.velocityInheritance) {

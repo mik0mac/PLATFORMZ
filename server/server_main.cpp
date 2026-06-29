@@ -220,6 +220,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"fuel\":"   + jf(p.fuel);
         s += ",\"ammo\":"   + ji(p.ammo);
         s += ",\"alive\":"  + jb(p.isAlive);
+        s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (false until server bot AI exists)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
         s += ",\"active\":" + jb(connectedSlots.count(i) > 0); // slot occupied?
         s += "}";

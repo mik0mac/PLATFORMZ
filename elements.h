@@ -447,6 +447,8 @@ public:
     Player* owner = nullptr;
     // position, velocity, direction, speed
     Vector3 position;
+    Vector3 prevPosition{}; // position at the start of this frame's movement; the
+                            // swept collision segment is prevPosition -> position
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
     float speed = ROCKET_SPEED; // units/sec
@@ -456,6 +458,13 @@ public:
     bool velocityInheritance = ROCKET_VELOCITY_INHERITANCE_ENABLED; // Whether the rocket inherits the player's velocity at the moment of firing
 
     void updatePos(float dt) {
+        // Advance prevPosition to where we were before integrating - but skip
+        // this on the first tick so the spawn-time prevPosition (set to the
+        // player's eye in input.h) survives through the first collision check.
+        // That makes the first swept segment span the eye -> muzzle spawn gap,
+        // where a platform the player is standing on would otherwise be missed.
+        if (firstStep) firstStep = false; else prevPosition = position;
+
         if (gravityEnabled) {
             velocity.y -= MOON_GRAVITY * dt; // Apply gravity to the rocket's velocity
         }
@@ -483,6 +492,7 @@ public:
     bool isExploding = false; // Rocket is in the process of exploding, can be used for visual effects
 
 private:
+    bool firstStep = true; // see updatePos: preserves the spawn eye->muzzle segment
 };
 
 //MARK: Explosion

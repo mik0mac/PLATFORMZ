@@ -24,6 +24,7 @@ const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 me
 const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
 
 //MARK: GameSpace Constants
+// these only used as class defaults and are overwritten by the mapSizePresets in main.cpp.
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
@@ -38,9 +39,9 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {30.0f, 24, 12}}, // 30 platforms, 12 asteroids
-    {"MEDIUM", {60.0f, 48, 18}}, // 36 platforms, 18 asteroids
-    {"LARGE",  {90.0f, 96, 24}}  // 48 platforms, 24 asteroids
+    {"SMALL",  {30.0f, 12, 12}}, // 30 platforms, 12 asteroids
+    {"MEDIUM", {60.0f, 24, 18}}, // 36 platforms, 18 asteroids
+    {"LARGE",  {90.0f, 48, 24}}  // 48 platforms, 24 asteroids
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
@@ -60,13 +61,13 @@ const float WALL_ELASTICITY_ASTEROID = 1.01f; // hit velocity is reflected and s
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
 
 //MARK: Platform Constants
-const float PLATFORM_ELASTICITY_PLAYER = 0.25f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
+const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
 const float PLATFORM_ELASTICITY_ASTEROID = 1.0f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
 
 const float PLATFORM_MIN_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 12.0f; // 5.0f; // Minimum width of the platform
 const float PLATFORM_MAX_WIDTH = 18.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
-const float PLATFORM_MIN_HEIGHT = 0.25f; // Minimum height of the platform
-const float PLATFORM_MAX_HEIGHT = 0.25f; // Maximum height of the platform
+const float PLATFORM_MIN_HEIGHT = 0.5f; // Minimum height of the platform
+const float PLATFORM_MAX_HEIGHT = 0.5f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
 const float PLATFORM_MAX_DEPTH = PLATFORM_MAX_WIDTH; // Maximum depth of the platform
 
@@ -100,12 +101,13 @@ const float RETICLE_PRONG_LENGTH = 0.6f;    // forward prong length, fraction of
 const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of RETICLE_SIZE
 const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
-//MARK: Player Constants
-const float PLAYER_SPEED_WALK = 10.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 7.5f; // units/sec^2
-const float PLAYER_SPEED_JETPACK = 16.0f; // units/sec
+//MARK: Player Speed
+const float PLAYER_SPEED_WALK = 12.0f; // units/sec
+const float PLAYER_ACCELERATION_WALK = 8.0f; // units/sec^2
+const float PLAYER_SPEED_JETPACK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 12.0f; // units/sec^
 
+//MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
 const int PLAYER_STARTING_AMMO = PLAYER_MAX_AMMO;
 const int PLAYER_MAX_HEALTH = 100;
