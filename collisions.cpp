@@ -1,4 +1,5 @@
 #include <vector>
+#include <algorithm>
 #include "collisions.h"
 
 
@@ -23,6 +24,34 @@ void CollisionGrid::Rebuild(GameSpace& space) {
         CellKey key = KeyForPosition(players[i].position);
         cells[key].playerIndices.push_back(i);
     }
+
+    // Platforms are larger than a cell, so bucket each one into every cell its
+    // AABB overlaps - not just its center cell - or the 27-cell neighbor search
+    // around an object near the platform's edge could miss it. Rebuilt every
+    // frame like the rest of the grid, which also covers future moving platforms.
+    auto& platforms = space.getPlatforms();
+    for (int i = 0; i < (int)platforms.size(); i++) {
+        Vector3 half = Vector3Scale(platforms[i].size, 0.5f);
+        CellKey lo = KeyForPosition(Vector3Subtract(platforms[i].position, half));
+        CellKey hi = KeyForPosition(Vector3Add(platforms[i].position, half));
+        for (int cx = lo.x; cx <= hi.x; cx++)
+            for (int cy = lo.y; cy <= hi.y; cy++)
+                for (int cz = lo.z; cz <= hi.z; cz++)
+                    cells[CellKey{cx, cy, cz}].platformIndices.push_back(i);
+    }
+}
+
+//MARK: CollisionGrid::GatherPlatformNeighbors
+void CollisionGrid::GatherPlatformNeighbors(Vector3 position, std::vector<int>& out) const {
+    ForEachNeighborCell(position, [&](const CellKey& key) {
+        const GridCell* cell = FindCell(key);
+        if (!cell) return;
+        out.insert(out.end(), cell->platformIndices.begin(), cell->platformIndices.end());
+    });
+    // A platform spans multiple cells, so it appears in several of the 27
+    // neighbor cells - de-duplicate so callers process each platform once.
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
 }
 
 //MARK: Narrow-phase geometry
@@ -174,11 +203,10 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
 // A rocket flying into a platform detonates: destroy the rocket and spawn an
 // explosion at impact so splash damage hits nearby objects. Platforms have no
 // health, so they aren't damaged themselves. Mirrors the rocket-vs-asteroid
-// detonation. Platforms aren't bucketed in the grid (static and few), so they
-// are brute-forced like CheckPlayerPlatformCollisions.
+// detonation. Candidate platforms come from the grid around both ends of the
+// rocket's travel this frame (prevPosition and position) so the swept test still
+// can't miss a platform the segment crosses.
 void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) {
-    (void)grid; // platforms not bucketed - brute-force, see note above
-
     auto& rockets = space.getRockets();
     auto& platforms = space.getPlatforms();
     auto& explosions = space.getExplosions();
@@ -186,7 +214,12 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
     for (Rocket& rocket : rockets) {
         if (rocket.isDestroyed) continue;
 
-        for (Platform& platform : platforms) {
+        std::vector<int> candidates;
+        grid.GatherPlatformNeighbors(rocket.prevPosition, candidates);
+        grid.GatherPlatformNeighbors(rocket.position, candidates);
+
+        for (int platformIndex : candidates) {
+            Platform& platform = platforms[platformIndex];
             // Swept test along the rocket's travel this frame (prevPosition ->
             // position), so a fast rocket - or one spawned past a thin platform
             // on a downward shot - detonates on the platform instead of tunneling.
@@ -331,18 +364,20 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
 // A drifting asteroid bounces off a platform, reflecting its velocity and being
 // pushed clear of the overlap - consistent with how asteroids bounce off the
 // boundary walls (reusing the walls' elasticity, so they keep drifting at a
-// constant speed). Platforms aren't bucketed in the grid (static and few), so
-// they are brute-forced like CheckPlayerPlatformCollisions.
+// constant speed). Candidate platforms come from the spatial grid around the
+// asteroid (de-duplicated, since a platform spans several cells).
 void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid) {
-    (void)grid; // platforms not bucketed - brute-force, see note above
-
     auto& asteroids = space.getAsteroids();
     auto& platforms = space.getPlatforms();
 
     for (Asteroid& asteroid : asteroids) {
         if (asteroid.isDestroyed) continue;
 
-        for (Platform& platform : platforms) {
+        std::vector<int> candidates;
+        grid.GatherPlatformNeighbors(asteroid.position, candidates);
+
+        for (int platformIndex : candidates) {
+            Platform& platform = platforms[platformIndex];
             if (!SphereIntersectsBox(asteroid.position, asteroid.size, platform.position, platform.size)) continue;
 
             // Closest point on the platform box to the asteroid center (same
@@ -393,15 +428,15 @@ void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid
 void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) {
     auto& platforms = space.getPlatforms();
     auto& players = space.getPlayers();
-    (void)grid; // platforms are static and few (default 8) - brute-force
-                // checking all of them is simpler and cheap enough that
-                // grid-bucketing isn't worth it here. Kept the grid param
-                // for signature consistency with the other Check___ functions.
 
     for (Player& player : players) {
         if (!player.isAlive) continue;
 
-        for (Platform& platform : platforms) {
+        std::vector<int> candidates;
+        grid.GatherPlatformNeighbors(player.position, candidates);
+
+        for (int platformIndex : candidates) {
+            Platform& platform = platforms[platformIndex];
             if (SphereIntersectsBox(player.position, player.radius, platform.position, platform.size)) {
                 // Only resolve when the player is moving down into the platform.
                 // This lets the player pass up through it from below, and -

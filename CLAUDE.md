@@ -62,8 +62,12 @@ only `main.cpp` and `collisions.cpp` as translation units.
 - **Broad phase:** `CollisionGrid` buckets only the *dynamic* objects
   (asteroids, rockets, players) into a 3D spatial hash, rebuilt each frame.
   Narrow phase only tests objects in the same cell or its 26 neighbors.
-  Platforms and explosions are **not** bucketed (static / few) — they're
-  brute-forced; the `grid` param is kept for signature consistency.
+  Platforms are also bucketed, but since they're larger than a cell each one is
+  inserted into **every cell its AABB overlaps** (not just its center cell), so a
+  platform index appears in multiple cells — platform queries de-duplicate
+  candidates via `CollisionGrid::GatherPlatformNeighbors`. Explosions are **not**
+  bucketed (few active at once) — they're brute-forced; the `grid` param is kept
+  for signature consistency where unused.
 - **Narrow phase:** `SphereIntersectsSphere` (asteroid/rocket pairs) and
   `SphereIntersectsBox` (sphere vs axis-aligned box for player/platform).
   Boxes are AABBs — no rotation. Asteroids/rockets are spheres (`size` = radius);

@@ -44,11 +44,15 @@ struct CellKeyHash {
 // What's stored per cell: indices into GameSpace's object vectors, not
 // copies of the objects themselves. Kept separate per object type since
 // asteroid-vs-rocket and player-vs-platform are different collision pairs
-// with different response logic.
+// with different response logic. Platforms are larger than cellSize, so a
+// single platform is bucketed into every cell its AABB overlaps (see
+// Rebuild) and the same index appears in multiple cells - queries must
+// de-duplicate (see GatherPlatformNeighbors).
 struct GridCell {
     std::vector<int> asteroidIndices;
     std::vector<int> rocketIndices;
     std::vector<int> playerIndices;
+    std::vector<int> platformIndices;
 };
 
 class CollisionGrid {
@@ -81,6 +85,14 @@ public:
         auto it = cells.find(key);
         return (it != cells.end()) ? &it->second : nullptr;
     }
+
+    // Appends the platform indices bucketed in the 27-cell neighborhood around
+    // `position` into `out`, then de-duplicates `out`. Platforms span multiple
+    // cells (they're larger than cellSize), so the same index appears in several
+    // neighbor cells; callers must not process a platform more than once. Safe to
+    // call repeatedly into the same vector (e.g. a rocket's prev + current pos) -
+    // the union is re-deduplicated each call.
+    void GatherPlatformNeighbors(Vector3 position, std::vector<int>& out) const;
 
     CellKey KeyForPosition(Vector3 position) const {
         return CellKey{
