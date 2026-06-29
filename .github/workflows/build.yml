@@ -1,0 +1,31 @@
+name: Build
+
+# Compile-only CI check. Verifies the headless game server still builds on every
+# push / PR. Separate from gameserver.yml (which is manual-only and runs the
+# server behind a cloudflared tunnel) so a tunnel isn't spun up on each push.
+#
+# Server only: the native client Makefile is macOS-only (Apple frameworks,
+# /opt/homebrew) and the web client needs emsdk + a prebuilt web raylib, neither
+# of which runs on ubuntu-latest as-is. The server builds against the
+# raylib_server_stub.h shims, so it compiles cleanly on Linux.
+
+on:
+  push:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libboost-dev libboost-system-dev
+
+      - name: Build server
+        working-directory: server
+        run: make
