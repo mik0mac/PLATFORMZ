@@ -758,7 +758,7 @@ int main(int argc, char** argv) {
             
             if (gameSpace.getPlayers().size() == 1) {
                 // specal case.  Solo player, no bots.  Game only end when player dies or all asteroids are gone.
-                if (remaining_asteroids <= 0) {
+                if (remaining_asteroids <= 0 || !gameSpace.getPlayers()[0].isAlive) {
                     gameOverTimer -= dt;
                     if (gameOverTimer <= 0.0f) {
                         EnableCursor(); // free the cursor for the game-over menu
