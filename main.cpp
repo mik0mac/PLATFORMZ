@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
 
-        // MARK: TITLE GAMEOVER SCREENS
+        // MARK: TITLE SCREEN
         // Placeholder front/end screens. Each handles its own input + draw and
         // skips the rest of the loop; PLAYING (below) is the original game body.
         if (screen == GameScreen::TITLE) {
@@ -369,6 +369,7 @@ int main(int argc, char** argv) {
             EndDrawing();
             continue;
         }
+        // MARK: GAME_OVER SCREEN
         if (screen == GameScreen::GAME_OVER) {
             // Networked: keep pumping the server. If a match (re)starts (a peer
             // pressed START, or we did after returning to the lobby), follow it in.
@@ -380,6 +381,7 @@ int main(int argc, char** argv) {
             BeginDrawing();
             ClearBackground(BLACK);
             
+            Color scoreColor = BLUE;
             std::vector<Player>& players = gameSpace.getPlayers();
             int localIndex = networked ? myIndex : 0;
             for (int i = 0; i < (int)players.size(); ++i) {
@@ -387,8 +389,7 @@ int main(int argc, char** argv) {
                     if (players[i].isAlive) {
                         DrawCentered("GAME OVER", 240, 80, BLUE);
                         DrawCentered("You survived!", 360, 20, BLUE);
-                        DrawCentered(TextFormat("SCORE: %d", players[localIndex].score), 400, 20, GRAY);
-                        DrawCentered("Press any key to return to title", 440, 20, GRAY);
+                        scoreColor = GRAY;
                     }
                     else {
                         // Greyscale blit of the last rendered world frame (sceneTarget
@@ -400,10 +401,14 @@ int main(int argc, char** argv) {
                         if (grayscaleOK) EndShaderMode();
                         DrawCentered("GAME OVER", 240, 80, RED);
                         DrawCentered("You were eliminated.", 360, 20, RED);
-                        DrawCentered(TextFormat("SCORE: %d", players[localIndex].score), 400, 20, RED);
-                        DrawCentered("Press any key to return to title", 440, 20, RED);
                     }
                 }
+                DrawCentered(TextFormat("SCORES:"), 400, 20, scoreColor);
+                for (int i = 0; i < (int)players.size(); ++i) {
+                    DrawCentered(TextFormat("%s: %d", players[i].name.c_str(), players[i].score),
+                                    440 + i * 20, 20, scoreColor);
+                }
+                DrawCentered("Press any key to return to title.", 440, 20, BLUE);
             }
             
             EndDrawing();
