@@ -188,11 +188,17 @@ int main(int argc, char** argv) {
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
         std::vector<Player>& ps = gameSpace.getPlayers();
+        // Slot 0 is the local human; carry the title-screen name onto it so the
+        // scoreboard shows it (networked play gets this from the server instead).
+        ps[0].name = playerName.empty() ? "PLAYER" : playerName;
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
             ps[i].color_fill    = BOT_FILL_COLOR;
+            // Same NATO label the title-screen lobby shows for this bot slot.
+            ps[i].name = BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT];
         }
+        gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         DisableCursor(); // capture the mouse for free-look while playing
         screen = GameScreen::PLAYING;
     };
@@ -748,26 +754,36 @@ int main(int argc, char** argv) {
             int remaining_players = 0;
             int remaining_humans = 0;
             int remaining_bots = 0;
-            // determine number of remaining ALIVE players (bots included). Only
-            // alive players count toward the human/bot tally - otherwise a dead
-            // human still counts as a human and remaining_humans never hits 0.
-            for (const Player& p : gameSpace.getPlayers()) {
-                if (!p.isAlive) continue;
-                remaining_players++;
-                if (p.isBot) remaining_bots++; else remaining_humans++;
-            }
-            // If there's only one player left or only bots left, start the game-over countdown.
-            if (remaining_players <= 1 || remaining_humans <= 0) {
-                gameOverTimer -= dt;
-                if (gameOverTimer <= 0.0f) {
-                    EnableCursor(); // free the cursor for the game-over menu
-                    screen = GameScreen::GAME_OVER;
+            int remaining_asteroids = (int)gameSpace.getAsteroids().size();
+            
+            if (gameSpace.getPlayers().size() == 1) {
+                // specal case.  Solo player, no bots.  Game only end when player dies or all asteroids are gone.
+                if (remaining_asteroids <= 0) {
+                    gameOverTimer -= dt;
+                    if (gameOverTimer <= 0.0f) {
+                        EnableCursor(); // free the cursor for the game-over menu
+                        screen = GameScreen::GAME_OVER;
+                    }
+                }
+            } else {
+                // main case.  Multiple players (bots and humans).  Game ends when only one player is left or all humans are dead.
+                // determine number of remaining ALIVE players (bots included). Only
+                // alive players count toward the human/bot tally - otherwise a dead
+                // human still counts as a human and remaining_humans never hits 0.
+                for (const Player& p : gameSpace.getPlayers()) {
+                    if (!p.isAlive) continue;
+                    remaining_players++;
+                    if (p.isBot) remaining_bots++; else remaining_humans++;
+                }
+                // If there's only one player left or only bots left, start the game-over countdown.
+                if (remaining_players <= 1 || remaining_humans <= 0 || (remaining_players <=1 && remaining_asteroids <= 0)) {
+                    gameOverTimer -= dt;
+                    if (gameOverTimer <= 0.0f) {
+                        EnableCursor(); // free the cursor for the game-over menu
+                        screen = GameScreen::GAME_OVER;
+                    }
                 }
             }
-            // else {
-            //     // Reset the game-over timer if more than one player is alive.  Like another player joined the game.
-            //     gameOverTimer = GAME_OVER_TIMER; // Reset the timer to the initial value
-            // }
         }
         
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.

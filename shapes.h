@@ -375,6 +375,8 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
     if (Vector3LengthSqr(axis) < 1e-6f) axis = Vector3{0, 1, 0}; // guard a near-zero axis
     axis = Vector3Normalize(axis);
     float spinSpeed = 0.3f + 0.7f * hash01(seed.x, seed.z, 4.0f); // rad/sec, per asteroid
+    // adjust speed by the asteroid's current speed through space.
+    spinSpeed *= Vector3Length(asteroid.velocity) / ASTEROID_MIN_SPEED;
     float angle = (float)GetTime() * spinSpeed;
 
     // Build the displaced, oriented, world-space vertices.
