@@ -20,8 +20,8 @@ const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  
 const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
 
 //MARK: Physics Constants
-const float MOON_GRAVITY = 1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
-const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
+const float MOON_GRAVITY = 3.25f; //1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
+const float EARTH_GRAVITY = 19.6133f; //9.81f; // earth gravity, m/s^2 * 2
 
 //MARK: GameSpace Constants
 // these only used as class defaults and are overwritten by the mapSizePresets in main.cpp.
@@ -39,7 +39,7 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {30.0f, 12, 6}}, // 12 platforms, 6 asteroids
+    {"SMALL",  {40.0f, 8, 4}}, // 8 platforms, 4 asteroids
     {"MEDIUM", {60.0f, 24, 12}}, // 24 platforms, 12 asteroids
     {"LARGE",  {90.0f, 48, 24}}  // 48 platforms, 24 asteroids
 };
@@ -56,13 +56,13 @@ const float NET_INTERP_DELAY = 0.08f; // seconds
 const float NET_CAM_SMOOTH_RATE = 20.0f;
 
 //MARK: Wall Constants
-const float WALL_ELASTICITY_PLAYER = 0.8f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
-const float WALL_ELASTICITY_ASTEROID = 1.01f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
 
 //MARK: Platform Constants
 const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
-const float PLATFORM_ELASTICITY_ASTEROID = 1.0f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
+const float PLATFORM_ELASTICITY_ASTEROID = 0.95f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
 
 const float PLATFORM_MIN_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 12.0f; // 5.0f; // Minimum width of the platform
 const float PLATFORM_MAX_WIDTH = 18.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
@@ -103,9 +103,9 @@ const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for no
 
 //MARK: Player Speed
 const float PLAYER_SPEED_WALK = 12.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 8.0f; // units/sec^2
+const float PLAYER_ACCELERATION_WALK = 12.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 18.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 12.0f; // units/sec^
+const float PLAYER_ACCELERATION_JETPACK = 18.0f; // units/sec^2
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -140,7 +140,7 @@ const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack 
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
 const char* const BOT_NAME_STRINGS[] = {
-    "ALPHA","BRAVO","CHARLIE","DELTA","ECHO","FOXTROT","GOLF","HOTEL","INDIA",
+    "BOTlet","BOTtholomew","RoyBOT Overlord","DELTA","ECHO","FOXTROT","GOLF","HOTEL","INDIA",
     "JULIETT","KILO","LIMA","MIKE","NOVEMBER","OSCAR","PAPA","QUEBEC","ROMEO",
     "SIERRA","TANGO","UNIFORM","VICTOR","WHISKEY","XRAY","YANKEE","ZULU"
 };
@@ -168,8 +168,8 @@ const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage
 //MARK: Rocket Constants
 const float ROCKET_SPEED = 60.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
-const bool ROCKET_GRAVITY_ENABLED = true; // If true, rockets are affected by gravity.
-const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = true; // If true, rockets inherit the player's velocity when fired.
+const bool ROCKET_GRAVITY_ENABLED = false; // If true, rockets are affected by gravity.
+const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // If true, rockets inherit the player's velocity when fired.
 const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
 const float ROCKET_SPIN_SPEED = 18.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
