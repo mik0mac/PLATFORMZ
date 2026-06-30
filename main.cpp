@@ -142,6 +142,10 @@ int main(int argc, char** argv) {
                                         // lock (GetMouseDelta jumps the frame after
                                         // DisableCursor), so the centered spawn
                                         // orientation isn't clobbered.
+    bool      consumeFirstFire = false; // drop the first frame's fire after entering a
+                                        // match - the click that starts/restarts the game
+                                        // can land on the first play frame and would
+                                        // otherwise be read as a rocket (issue #4).
     int       prevHealth = -1;    // last frame's health, to detect a server-side hit
     float     netHurt   = 0.0f;   // client hit-flash intensity (the server owns damage,
                                   // so flashIntensity() is always 0 here - drive it locally)
@@ -205,6 +209,7 @@ int main(int argc, char** argv) {
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         DisableCursor(); // capture the mouse for free-look while playing
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
+        consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
         screen = GameScreen::PLAYING;
     };
 
@@ -218,6 +223,7 @@ int main(int argc, char** argv) {
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
         DisableCursor();
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
+        consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
         screen = GameScreen::PLAYING;
     };
 
@@ -456,6 +462,7 @@ int main(int argc, char** argv) {
             in = PollLocalInput();
             if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
             if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; } // drop cursor-lock jump
+            if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; } // drop the match-start click (issue #4)
             predYaw   += in.lookDelta.x * 0.0025f;   // 0.0025 = Player::lookSensitivity
             predPitch -= in.lookDelta.y * 0.0025f;
             predPitch  = Clamp(predPitch, -89.0f * DEG2RAD, 89.0f * DEG2RAD);
@@ -571,6 +578,7 @@ int main(int argc, char** argv) {
             in = PollLocalInput();
             if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
             if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; } // drop cursor-lock jump
+            if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; } // drop the match-start click (issue #4)
             float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
             ApplyPlayerInput(player, in, dt, gravity, gameSpace);
 
