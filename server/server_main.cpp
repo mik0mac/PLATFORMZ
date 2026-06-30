@@ -61,6 +61,17 @@ static std::string jf(float v) {
 static std::string ji(int v)    { return std::to_string(v); }
 static std::string ju(uint32_t v) { return std::to_string(v); }
 static std::string jb(bool v)  { return v ? "true" : "false"; }
+// Quote + escape a string for JSON. Client names are limited to printable
+// chars 32-125 (see UiTextField), so only " and \ need escaping.
+static std::string js(const std::string& v) {
+    std::string out = "\"";
+    for (char c : v) {
+        if (c == '"' || c == '\\') out.push_back('\\');
+        out.push_back(c);
+    }
+    out.push_back('"');
+    return out;
+}
 
 // -------------------------------------------------------------------------
 // ConnectedClient - server-side record per WebSocket connection.
@@ -75,6 +86,11 @@ struct ConnectedClient {
     // can't overwrite the press before the sim tick consumes it. Consumed (and
     // cleared) once per shot in SimulationLoop.
     bool firePending    = false;
+    // Display name from the client's "name" message. Stored here (io thread) and
+    // copied onto the player slot by the sim loop, so all gameSpace mutation stays
+    // single-threaded. nameDirty flags an unapplied change.
+    std::string name;
+    bool nameDirty      = false;
 };
 
 // -------------------------------------------------------------------------
@@ -138,6 +154,24 @@ static uint32_t parseUInt(const std::string& json, const std::string& key, uint3
     if (pos == std::string::npos) return def;
     pos += key.size() + 3;
     try { return (uint32_t)std::stoul(json.substr(pos)); } catch (...) { return def; }
+}
+// Read a JSON string value ("key":"..."). Unescapes \" and \\ (the only escapes
+// nlohmann emits for the client's printable-only names). Stops at the closing ".
+static std::string parseString(const std::string& json, const std::string& key,
+                               const std::string& def = "") {
+    auto pos = json.find("\"" + key + "\":");
+    if (pos == std::string::npos) return def;
+    pos += key.size() + 3;                 // skip past "key":
+    if (pos >= json.size() || json[pos] != '"') return def;
+    ++pos;                                  // skip the opening quote of the value
+    std::string out;
+    for (; pos < json.size(); ++pos) {
+        char c = json[pos];
+        if (c == '\\' && pos + 1 < json.size()) { out.push_back(json[++pos]); continue; }
+        if (c == '"') break;                // closing quote
+        out.push_back(c);
+    }
+    return out;
 }
 
 static PlayerInput parseInput(const std::string& json) {
@@ -223,6 +257,8 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (false until server bot AI exists)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
         s += ",\"active\":" + jb(connectedSlots.count(i) > 0); // slot occupied?
+        s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
+        s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
         s += "}";
     }
     s += "]";
@@ -388,6 +424,21 @@ private:
                     return;
                 }
 
+                // Control message: a client setting its display name. Store it on
+                // the client record; the sim loop copies it onto the player slot
+                // (keeping gameSpace mutation single-threaded) and it then rides
+                // every state packet. Sent on welcome and on each title-screen edit.
+                if (msg.find("\"type\":\"name\"") != std::string::npos) {
+                    std::lock_guard<std::mutex> lock(clientMutex);
+                    auto it = clients.find(self.get());
+                    if (it != clients.end()) {
+                        it->second.name = parseString(msg, "name");
+                        it->second.nameDirty = true;
+                    }
+                    self->Read();
+                    return;
+                }
+
                 // Parse input packet and store as this client's latest input.
                 // The sim loop reads lastInput each tick; if packets arrive
                 // faster than tick rate, only the newest is used (last-write-wins).
@@ -502,6 +553,21 @@ void SimulationLoop() {
             // below during input apply + collisions, then BroadcastState() reads
             // and sends them after this lock releases.
             gameSpace.getAudioEvents().clear();
+
+            // Apply any pending display-name changes onto their player slots. Runs
+            // every tick in every phase (lock order gameMutex->clientMutex), so
+            // lobby names update live as each client types - and the name persists
+            // through the match onto the game-over scoreboard.
+            {
+                std::lock_guard<std::mutex> gc(clientMutex);
+                auto& players = gameSpace.getPlayers();
+                for (auto& [ws, client] : clients) {
+                    if (!client.nameDirty) continue;
+                    if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
+                    players[client.playerId].name = client.name;
+                    client.nameDirty = false;
+                }
+            }
 
             // Only simulate while a match is in progress; LOBBY/GAMEOVER are idle.
             if (gamePhase.load() == Phase::PLAYING) {
