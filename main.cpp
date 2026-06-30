@@ -328,10 +328,14 @@ int main(int argc, char** argv) {
                         if (!titlePlayers[i].isConnected) continue;
                         int ry = (int)(playersBox.y + headerH + row * rowH);
                         bool you = (i == myIndex);
-                        DrawText(TextFormat("%d. %s%s", i + 1,
-                                            you ? (playerName.empty() ? "PLAYER" : playerName.c_str())
-                                                : TextFormat("PLAYER %d", i + 1),
-                                            you ? " (YOU)" : ""),
+                        // Local row shows the live-typed name; other rows show the
+                        // server-synced name (updates live as they type), falling
+                        // back to a slot label until they've set one.
+                        const char* shown = you
+                            ? (playerName.empty() ? "PLAYER" : playerName.c_str())
+                            : (titlePlayers[i].name.empty() ? TextFormat("PLAYER %d", i + 1)
+                                                            : titlePlayers[i].name.c_str());
+                        DrawText(TextFormat("%d. %s%s", i + 1, shown, you ? " (YOU)" : ""),
                                  (int)playersBox.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
                         row++;
                     }
