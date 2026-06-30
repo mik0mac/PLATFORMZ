@@ -360,6 +360,11 @@ public:
     Vector3 velocity;
     float speed;
 
+    // Accumulated tumble angle (radians), integrated each frame in
+    // GameSpace::updateAsteroidSpin. Stored (not GetTime()-based) so a bounce that
+    // changes speed only changes the spin RATE going forward, never snapping orientation.
+    float spinAngle = 0.0f;
+
     void generateVelocity() {
         // Magnitude is always positive (min_speed..max_speed); a random sign
         // per axis gives asteroids drift in any direction, not just +X/+Y/+Z.

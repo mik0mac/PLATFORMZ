@@ -444,7 +444,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 // overlapping, which previously flipped velocity.y back and
                 // forth and killed the bounce.
                 if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))) {
-                    float platformTop = platform.position.y + (platform.size.y / 2.0f);
+                    // float platformTop = platform.position.y + (platform.size.y / 2.0f);
                     // Pop the player out onto the surface first, so next frame
                     // doesn't re-detect the overlap and cancel the response.
                     // player.position.y = platformTop + player.radius;

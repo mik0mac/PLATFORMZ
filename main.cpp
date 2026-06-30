@@ -491,7 +491,7 @@ int main(int argc, char** argv) {
             // synced and persists), so a per-player flag stops the burst re-firing.
             for (Player& player : gameSpace.getPlayers()) {
                 if (!player.isAlive && !player.deathBurstSpawned) {
-                    gameSpace.spawnEliminationBurst(player.position);
+                    gameSpace.spawnEliminationBurst(player.position, player.color_outline);
                     player.deathBurstSpawned = true;
                 }
             }
@@ -537,12 +537,20 @@ int main(int argc, char** argv) {
                 prevHealth = hp;
             }
             netHurt = fmaxf(0.0f, netHurt - dt / 0.5f); // decay over flash_duration (0.5s)
-            // Distinguish players visually (you = default cyan, others = magenta),
-            // matching the convention GameSpace::generate() uses in local mode.
+            // Color each player slot by its index, matching GameSpace::spawnPlayers():
+            // bots are magenta (BOT_*_COLOR), humans round-robin through HUMAN_PLAYER_COLORS.
+            // Color isn't sent over the wire (it's static per slot); the `bot` flag is.
             for (int i = 0; i < (int)players.size(); ++i) {
-                if (i == localIndex) continue;
-                players[i].color_outline = {255, 0, 200, 255};
-                players[i].color_fill    = {255, 0, 200, 40};
+                if (players[i].isBot) {
+                    players[i].color_outline = BOT_OUTLINE_COLOR;
+                    players[i].color_fill    = BOT_FILL_COLOR;
+                } else {
+                    Color c = HUMAN_PLAYER_COLORS[i % HUMAN_PLAYER_COLORS.size()];
+                    c.a = 255;
+                    players[i].color_outline = c;
+                    c.a = 40;
+                    players[i].color_fill = c;
+                }
             }
             // Tick reticles: snap ours, smooth everyone else's.
             for (int i = 0; i < (int)players.size(); ++i)
@@ -578,7 +586,9 @@ int main(int argc, char** argv) {
 
             localPlayer = &gameSpace.getPlayers()[0];
         }
-        
+
+        gameSpace.updateAsteroidSpin(dt); // advance tumble in both local and networked modes
+
         // MARK: AUDIO EVENT DRAIN
         // Turn this frame's networked/local audio events into queued sounds.
         // Networked: filled by applyMessage() from the packet. Local: filled by

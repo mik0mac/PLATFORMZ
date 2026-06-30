@@ -46,7 +46,7 @@ using tcp           = boost::asio::ip::tcp;
 const unsigned short PORT      = 9000;
 const float          TICK_RATE = 60.0f;
 const float          TICK_DT   = 1.0f / TICK_RATE;
-const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
+// const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
 
 // -------------------------------------------------------------------------
 // Minimal JSON helpers - hand-rolled to avoid a heavy dependency.

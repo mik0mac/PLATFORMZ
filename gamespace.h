@@ -131,7 +131,7 @@ public:
             Color fill = player.color_outline;
             fill.a = 40; // low alpha translucent fill for the "glowing vector glass" effect
             player.color_fill = fill;
-            
+
             placePlayer(player);
             players.push_back(player);
         }
@@ -200,12 +200,27 @@ public:
         }
     }
 
+    // Advance each asteroid's tumble angle. Runs every frame in BOTH local and
+    // networked modes (asteroid.velocity is synced on net clients), replacing the old
+    // GetTime()*speed formula in DrawAsteroidShape that snapped on bounce.
+    void updateAsteroidSpin(float dt) {
+        auto hash01 = [](float a, float b, float c) {
+            float h = sinf(a * 12.9898f + b * 78.233f + c * 37.719f) * 43758.5453f;
+            return h - floorf(h);
+        };
+        for (Asteroid& a : asteroids) {
+            float rate = 0.3f + 0.7f * hash01(a.startingPosition.x, a.startingPosition.z, 4.0f);
+            rate *= Vector3Length(a.velocity) / ASTEROID_MIN_SPEED;
+            a.spinAngle += rate * dt;
+        }
+    }
+
     // The standard one-time spherical spark burst spawned when an asteroid breaks
     // apart or a player is eliminated. Centralized so the local sim
     // (updateActiveObjects) and the networked client (main.cpp) spawn an
     // identical effect. Visual only - pushes into the sparks vector.
-    void spawnEliminationBurst(Vector3 at) {
-        Color burst = {255, 180, 60, 255}; // hot orange break-up
+    void spawnEliminationBurst(Vector3 at, Color color = {255, 180, 60, 255}) { // hot orange break-up
+        Color burst = color; // hot orange break-up
         SpawnSparkBurst(sparks, at, ASTEROID_BURST_SPEED_MIN, ASTEROID_BURST_SPEED_MAX,
                         ASTEROID_BURST_COUNT, burst,
                         SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
@@ -239,7 +254,7 @@ public:
         // the burst from re-firing every frame.
         for (Player& player : players) {
             if (!player.isAlive && !player.deathBurstSpawned) {
-                spawnEliminationBurst(player.position);
+                spawnEliminationBurst(player.position, player.color_outline);
                 emitAudio(FX_PLAYER_DEATH, player.position, player.id);
                 player.deathBurstSpawned = true;
             }
@@ -377,9 +392,9 @@ private:
     int number_of_players = GAMESPACE_NUMBER_OF_PLAYERS; // For future use: if we want to add multiplayer support,
     // we can increase this and add a vector of Player objects.
     std::vector<Player> players;
-    int number_of_rockets = 0; // Rockets will be generated when the player shoots.
+    // int number_of_rockets = 0; // Rockets will be generated when the player shoots.
     std::vector<Rocket> rockets;
-    int number_of_explosions = 0; // Explosions will be generated when rockets detonate.
+    // int number_of_explosions = 0; // Explosions will be generated when rockets detonate.
     std::vector<Explosion> explosions;
     std::vector<Spark> sparks; // VFX particles (jetpack exhaust, asteroid bursts); visual only.
     std::vector<NetAudioEvent> audioEvents; // sound events this tick; serialized + cleared by the server, drained by the client.
