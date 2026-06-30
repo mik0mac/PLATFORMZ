@@ -28,7 +28,7 @@ const float EARTH_GRAVITY = 9.81f; // earth gravity, m/s^2
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 1; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
+const int GAMESPACE_NUMBER_OF_PLAYERS = 4; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
 
 struct mapSizePreset {
     float halfSize;
@@ -39,8 +39,8 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {30.0f, 12, 1}}, // 12 platforms, 1 asteroid
-    {"MEDIUM", {60.0f, 24, 18}}, // 24 platforms, 18 asteroids
+    {"SMALL",  {30.0f, 12, 6}}, // 12 platforms, 6 asteroids
+    {"MEDIUM", {60.0f, 24, 12}}, // 24 platforms, 12 asteroids
     {"LARGE",  {90.0f, 48, 24}}  // 48 platforms, 24 asteroids
 };
 
@@ -117,9 +117,16 @@ const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec.
 const float FUEL_REGEN_RATE = 0.5f; // Per sec.
-const float PLAYER_FIRE_RATE = 2.0f; // shots per second.
+const float PLAYER_FIRE_RATE = 3.0f; // shots per second.
 
 const int PLAYER_ELIMINATION_SCORE_AWARD = 100; // Points awarded to player for eliminating another player
+
+const std::vector<Color> HUMAN_PLAYER_COLORS = {
+    {255, 0, 0, 255},     // Red
+    {0, 0, 255, 255},     // Blue
+    {0, 255, 0, 255},     // Green
+    {255, 255, 0, 255},   // Yellow
+};
 
 //MARK: Bot Constants
 // Test-only "wander" bots that drive non-local players (index 1+) through the

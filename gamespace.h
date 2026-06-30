@@ -125,6 +125,13 @@ public:
             Player player;
             //MARK: Player ID
             player.id = nextPlayerID++;
+            //MARK: Player Color
+            //assign colors to players in a round-robin fashion from the HUMAN_PLAYER_COLORS vector
+            player.color_outline = HUMAN_PLAYER_COLORS[i % HUMAN_PLAYER_COLORS.size()];
+            Color fill = player.color_outline;
+            fill.a = 40; // low alpha translucent fill for the "glowing vector glass" effect
+            player.color_fill = fill;
+            
             placePlayer(player);
             players.push_back(player);
         }
