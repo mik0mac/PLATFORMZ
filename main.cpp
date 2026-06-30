@@ -138,6 +138,10 @@ int main(int argc, char** argv) {
     float     predYaw   = 0.0f;   // locally-predicted look (mouse drives this every
     float     predPitch = 0.0f;   // frame so aiming is instant, not server-round-trip)
     bool      predInit  = false;  // seed predYaw/predPitch from the server spawn once
+    bool      consumeFirstLook = false; // drop the first mouse-look delta after a cursor
+                                        // lock (GetMouseDelta jumps the frame after
+                                        // DisableCursor), so the centered spawn
+                                        // orientation isn't clobbered.
     int       prevHealth = -1;    // last frame's health, to detect a server-side hit
     float     netHurt   = 0.0f;   // client hit-flash intensity (the server owns damage,
                                   // so flashIntensity() is always 0 here - drive it locally)
@@ -200,6 +204,7 @@ int main(int argc, char** argv) {
         }
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         DisableCursor(); // capture the mouse for free-look while playing
+        consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
         screen = GameScreen::PLAYING;
     };
 
@@ -212,6 +217,7 @@ int main(int argc, char** argv) {
         predInit = false; prevHealth = -1; netHurt = 0.0f;
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
         DisableCursor();
+        consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
         screen = GameScreen::PLAYING;
     };
 
@@ -449,6 +455,7 @@ int main(int argc, char** argv) {
             // (same math as Player::updateLook) and send the absolute values.
             in = PollLocalInput();
             if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
+            if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; } // drop cursor-lock jump
             predYaw   += in.lookDelta.x * 0.0025f;   // 0.0025 = Player::lookSensitivity
             predPitch -= in.lookDelta.y * 0.0025f;
             predPitch  = Clamp(predPitch, -89.0f * DEG2RAD, 89.0f * DEG2RAD);
@@ -563,6 +570,7 @@ int main(int argc, char** argv) {
             // apply it - the same struct the networked server applies remotely.
             in = PollLocalInput();
             if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
+            if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; } // drop cursor-lock jump
             float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
             ApplyPlayerInput(player, in, dt, gravity, gameSpace);
 
