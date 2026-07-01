@@ -159,6 +159,9 @@ int main(int argc, char** argv) {
     // Per-bot decision state for the shared behaviour tree's LatchedSelector
     // (branch latch + timer). Sized alongside botStates in startGame().
     std::vector<BotDecision> botDecisions;
+    // Per-bot personality (aggression/accuracy), assigned once at spawn in
+    // startGame() and read by the tree nodes. Also sized alongside botStates.
+    std::vector<BotProfile> botProfiles;
 
     /// BOT DECISION TREE
     /// Instantiate leaf nodes
@@ -222,18 +225,29 @@ int main(int argc, char** argv) {
         gameSpace.generate(); // platforms, asteroids, and player slots
         botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
         botDecisions.assign(gameSpace.getPlayers().size() - 1, BotDecision{});
+        botProfiles.assign(gameSpace.getPlayers().size() - 1, BotProfile{});
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
         std::vector<Player>& ps = gameSpace.getPlayers();
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
         ps[0].name = playerName.empty() ? "PLAYER" : playerName;
+        // Personality spread widens with bot count: a lone bot ~= BOT_DIFFICULTY,
+        // a crowd fans out around it. Seeded from player.id so the same map
+        // replays the same personalities.
+        int nBots = (int)ps.size() - 1;
+        float spread = nBots > 0 ? BOT_PERSONALITY_SPREAD * (nBots - 1) / nBots : 0.0f;
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
             ps[i].color_fill    = BOT_FILL_COLOR;
             // Same NATO label the title-screen lobby shows for this bot slot.
             ps[i].name = BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT];
+            // Seed each bot's personality once, deterministically from its id.
+            std::mt19937 rng(ps[i].id);
+            std::uniform_real_distribution<float> jitter(-spread, spread);
+            botProfiles[i - 1].aggression = Clamp(BOT_DIFFICULTY + jitter(rng), 0.0f, 1.0f);
+            botProfiles[i - 1].accuracy   = Clamp(BOT_DIFFICULTY + jitter(rng), 0.0f, 1.0f);
         }
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         DisableCursor(); // capture the mouse for free-look while playing
@@ -627,7 +641,7 @@ int main(int argc, char** argv) {
                 // earth-gravity key (to descend), so derive gravity from the input.
                 PlayerInput botIn = botInput(players[i], players[0], players,
                                              gameSpace.getPlatforms(), gameSpace.getAsteroids(),
-                                             botTree, dt, botDecisions[i - 1]);
+                                             botTree, dt, botDecisions[i - 1], botProfiles[i - 1]);
                 float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
                 ApplyPlayerInput(players[i], botIn, dt, gravity, gameSpace);
                 // OG bot code (pre-BT) - replaced by the above botInput() call:
