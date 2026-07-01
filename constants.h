@@ -135,6 +135,16 @@ const float BOT_REROLL_MIN_SECONDS = 1.5f; // min time before a bot re-rolls its
 const float BOT_REROLL_MAX_SECONDS = 4.0f; // max time before a bot re-rolls its heading/movement
 const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target heading, radians/sec
 
+// Difficulty & personality (behaviour-tree bots, bot_logic.h). BOT_DIFFICULTY is
+// the center of the personality distribution [0..1]; each bot's aggression &
+// accuracy are seeded from its player.id as difficulty +/- a spread that widens
+// with bot count (so a lone bot ~= difficulty, a crowd is varied).
+const float BOT_DIFFICULTY = 0.6f;         // 0 easy .. 1 hard; center for all bot personalities
+const float BOT_PERSONALITY_SPREAD = 0.4f; // max +/- jitter around difficulty (at high bot counts)
+const float BOT_MAX_AIM_SPREAD = 0.30f;    // radians of aim error at accuracy=0 (0 at accuracy=1)
+const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
+const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
+
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
