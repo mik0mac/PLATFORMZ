@@ -55,8 +55,12 @@ inline bool UiButton(Rectangle r, const char* label, int fontSize = 20) {
 // focused, typed printable chars append (up to maxLen) and Backspace deletes;
 // a caret blinks at the end. `focused` is caller-owned so multiple fields don't
 // share focus. Returns true if the text changed this frame.
+// `pristine` (optional) enables "clear the default on first edit": while
+// *pristine is true the field still holds untouched default text, so the first
+// keystroke wipes it before the input is applied. Pass nullptr to disable.
 inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
-                        size_t maxLen = 16, int fontSize = 20) {
+                        size_t maxLen = 16, int fontSize = 20,
+                        bool* pristine = nullptr) {
     bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) focused = hovered; // click toggles focus
 
@@ -64,15 +68,18 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
     if (focused) {
         int c = GetCharPressed();
         while (c > 0) {
-            if (c >= 32 && c <= 125 && text.size() < maxLen) {
-                text.push_back((char)c);
-                changed = true;
+            if (c >= 32 && c <= 125) {
+                if (pristine && *pristine) { text.clear(); *pristine = false; }
+                if (text.size() < maxLen) {
+                    text.push_back((char)c);
+                    changed = true;
+                }
             }
             c = GetCharPressed();
         }
-        if (IsKeyPressed(KEY_BACKSPACE) && !text.empty()) {
-            text.pop_back();
-            changed = true;
+        if (IsKeyPressed(KEY_BACKSPACE)) {
+            if (pristine && *pristine) { text.clear(); *pristine = false; changed = true; }
+            else if (!text.empty()) { text.pop_back(); changed = true; }
         }
     }
 
