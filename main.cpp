@@ -11,6 +11,7 @@
 #include "audio.h"     // sound FX que, load/unload, trigger
 #include "net_client.h" // multiplayer: WebSocket client
 #include "wire.h"       // multiplayer: input serialize / state apply
+#include "bot_logic.h"   // bot AI decision tree
 
 #include <string>
 #include <unordered_map>
@@ -150,10 +151,36 @@ int main(int argc, char** argv) {
     float     netHurt   = 0.0f;   // client hit-flash intensity (the server owns damage,
                                   // so flashIntensity() is always 0 here - drive it locally)
 
+    // MARK: BOT STATE & TREE
     // One wander-bot per non-local player (players[1..]) - LOCAL MODE ONLY.
     // Index 0 is the local human. In networked mode there are no bots; empty
     // slots simply stay unoccupied until another client connects.
     std::vector<BotState> botStates;
+    // Per-bot decision state for the shared behaviour tree's LatchedSelector
+    // (branch latch + timer). Sized alongside botStates in startGame().
+    std::vector<BotDecision> botDecisions;
+
+    /// BOT DECISION TREE
+    /// Instantiate leaf nodes
+    IsLowFuel<Player>      isLowFuel;
+    IsLowHealth<Player>    isLowHealth;
+    MoveToTarget<Player>   moveToTarget;
+    MoveToSafety<Player>   moveToSafety;
+    MoveToPlatform<Player> moveToPlatform;
+    FireAtTarget<Player>   fireAtTarget;
+    AttackAsteroid<Player> attackAsteroid;
+    Idle<Player>           idle;
+
+    // Compose the tree. `movement` is a LatchedSelector: it re-evaluates WHICH
+    // branch wins only every BOT_TICK_TIME, but the chosen action still ticks
+    // every frame. fireAtTarget sits in the top Parallel, so aim/fire stay
+    // per-frame regardless of the movement decision cadence.
+    Parallel<Player>        evadeAndShootAsteroid({ &moveToSafety, &attackAsteroid });
+    Sequence<Player>        lowHealthResponse({ &isLowHealth, &evadeAndShootAsteroid });
+    Sequence<Player>        lowFuelResponse({ &isLowFuel, &moveToPlatform });
+    LatchedSelector<Player> movement({ &lowHealthResponse, &lowFuelResponse, &moveToTarget, &idle });
+    Parallel<Player>        botTree({ &movement, &fireAtTarget });
+
 
     // MARK: SCREEN STATE
     // The loop runs in one of three screens. TITLE and GAME_OVER are simple
@@ -169,7 +196,8 @@ int main(int argc, char** argv) {
     // Title-screen menu state (widgets live in ui.h). The name is local-only for
     // now (input + visuals); syncing it over the network is a later step.
     std::string playerName  = "PLAYER";
-    bool        nameFocused = false; // text field has keyboard focus
+    bool        nameFocused = true;  // text field owns keyboard focus on entry (type without a click)
+    bool        namePristine = true; // still the untouched "PLAYER" default; first keystroke clears it
     bool        showControls = false; // controls popup is open
 
     // Networked client connects once, on launch: the title screen then acts as a
@@ -193,6 +221,7 @@ int main(int argc, char** argv) {
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.generate(); // platforms, asteroids, and player slots
         botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
+        botDecisions.assign(gameSpace.getPlayers().size() - 1, BotDecision{});
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
         std::vector<Player>& ps = gameSpace.getPlayers();
@@ -249,6 +278,7 @@ int main(int argc, char** argv) {
     auto returnToTitle = [&]() {
         if (!networked) gameSpace.clear();
         EnableCursor(); // free the cursor for the title menu
+        nameFocused = true; // re-focus the name field so the player can type without a click
         screen = GameScreen::TITLE;
     };
 
@@ -300,7 +330,7 @@ int main(int argc, char** argv) {
                 Rectangle nameBox = {350, 240, 300, 40};
                 // Push every edit to the server so the latest typed name wins
                 // (the welcome already sent a baseline before this field changed).
-                if (UiTextField(nameBox, playerName, nameFocused, 16, 20) &&
+                if (UiTextField(nameBox, playerName, nameFocused, 16, 20, &namePristine) &&
                     networked && net.isOpen())
                     net.send(serializeName(playerName));
 
@@ -589,10 +619,20 @@ int main(int argc, char** argv) {
             // Drive the test bots (players[1..]) through the same input path with
             // randomly-generated wander input. Bots always use moon gravity - they
             // never hold the earth-gravity key.
+            
             std::vector<Player>& players = gameSpace.getPlayers();
             for (int i = 1; i < (int)players.size(); ++i) {
-                PlayerInput botIn = MakeBotInput(players[i], botStates[i - 1], dt);
-                ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
+                // Per bot, per frame: run the behaviour tree. botDecisions[i-1]
+                // is this bot's LatchedSelector state. Bots may hold the
+                // earth-gravity key (to descend), so derive gravity from the input.
+                PlayerInput botIn = botInput(players[i], players[0], players,
+                                             gameSpace.getPlatforms(), gameSpace.getAsteroids(),
+                                             botTree, dt, botDecisions[i - 1]);
+                float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
+                ApplyPlayerInput(players[i], botIn, dt, gravity, gameSpace);
+                // OG bot code (pre-BT) - replaced by the above botInput() call:
+                // PlayerInput botIn = MakeBotInput(players[i], botStates[i - 1], dt);
+                // ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
             }
 
             gameSpace.updatePositions(dt);
