@@ -7,10 +7,13 @@
 #include "constants.h"
 #include "random.h"    // RandomFloat — per-frame aim jitter
 
+//MARK: CONSTANTS
 const float BOT_TICK_TIME = 1.0f;          // seconds between bot decision ticks.
-const float BOT_ATTACK_DISTANCE = 40.0f;   // distance to which bots move when attacking.
+const float BOT_ATTACK_DISTANCE = 80.0f;   // distance to which bots move when attacking.
 const float BOT_ASTEROID_ATTACK_BUFFER = 20.0f; // don't fire at asteroids closer than this distance, to avoid self-damage.
-const float BOT_RETREAT_DISTANCE = 100.0f; // distance to which bots will retreat.
+const float BOT_ASTEROID_AVOID_BUFFER = 20.0f;    // distance to which bots will avoid asteroids.
+const float BOT_ASTEROID_COLLISION_TIME_WINDOW = 3.0f; // worry about asteroids that will collide with bot within this window.
+const float BOT_RETREAT_DISTANCE = 120.0f; // distance to which bots will retreat.
 const float BOT_VERTICAL_THRESHOLD = 5.0f; // y-delta below which vertical corrections are ignored.
 const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will seek a platform to land and regen.
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
@@ -127,8 +130,11 @@ std::tuple<bool, Vector3> onTarget (const TargetT& target, Player& shooter, floa
 //
 enum class Status { Success, Failure, Running };
 
-// Per-bot decision state for LatchedSelector. Lives outside the (shared) tree
-// nodes so each bot keeps its own branch latch and timer — see LatchedSelector.
+// Decision state for one LatchedSelector, for one bot. Lives outside the
+// (shared) tree nodes so each bot keeps its own branch latch and timer. Each
+// bot holds a vector of these — one slot per LatchedSelector in the tree,
+// indexed by the selector's latchId — so nested/sibling latches don't clobber
+// each other's state. See LatchedSelector.
 struct BotDecision {
     float timer = 0.0f;         // seconds accumulated since the last branch decision
     float interval = BOT_TICK_TIME; // this decision's jittered period (set on each re-decide)
@@ -157,7 +163,7 @@ struct Blackboard {
     const std::vector<Asteroid>& allAsteroids;
     PlayerInput& out;
     float dt;
-    BotDecision& decision;      // per-bot branch latch/timer for LatchedSelector
+    std::vector<BotDecision>& decisions; // per-bot latch/timer, one slot per LatchedSelector (indexed by its latchId)
     const BotProfile& profile;  // per-bot personality (aggression/accuracy)
 };
 
@@ -168,11 +174,11 @@ public:
     virtual Status tick(Blackboard<TargetT>& bb) = 0;
 };
 
-//MARK: Action Nodes
+//MARK: Move To Player
 // Writes out.moveAxis (local strafe/forward, not world space) — see
 // Player::updateVelocity for the axes this is projected onto.
 template <typename TargetT>
-class MoveToTarget : public Node<TargetT> {
+class MoveToPlayer : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
         Vector3 toTarget = Vector3Subtract(bb.target.position, bb.bot.position);
@@ -192,10 +198,11 @@ public:
     }
 };
 
+//MARK: Move To Safety
 // Steers away from any player within BOT_RETREAT_DISTANCE, weighted by
 // proximity. Writes out.moveAxis like MoveToTarget — same local-space rule.
 template <typename TargetT>
-class MoveToSafety : public Node<TargetT> {
+class MoveFromPlayer : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
         Vector3 totalAvoidance = {0, 0, 0};
@@ -223,6 +230,7 @@ public:
     }
 };
 
+//MARK: Move To Platform
 template <typename TargetT>
 class MoveToPlatform : public Node<TargetT> {
 public:
@@ -260,6 +268,7 @@ public:
     }
 };
 
+//MARK: Idle
 template <typename TargetT>
 class Idle : public Node<TargetT> {
 public:
@@ -271,39 +280,55 @@ public:
     }
 };
 
-// Steers the bot's yaw one clamped step toward aimDir, writing out.lookDelta.
-// Adds a personality-scaled random spread so low-accuracy bots don't track
-// perfectly (accuracy 1 -> no spread, accuracy 0 -> +/-BOT_MAX_AIM_SPREAD).
-// Shared by FireAtTarget and AttackAsteroid.
+// Steers the bot's yaw AND pitch one clamped step each toward aimDir (a 3D
+// direction), writing out.lookDelta. Adds a personality-scaled random spread so
+// low-accuracy bots don't track perfectly (accuracy 1 -> no spread, accuracy 0
+// -> +/-BOT_MAX_AIM_SPREAD, applied to both axes). Shared by FireAtPlayer and
+// AttackAsteroid.
 template <typename TargetT>
-inline void steerYawToward(Blackboard<TargetT>& bb, Vector3 aimDir) {
+inline void steerAimToward(Blackboard<TargetT>& bb, Vector3 aimDir) {
+    float maxStep = BOT_TURN_RATE * bb.dt;
+
+    // yaw: horizontal heading from the x/z components
     float desiredYaw = atan2f(aimDir.z, aimDir.x);
     desiredYaw += RandomFloat(-1.0f, 1.0f) * BOT_MAX_AIM_SPREAD * (1.0f - bb.profile.accuracy);
     float yawError = desiredYaw - bb.bot.yaw;
     while (yawError > PI) yawError -= 2.0f * PI;
     while (yawError < -PI) yawError += 2.0f * PI;
-    float maxStep = BOT_TURN_RATE * bb.dt;
     float yawStep = Clamp(yawError, -maxStep, maxStep);
     bb.out.lookDelta.x = yawStep / bb.bot.lookSensitivity;
+
+    // pitch: aimDir is normalized, so aimDir.y == sin(desiredPitch). Pitch is
+    // bounded (not cyclic), so no PI-wrap; clamp to the same limit updateLook enforces.
+    float desiredPitch = asinf(Clamp(aimDir.y, -1.0f, 1.0f));
+    desiredPitch += RandomFloat(-1.0f, 1.0f) * BOT_MAX_AIM_SPREAD * (1.0f - bb.profile.accuracy);
+    desiredPitch = Clamp(desiredPitch, -bb.bot.pitchLimit, bb.bot.pitchLimit);
+    float pitchError = desiredPitch - bb.bot.pitch;
+    float pitchStep  = Clamp(pitchError, -maxStep, maxStep);
+    // updateLook() does `pitch -= lookDelta.y * lookSensitivity`, so negate to
+    // raise aim toward desiredPitch.
+    bb.out.lookDelta.y = -pitchStep / bb.bot.lookSensitivity;
 }
 
+//MARK: Fire At Player
 // Writes out.lookDelta (steers yaw toward the lead-aim solution) and
 // out.fire once aligned.
 template <typename TargetT>
-class FireAtTarget : public Node<TargetT> {
+class FireAtPlayer : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
         auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot);
-        steerYawToward(bb, aimDir);
+        steerAimToward(bb, aimDir);
 
         if (isOnTarget) {
-            bb.out.fire = true;
+            if (!DISABLE_BOT_FIRE_PLAYER) bb.out.fire = true;
             return Status::Success;
         }
         return Status::Running;
     }
 };
 
+//MARK: attack asteroid
 template <typename TargetT>
 class AttackAsteroid : public Node<TargetT> {
 public:
@@ -326,9 +351,9 @@ public:
         //find aiming scheme to lead the asteroid
         if (closestAsteroid) {
             auto [isOnTarget, aimDir] = onTarget(*closestAsteroid, bb.bot);
-            steerYawToward(bb, aimDir);
+            steerAimToward(bb, aimDir);
             if (isOnTarget) {
-                bb.out.fire = true;
+                if (!DISABLE_BOT_FIRE_ASTEROIDS) bb.out.fire = true;
                 return Status::Success; // firing!
             }
             return Status::Running; // aiming solution exists, but not yet aligned.
@@ -337,6 +362,57 @@ public:
     }
 };
 
+//MARK: avoid asteroid
+template <typename TargetT>
+class AvoidAsteroid : public Node<TargetT> {
+    public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        if (bb.allAsteroids.empty()) return Status::Failure;
+
+        float buffer = BOT_ASTEROID_AVOID_BUFFER * (1.0f - 0.5f * bb.profile.aggression);
+        std::vector<Asteroid> dangerousAsteroids;
+        
+        for (const Asteroid& asteroid : bb.allAsteroids) {
+            // find all close asteroids (within buffer)
+            float dist = Vector3Length(Vector3Subtract(asteroid.position, bb.bot.position));
+            float r = asteroid.size + bb.bot.radius;
+            if (dist < buffer) {
+                float time = calculateIntersectionWithAccuracy(asteroid.position, asteroid.velocity, bb.bot.position, bb.bot.velocity, {r, r, r});
+                // Keep only imminent collisions: time < 0 is a miss, time > window is
+                // too far out to worry about. time == 0 means already inside the zone.
+                if (time < 0.0f || time > BOT_ASTEROID_COLLISION_TIME_WINDOW) continue;
+
+                // asteroid is close and will collide within the time window.  Add to list:
+                dangerousAsteroids.push_back(asteroid);
+            }
+        }
+        // no danger, move on.
+        if (dangerousAsteroids.empty()) return Status::Failure;
+
+        // Steer away from where the asteroids actually are, not where they're
+        // heading. Sum the bot->asteroid vectors weighted by proximity (closer =
+        // more urgent), then flee the opposite way.
+        Vector3 threatDir = {0.0f, 0.0f, 0.0f};
+        for (const Asteroid& asteroid : dangerousAsteroids) {
+            Vector3 toAsteroid = Vector3Subtract(asteroid.position, bb.bot.position);
+            float dist = Vector3Length(toAsteroid);
+            if (dist < 1e-4f) continue; // overlapping; no meaningful direction
+            // weight = 1/dist so nearer asteroids dominate the escape vector
+            threatDir = Vector3Add(threatDir, Vector3Scale(toAsteroid, 1.0f / (dist * dist)));
+        }
+        // If the threats cancel out (e.g. converging from opposite sides), pick
+        // any escape rather than steering toward a zero/garbage direction.
+        if (Vector3Length(threatDir) < 1e-4f) {
+            threatDir = Vector3Negate(bb.bot.velocity);
+            if (Vector3Length(threatDir) < 1e-4f) threatDir = {0.0f, 1.0f, 0.0f};
+        }
+        Vector3 awayDir = Vector3Normalize(Vector3Negate(threatDir));
+        steerAimToward(bb, awayDir);
+        return Status::Running;
+    }
+};
+
+//MARK: is low fuel
 template <typename TargetT>
 class IsLowFuel : public Node<TargetT> {
 public:
@@ -345,6 +421,7 @@ public:
     }
 };
 
+//MARK: is low health
 template <typename TargetT>
 class IsLowHealth : public Node<TargetT> {
 public:
@@ -377,15 +454,17 @@ public:
 // Like Selector, but throttles only the DECISION — which child wins — to a
 // BOT_TICK_TIME cadence. Between decisions it re-ticks the latched child every
 // frame, so the chosen action's movement/aim/fire stay per-dt; only the branch
-// choice is frozen (~1s). The latch lives per-bot in bb.decision (not in this
-// shared node), so one tree instance drives every bot independently.
+// choice is frozen (~1s). The latch lives per-bot in bb.decisions[latchId] (not
+// in this shared node), so one tree instance drives every bot independently and
+// multiple/nested LatchedSelectors each keep their own latch slot.
 template <typename TargetT>
 class LatchedSelector : public Node<TargetT> {
+    int latchId;                           // slot into bb.decisions — unique per LatchedSelector
     std::vector<Node<TargetT>*> children;
 public:
-    LatchedSelector(std::vector<Node<TargetT>*> kids) : children(std::move(kids)) {}
+    LatchedSelector(int id, std::vector<Node<TargetT>*> kids) : latchId(id), children(std::move(kids)) {}
     Status tick(Blackboard<TargetT>& bb) override {
-        BotDecision& d = bb.decision;
+        BotDecision& d = bb.decisions[latchId];
         d.timer += bb.dt;
 
         // (Re)decide on first tick or once this decision's interval elapses: pick
@@ -456,36 +535,19 @@ PlayerInput botInput(Player& bot,
                     const std::vector<Platform>& platforms,
                     const std::vector<Asteroid>& asteroids,
                     Node<TargetT>& tree, float dt,
-                    BotDecision& decision,
+                    std::vector<BotDecision>& decisions,
                     const BotProfile& profile) {
     PlayerInput out;
-    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, out, dt, decision, profile};
+    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, out, dt, decisions, profile};
     tree.tick(bb);
     return out;
 }
 
-// /// Instantiate leaf nodes
-// IsLowFuel<Player>      isLowFuel;
-// IsLowHealth<Player>    isLowHealth;
-// MoveToTarget<Player>   moveToTarget;
-// MoveToSafety<Player>   moveToSafety;
-// MoveToPlatform<Player> moveToPlatform;
-// FireAtTarget<Player>   fireAtTarget;
-// AttackAsteroid<Player> attackAsteroid;
-// Idle<Player>           idle;
+// #include <type_traits>
 
-// // Compose the tree. `movement` is a LatchedSelector so the branch CHOICE is
-// // re-evaluated only every BOT_TICK_TIME; the chosen action still ticks every
-// // frame. fireAtTarget sits in the top Parallel, so aim/fire stay per-frame.
-// Parallel<Player>        evadeAndShootAsteroid({ &moveToSafety, &attackAsteroid });
-// Sequence<Player>        lowHealthResponse({ &isLowHealth, &evadeAndShootAsteroid });
-// Sequence<Player>        lowFuelResponse({ &isLowFuel, &moveToPlatform });
-// LatchedSelector<Player> movement({ &lowHealthResponse, &lowFuelResponse, &moveToTarget, &idle });
-// Parallel<Player>        botTree({ &movement, &fireAtTarget });
+// if constexpr (std::is_same_v<TargetT, Player>) {
+//     bb.out.fire = !DISABLE_BOT_FIRE_PLAYER;
+// } else if constexpr (std::is_same_v<TargetT, Asteroid>) {
+//     bb.out.fire = !DISABLE_BOT_FIRE_ASTEROIDS;
+// }
 
-// // Per bot, per frame (botDecisions[i-1]/botProfiles[i-1] are this bot's state):
-// PlayerInput botIn = botInput(players[i], players[0], players,
-//                              gameSpace.getPlatforms(), gameSpace.getAsteroids(),
-//                              botTree, dt, botDecisions[i - 1], botProfiles[i - 1]);
-// float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
-// ApplyPlayerInput(players[i], botIn, dt, gravity, gameSpace);

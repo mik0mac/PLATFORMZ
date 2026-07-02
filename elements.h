@@ -134,6 +134,7 @@ public:
     // ID
     uint32_t id = 0; // Unique identifier for the player
     std::string name = "Player"; // Player's display name
+
     bool isBot = false; // Whether the player is a bot or a human player.
     uint32_t rocketCounter = 0; // Counter for rockets fired by this player, used to generate unique rocket IDs
 

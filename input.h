@@ -101,6 +101,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
 }
 
 //MARK: Bot input
+// NOT USED - replaced by bot_logic.h and the behaviour tree.  Kept for reference.
 // Test-only AI input source. Drives a non-local player by producing the same
 // PlayerInput a human would, so it flows through the identical ApplyPlayerInput()
 // path above. PlayerInput is per-frame/stateless, so the persistent wander
