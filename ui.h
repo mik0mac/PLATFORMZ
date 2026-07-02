@@ -36,6 +36,16 @@ inline void UiPanel(Rectangle r, Color outline = ui::OUTLINE, Color fill = ui::F
     DrawRectangleLinesEx(r, ui::BORDER, outline);
 }
 
+//MARK: Modal panel
+// Opaque variant for modal popups: a solid backdrop so nothing behind bleeds
+// through, then the normal shaded-wire panel (translucent cyan fill + opaque
+// border) on top. Same look as UiPanel, but the alpha-40 fill now sits over
+// black instead of the dimmed screen, so the popup content stays readable.
+inline void UiModalPanel(Rectangle r) {
+    DrawRectangleRec(r, BLACK); // opaque backdrop
+    UiPanel(r);                 // cyan tint + border, unchanged look
+}
+
 //MARK: Button
 // Panel + centered label; brightens on hover. Returns true on the frame the
 // mouse is pressed while hovering.

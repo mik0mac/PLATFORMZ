@@ -202,6 +202,7 @@ int main(int argc, char** argv) {
     bool        nameFocused = true;  // text field owns keyboard focus on entry (type without a click)
     bool        namePristine = true; // still the untouched "PLAYER" default; first keystroke clears it
     bool        showControls = false; // controls popup is open
+    bool        showOptions  = false; // options popup is open (placeholder)
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -327,13 +328,15 @@ int main(int argc, char** argv) {
                 enterNetworkedMatch();
                 continue;
             }
-            // Esc closes the controls popup (no cursor toggle on the menu).
+            // Esc closes an open popup (no cursor toggle on the menu).
             if (showControls && IsKeyPressed(KEY_ESCAPE)) showControls = false;
-            // Snapshot the popup state at frame start: CLOSE is only handled if the
+            if (showOptions  && IsKeyPressed(KEY_ESCAPE)) showOptions  = false;
+            // Snapshot each popup state at frame start: CLOSE is only handled if the
             // popup was ALREADY open, so the click that opens it can't also close
-            // it on the same frame (CONTROLS and CLOSE overlap on screen).
+            // it on the same frame (the open button and CLOSE overlap on screen).
             const bool controlsWasOpen = showControls;
-            const bool uiEnabled = !showControls; // the popup is modal
+            const bool optionsWasOpen  = showOptions;
+            const bool uiEnabled = !showControls && !showOptions; // either popup is modal
 
             BeginDrawing();
                 ClearBackground(BLACK);
@@ -419,12 +422,15 @@ int main(int argc, char** argv) {
 
                 Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
                 if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) showControls = true;
+                Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
+                if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) showOptions = true;
 
-                // Controls popup, drawn last so it sits on top.
+                // Controls popup, drawn last so it sits on top. Opaque panel
+                // (UiModalPanel) so the dimmed title UI doesn't bleed through.
                 if (showControls) {
                     DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.7f));
                     Rectangle m = {250, 170, 500, 360};
-                    UiPanel(m);
+                    UiModalPanel(m);
                     UiTextCentered("CONTROLS", screenWidth, (int)m.y + 20, 30, ui::OUTLINE);
                     const char* lines[] = {
                         "WASD          move",
@@ -438,6 +444,24 @@ int main(int argc, char** argv) {
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
                     Rectangle closeBtn = {(float)(screenWidth / 2 - 70), m.y + m.height - 60, 140, 40};
                     if (controlsWasOpen && UiButton(closeBtn, "CLOSE")) showControls = false;
+                }
+
+                // Options popup (placeholder for now), same opaque modal style.
+                if (showOptions) {
+                    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.7f));
+                    Rectangle m = {250, 170, 500, 360};
+                    UiModalPanel(m);
+                    UiTextCentered("OPTIONS", screenWidth, (int)m.y + 20, 30, ui::OUTLINE);
+                    const char* lines[] = {
+                        "Master volume       coming soon",
+                        "Mouse sensitivity   coming soon",
+                        "Invert Y            coming soon",
+                        "Field of view       coming soon",
+                    };
+                    int ly = (int)m.y + 90;
+                    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, GRAY); ly += 40; }
+                    Rectangle closeBtn = {(float)(screenWidth / 2 - 70), m.y + m.height - 60, 140, 40};
+                    if (optionsWasOpen && UiButton(closeBtn, "CLOSE")) showOptions = false;
                 }
             EndDrawing();
             continue;
