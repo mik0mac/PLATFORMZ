@@ -158,30 +158,40 @@ int main(int argc, char** argv) {
     std::vector<BotState> botStates;
     // Per-bot decision state for the shared behaviour tree's LatchedSelector
     // (branch latch + timer). Sized alongside botStates in startGame().
-    std::vector<BotDecision> botDecisions;
+    std::vector<std::vector<BotDecision>> botDecisions; // per bot -> one BotDecision per LatchedSelector (LATCH_COUNT slots)
     // Per-bot personality (aggression/accuracy), assigned once at spawn in
     // startGame() and read by the tree nodes. Also sized alongside botStates.
     std::vector<BotProfile> botProfiles;
 
     /// BOT DECISION TREE
+    // One latch slot per LatchedSelector in the tree. Each bot gets a
+    // BotDecision vector sized to LATCH_COUNT so nested/sibling latches keep
+    // independent state (see LatchedSelector). Add a new LatchedSelector? Give
+    // it an id here.
+    enum LatchId { LATCH_MOVEMENT, LATCH_MOVE_TO_SAFETY,
+                   LATCH_ATTACK_PLAYER, LATCH_FIRE, LATCH_COUNT };
     /// Instantiate leaf nodes
     IsLowFuel<Player>      isLowFuel;
     IsLowHealth<Player>    isLowHealth;
-    MoveToTarget<Player>   moveToTarget;
-    MoveToSafety<Player>   moveToSafety;
+    MoveToPlayer<Player>   moveToPlayer;
+    MoveFromPlayer<Player>   moveFromPlayer;
     MoveToPlatform<Player> moveToPlatform;
-    FireAtTarget<Player>   fireAtTarget;
+    FireAtPlayer<Player>   fireAtPlayer;
     AttackAsteroid<Player> attackAsteroid;
+    AvoidAsteroid<Player>  avoidAsteroid;
     Idle<Player>           idle;
 
     // Compose the tree. `movement` is a LatchedSelector: it re-evaluates WHICH
     // branch wins only every BOT_TICK_TIME, but the chosen action still ticks
     // every frame. fireAtTarget sits in the top Parallel, so aim/fire stay
     // per-frame regardless of the movement decision cadence.
-    Parallel<Player>        evadeAndShootAsteroid({ &moveToSafety, &attackAsteroid });
-    Sequence<Player>        lowHealthResponse({ &isLowHealth, &evadeAndShootAsteroid });
-    Sequence<Player>        lowFuelResponse({ &isLowFuel, &moveToPlatform });
-    LatchedSelector<Player> movement({ &lowHealthResponse, &lowFuelResponse, &moveToTarget, &idle });
+    LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &attackAsteroid, &fireAtPlayer });
+    LatchedSelector<Player>        moveToSafety(LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &moveFromPlayer });
+    // Parallel<Player>        evadeAndShootAsteroid({ &moveToSafety, &attackAsteroid });
+    Sequence<Player>        lowHealthResponse({ &isLowHealth, &moveToSafety });
+    Sequence<Player>        lowFuelResponse({ &isLowFuel, &moveToPlatform, &idle });
+    LatchedSelector<Player>        attackPlayer(LATCH_ATTACK_PLAYER, { &avoidAsteroid, &moveToPlayer });
+    LatchedSelector<Player> movement(LATCH_MOVEMENT, { &avoidAsteroid, &lowHealthResponse, &lowFuelResponse, &attackPlayer });
     Parallel<Player>        botTree({ &movement, &fireAtTarget });
 
 
@@ -225,7 +235,7 @@ int main(int argc, char** argv) {
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.generate(); // platforms, asteroids, and player slots
         botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
-        botDecisions.assign(gameSpace.getPlayers().size() - 1, BotDecision{});
+        botDecisions.assign(gameSpace.getPlayers().size() - 1, std::vector<BotDecision>(LATCH_COUNT));
         botProfiles.assign(gameSpace.getPlayers().size() - 1, BotProfile{});
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)

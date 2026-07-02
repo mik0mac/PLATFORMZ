@@ -16,6 +16,7 @@ enum AudioFXId {
     FX_COUNT
 };
 
+
 const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  The distance at which the sound is the softest.
 const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
 
@@ -146,7 +147,8 @@ const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (L
 const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
-
+const bool DISABLE_BOT_FIRE_PLAYER = true;     // If true, bots don't fire rockets (for testing other features)
+const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
 const char* const BOT_NAME_STRINGS[] = {
