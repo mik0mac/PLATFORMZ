@@ -420,10 +420,14 @@ int main(int argc, char** argv) {
                                    screenWidth, (int)startY + 14, 20, GRAY);
                 }
 
+                // Opening a modal must leave the cursor free (the popups are
+                // click-driven, especially OPTIONS). The title screen is already a
+                // free-cursor state, but guard explicitly so this holds if a modal
+                // is ever opened from a captured (in-game) context.
                 Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
-                if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) showControls = true;
+                if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) { showControls = true; if (IsCursorHidden()) EnableCursor(); }
                 Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
-                if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) showOptions = true;
+                if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
 
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
