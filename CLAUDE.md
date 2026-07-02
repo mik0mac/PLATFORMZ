@@ -17,6 +17,14 @@ Toolchain is **macOS + Homebrew raylib**:
 - Editing a header or an existing `.cpp` needs **no** Makefile change.
 - Adding a **new** `.cpp` requires adding it to `SRCS` in the `Makefile`.
 
+## IMPORTANT: Git workflow — commit to the current branch
+**Always commit to whatever branch is currently checked out.** Never create a new
+branch on your own initiative. If — and only if — you genuinely believe a change
+should not go on the current branch, do **not** silently make one: stop and say so
+overtly, addressing Mike by name and being blunt about it, e.g. _"Mike, this change
+should really go on a new branch. You would be dumb to commit this to main right
+now."_ Then wait for his go-ahead. No new branch without his explicit OK.
+
 ## IMPORTANT: IDE diagnostics are false positives
 The clang/clangd language server isn't configured with `-I/opt/homebrew/include`,
 so it reports things like `'raylib.h' file not found`, `Unknown type name
