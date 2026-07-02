@@ -171,6 +171,9 @@ const float ASTEROID_MIN_SIZE = 4.0f; // Minimum radius of the asteroid
 const float ASTEROID_MAX_SIZE = 8.0f; // GAMESPACE_HALF_SIZE / 5.0f; // Maximum radius of the asteroid
 const float ASTEROID_MIN_SPEED = 6.0f; // Minimum speed of the asteroid
 const float ASTEROID_MAX_SPEED = 12.0f; // GAMESPACE_HALF_SIZE / 3.0f; // Maximum speed of the asteroid
+// Min center-to-center distance to keep a freshly-scattered asteroid away from any
+// player's spawn (issue #5). ~= max asteroid radius (8) + player radius (2) + margin.
+const float ASTEROID_PLAYER_SPAWN_BUFFER = 15.0f;
 
 const float ASTEROID_FLASH_DURATION = 4.0f; // length of the hot-glow damage flash, seconds
 const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage flash, 0.0 - 1.0

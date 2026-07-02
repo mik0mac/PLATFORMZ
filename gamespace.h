@@ -54,11 +54,14 @@ public:
         audioEvents.clear();
     }
 
-    // Generate the static/dynamic WORLD (platforms + asteroids) and clear the
-    // transient object pools - but NOT players. Split out of generate() so the
-    // networked server can (re)build a fresh world for a match while keeping the
-    // existing player slots (and their ids) stable across a restart.
-    void generateWorld() {
+    // Generate the static WORLD platforms and clear the transient object pools -
+    // but NOT players or asteroids. Split out so the generation order is
+    // platforms -> players (spread) -> asteroids (buffered away from players),
+    // per issue #5; asteroids need the player positions, so they're generated
+    // separately (generateAsteroids) AFTER players are placed. The networked
+    // server calls this to (re)build a fresh world while keeping the existing
+    // player slots (and their ids) stable across a restart.
+    void generatePlatforms() {
         platforms.clear();
         std::vector<Vector3> placed; // already-placed platform centers, fed to best-candidate sampling
         placed.reserve(num_of_platforms);
@@ -75,7 +78,20 @@ public:
             placed.push_back(platform.position);
             platforms.push_back(platform);
         }
+        rockets.clear();    // Rockets will be generated when the player shoots.
+        explosions.clear(); // Explosions will be generated when rockets detonate.
+        sparks.clear();     // VFX particles, spawned by jetpack exhaust / asteroid bursts.
+    }
+
+    // Scatter the asteroids randomly, keeping each at least
+    // ASTEROID_PLAYER_SPAWN_BUFFER from every already-placed player (issue #5).
+    // Call AFTER placePlayersSpread so player positions are known. Draws a few
+    // random candidates in the buffer cube and keeps the first that clears all
+    // players, falling back to the farthest-from-nearest-player candidate after
+    // `samples` tries so a crowded map never hard-fails.
+    void generateAsteroids() {
         asteroids.clear();
+        float buffer = walls.halfSize * boundaryBufferAsteroids;
         for (int i = 0; i < num_of_asteroids; ++i) {
             Asteroid asteroid;
             //MARK: Asteroid ID
@@ -83,34 +99,58 @@ public:
 
             // size, position, and velocity are generated randomly:
             asteroid.generateSize(); // Random size for the asteroid
-            float buffer = walls.halfSize * boundaryBufferAsteroids;
-            asteroid.position = {RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer), RandomFloat(-buffer, buffer)};
+            asteroid.position = asteroidPositionAwayFromPlayers(buffer);
             asteroid.startingPosition = asteroid.position; // Store the initial position of the asteroid
             asteroid.generateVelocity(); // Random velocity in each direction
             asteroids.push_back(asteroid);
         }
-        rockets.clear();    // Rockets will be generated when the player shoots.
-        explosions.clear(); // Explosions will be generated when rockets detonate.
-        sparks.clear();     // VFX particles, spawned by jetpack exhaust / asteroid bursts.
     }
 
-    // Spawn the player at a fresh start point: on top of a random platform (or
-    // the origin if none) facing the center, velocity zeroed. Shared by the
-    // initial spawn (spawnPlayers) and a match reset (resetPlayersForMatch).
-    void placePlayer(Player& player) {
-        if (!platforms.empty()) {
-            int platformIndex = static_cast<int>(RandomFloat(0, platforms.size() - 1));
-            Platform& startPlatform = platforms[platformIndex];
-            player.position = Vector3Add(startPlatform.position, Vector3{0, startPlatform.size.y / 2 + player.radius, 0}); // on top of the platform
-        } else {
-            player.position = {0.0f, 0.0f, 0.0f}; // no platforms (lobby): start at the center
-        }
+    // Spawn the player at a fresh start point: on top of a given platform-top
+    // position (or the origin if none), facing the center, velocity zeroed. The
+    // caller chooses the position (placePlayersSpread spreads them out); this
+    // just finishes the per-player state. Shared by the initial spawn and match
+    // reset so both go through the same finish.
+    void orientPlayerAt(Player& player, Vector3 pos) {
+        player.position = pos;
         player.startingPosition = player.position;
         // Face the center of the game space.
         Vector3 toCenter = Vector3Subtract({0, 0, 0}, player.position);
         player.yaw = atan2f(toCenter.z, toCenter.x); // angle in the XZ plane
         player.pitch = 0.0f; // look horizontally
         player.velocity = {0.0f, 0.0f, 0.0f};
+    }
+
+    // Place every player as far apart as possible (issue #5): the first player
+    // lands on a random platform top, then each subsequent player takes the
+    // platform top that maximizes its minimum distance to the already-placed
+    // players (farthest-point / greedy - same spirit as bestCandidatePosition,
+    // but over the discrete set of platform tops). No platforms (lobby) -> origin.
+    void placePlayersSpread() {
+        std::vector<Vector3> chosen;
+        chosen.reserve(players.size());
+        for (Player& player : players) {
+            Vector3 pos;
+            if (platforms.empty()) {
+                pos = {0.0f, 0.0f, 0.0f}; // no platforms (lobby): start at the center
+            } else if (chosen.empty()) {
+                int idx = static_cast<int>(RandomFloat(0, platforms.size() - 1));
+                pos = platformTop(platforms[idx], player.radius);
+            } else {
+                // Pick the platform top farthest from its nearest already-placed player.
+                float bestNearestSqr = -1.0f;
+                pos = platformTop(platforms[0], player.radius);
+                for (const Platform& platform : platforms) {
+                    Vector3 top = platformTop(platform, player.radius);
+                    float nearestSqr = std::numeric_limits<float>::max();
+                    for (const Vector3& c : chosen)
+                        nearestSqr = std::min(nearestSqr, Vector3DistanceSqr(top, c));
+                    if (nearestSqr > bestNearestSqr) { bestNearestSqr = nearestSqr; pos = top; }
+                }
+            }
+            orientPlayerAt(player, pos);
+            chosen.push_back(player.position);
+        }
     }
 
     // Create the player slots (fresh ids). Mode-neutral: makes no bot
@@ -132,20 +172,24 @@ public:
             fill.a = 40; // low alpha translucent fill for the "glowing vector glass" effect
             player.color_fill = fill;
 
-            placePlayer(player);
             players.push_back(player);
         }
+        placePlayersSpread(); // spread all slots across the platform tops (issue #5)
     }
 
+    // Local sim: build the whole world in the issue-#5 order - platforms first,
+    // then players spread across them, then asteroids scattered away from players.
     void generate() {
-        generateWorld();
-        spawnPlayers();
+        generatePlatforms();
+        spawnPlayers();     // creates slots + spreads them across the platforms
+        generateAsteroids(); // buffered away from the now-placed players
     };
 
     // Reset the EXISTING player slots for a fresh match without changing their
     // ids/count (Player isn't copy-assignable - const members - so reset fields
     // individually). Keeps the server's slot<->client mapping stable across a
-    // restart. Call after generateWorld() so placePlayer has platforms to use.
+    // restart. Call after generatePlatforms() so placePlayersSpread has platforms
+    // to spread the slots across; follow with generateAsteroids().
     void resetPlayersForMatch() {
         for (Player& p : players) {
             p.health  = PLAYER_STARTING_HEALTH;
@@ -157,8 +201,8 @@ public:
             p.flashTimer    = 0.0f;
             p.coolDownTime  = 0.0f;
             p.isUsingJetpack = false;
-            placePlayer(p); // reposition on the new platforms + zero velocity/orientation
         }
+        placePlayersSpread(); // reposition all slots spread across the new platforms (issue #5)
         rockets.clear();
         explosions.clear();
         sparks.clear();
@@ -382,6 +426,34 @@ private:
             }
         }
         return best;
+    }
+
+    // Center-top of a platform, offset up by the player's radius so the body
+    // sits ON the surface rather than intersecting it. Used for player spawns.
+    static Vector3 platformTop(const Platform& p, float playerRadius) {
+        return Vector3Add(p.position, Vector3{0, p.size.y / 2 + playerRadius, 0});
+    }
+
+    // A random asteroid spawn inside the buffer cube that stays at least
+    // ASTEROID_PLAYER_SPAWN_BUFFER from every already-placed player (issue #5).
+    // Keeps the first candidate that clears all players; after `samples` misses
+    // (crowded map), returns the candidate farthest from its nearest player so
+    // it never hard-fails. With no players it's just a uniform random draw.
+    Vector3 asteroidPositionAwayFromPlayers(float buffer, int samples = 10) {
+        const float minSqr = ASTEROID_PLAYER_SPAWN_BUFFER * ASTEROID_PLAYER_SPAWN_BUFFER;
+        Vector3 best{};
+        float bestNearestSqr = -1.0f;
+        for (int s = 0; s < samples; ++s) {
+            Vector3 c{RandomFloat(-buffer, buffer),
+                      RandomFloat(-buffer, buffer),
+                      RandomFloat(-buffer, buffer)};
+            float nearestSqr = std::numeric_limits<float>::max();
+            for (const Player& p : players)
+                nearestSqr = std::min(nearestSqr, Vector3DistanceSqr(c, p.position));
+            if (nearestSqr >= minSqr) return c; // clears every player - take it
+            if (nearestSqr > bestNearestSqr) { bestNearestSqr = nearestSqr; best = c; }
+        }
+        return best; // fallback: farthest-from-nearest-player candidate seen
     }
 
     Walls walls; // the play-space boundary cube (single instance)
