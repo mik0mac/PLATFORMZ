@@ -541,8 +541,12 @@ void SimulationLoop() {
             // clients keep their slot mapping across a restart), then begin.
             if (startRequested.exchange(false)) {
                 gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), pendingRoid.load());
-                gameSpace.generateWorld();
+                // Issue #5 order: platforms -> players (spread) -> asteroids
+                // (buffered away from the placed players). Same sequence the local
+                // client's generate() uses, so both modes build worlds identically.
+                gameSpace.generatePlatforms();
                 gameSpace.resetPlayersForMatch();
+                gameSpace.generateAsteroids();
                 { std::lock_guard<std::mutex> gc(clientMutex); matchStartConnected = (int)clients.size(); }
                 gamePhase = Phase::PLAYING;
                 justStarted = true;
@@ -569,8 +573,13 @@ void SimulationLoop() {
                 }
             }
 
-            // Only simulate while a match is in progress; LOBBY/GAMEOVER are idle.
-            if (gamePhase.load() == Phase::PLAYING) {
+            // Keep simulating through PLAYING *and* GAMEOVER; only LOBBY (no world
+            // yet) is idle. The GAMEOVER sim keeps the world moving during the
+            // client's game-over countdown so networked play matches local, where
+            // the sim runs every frame of that countdown (issue #2). The match-end
+            // detection below stays PLAYING-only so it fires exactly once.
+            Phase phase = gamePhase.load();
+            if (phase == Phase::PLAYING || phase == Phase::GAMEOVER) {
                 // Apply each client's latest input to their player slot
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
@@ -598,8 +607,9 @@ void SimulationLoop() {
                 // players remain alive. threshold is 1 for a multi-player match and
                 // 0 for a solo start, so a lone player's match ends only when they
                 // die (not instantly). Only connected slots count - empty slots are
-                // inert and never "win".
-                {
+                // inert and never "win". PLAYING-only: once GAMEOVER we keep the
+                // world simulating (above) but never re-evaluate the end condition.
+                if (phase == Phase::PLAYING) {
                     std::lock_guard<std::mutex> gc(clientMutex);
                     auto& players = gameSpace.getPlayers();
                     int aliveConnected = 0;
