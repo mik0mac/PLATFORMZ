@@ -41,12 +41,17 @@ public:
         float volume = 1.0f - dist / AUDIO_MAX_DISTANCE; // linear falloff
         volume = Clamp(volume, AUDIO_MIN_VOLUME, 1.0f);
 
-        float dx = sourcePos.x - listenerDirection.x;
-        float pan = (Clamp(dx / AUDIO_MAX_DISTANCE, -1.0f, 1.0f) + 1.0f) * 0.5f;
-
-        //testing
-        // volume = 1.0f;
-        // pan = 0.5f;
+        // pan: where is the source relative to the listener's facing?
+        // Project the (flattened) source-relative vector onto the listener's
+        // right vector so turning around correctly swaps left/right. Depends on
+        // angle only, not distance (distance is handled by volume above).
+        Vector3 toSrc = { sourcePos.x - listenerPos.x, 0.0f, sourcePos.z - listenerPos.z };
+        float pan = 0.5f; // center by default (source on top of listener)
+        if (Vector3LengthSqr(toSrc) > 1e-6f) {
+            Vector3 right = Vector3Normalize(Vector3CrossProduct(listenerDirection, {0, 1, 0}));
+            float side = Vector3DotProduct(Vector3Normalize(toSrc), right); // -1 L .. +1 R
+            pan = (Clamp(side, -1.0f, 1.0f) + 1.0f) * 0.5f;
+        }
         SetSoundVolume(sound, volume * baseVolume);
         SetSoundPan(sound, pan);
         PlaySound(sound);
