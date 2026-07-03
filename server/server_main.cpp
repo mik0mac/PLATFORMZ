@@ -123,6 +123,10 @@ int matchStartConnected = 0; // connected count at match start (sim thread only)
 std::atomic<float> pendingHalf{GAMESPACE_HALF_SIZE};
 std::atomic<int>   pendingPlat{GAMESPACE_NUMBER_OF_PLATFORMS};
 std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
+// OPTIONS carried by a start request: requested match size (clamped to connected
+// clients at consume) and bot difficulty center. Same io->sim handoff as above.
+std::atomic<int>   pendingPlayers{GAMESPACE_NUMBER_OF_PLAYERS};
+std::atomic<float> pendingDiff{BOT_DIFFICULTY};
 
 static const char* phaseString(Phase p) {
     switch (p) {
@@ -462,6 +466,8 @@ private:
                     pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
                     pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
                     pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
+                    pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
+                    pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY);
                     startRequested = true; // release: set after the preset values above
                     self->Read();
                     return;
@@ -584,17 +590,29 @@ void SimulationLoop() {
             // clients keep their slot mapping across a restart), then begin.
             if (startRequested.exchange(false)) {
                 gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), pendingRoid.load());
+                // Resize the roster to the requested match size, but never below the
+                // highest connected client's slot (no connected player loses their
+                // body). Empty slots become bots via the per-tick reconcile. Do this
+                // BEFORE generate so resetPlayersForMatch/placePlayersSpread size to
+                // the final count. (lock order gameMutex->clientMutex preserved.)
+                int want = pendingPlayers.load(), maxClaimed = 0;
+                {
+                    std::lock_guard<std::mutex> gc(clientMutex);
+                    matchStartConnected = (int)clients.size();
+                    for (auto& [ws, c] : clients) maxClaimed = std::max(maxClaimed, c.playerId + 1);
+                }
+                want = std::min(std::max(want, maxClaimed), GAMESPACE_NUMBER_OF_PLAYERS);
+                gameSpace.setPlayerCount(want);
                 // Issue #5 order: platforms -> players (spread) -> asteroids
                 // (buffered away from the placed players). Same sequence the local
                 // client's generate() uses, so both modes build worlds identically.
                 gameSpace.generatePlatforms();
                 gameSpace.resetPlayersForMatch();
                 gameSpace.generateAsteroids();
-                { std::lock_guard<std::mutex> gc(clientMutex); matchStartConnected = (int)clients.size(); }
                 // Seed every slot's bot personality once for this match (stable per
-                // slot id). Which slots are bots is set by the per-tick reconcile
-                // above; drive() reads the profiles seeded here.
-                botController.init(gameSpace.getPlayers());
+                // slot id) at the requested difficulty. Which slots are bots is set
+                // by the per-tick reconcile above; drive() reads the profiles here.
+                botController.init(gameSpace.getPlayers(), pendingDiff.load());
                 gamePhase = Phase::PLAYING;
                 justStarted = true;
                 std::cout << "Match started (" << matchStartConnected << " connected)\n";

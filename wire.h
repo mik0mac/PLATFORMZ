@@ -76,12 +76,15 @@ inline std::string serializeName(const std::string& name) {
     return j.dump();
 }
 
-inline std::string serializeStart(float half, int platforms, int asteroids) {
+inline std::string serializeStart(float half, int platforms, int asteroids,
+                                  int nplayers, float diff) {
     nlohmann::json j = {
         {"type", "start"},
         {"half", half},
         {"plat", platforms},
-        {"roid", asteroids}
+        {"roid", asteroids},
+        {"nplayers", nplayers}, // requested match size (server clamps to connected)
+        {"diff", diff}          // bot difficulty center [0..BOT_DIFFICULTY]
     };
     return j.dump();
 }

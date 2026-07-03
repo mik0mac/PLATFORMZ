@@ -80,11 +80,11 @@ struct BotController {
     // personality deterministically from its player id, so the same map replays
     // the same bots. Does NOT touch isBot/name/color — the caller owns which
     // slots are bots (local: slots 1+, server: unoccupied slots).
-    void init(std::vector<Player>& players) {
+    void init(std::vector<Player>& players, float difficulty = BOT_DIFFICULTY) {
         int n = (int)players.size();
         decisions.assign(n, std::vector<BotDecision>(LATCH_COUNT));
         profiles.assign(n, BotProfile{});
-        // Personality spread widens with bot count: a lone bot ~= BOT_DIFFICULTY,
+        // Personality spread widens with bot count: a lone bot ~= difficulty,
         // a crowd fans out around it. n-1 potential bots (slot 0 reserved for the
         // human in local mode) matches the previous local-mode spread.
         int nBots = n - 1;
@@ -92,8 +92,8 @@ struct BotController {
         for (int i = 0; i < n; ++i) {
             std::mt19937 rng(players[i].id);
             std::uniform_real_distribution<float> jitter(-spread, spread);
-            profiles[i].aggression = Clamp(BOT_DIFFICULTY + jitter(rng), 0.0f, 1.0f);
-            profiles[i].accuracy   = Clamp(BOT_DIFFICULTY + jitter(rng), 0.0f, 1.0f);
+            profiles[i].aggression = Clamp(difficulty + jitter(rng), 0.0f, 1.0f);
+            profiles[i].accuracy   = Clamp(difficulty + jitter(rng), 0.0f, 1.0f);
         }
     }
 

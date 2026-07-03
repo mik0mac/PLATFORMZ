@@ -384,6 +384,27 @@ public:
         num_of_asteroids = asteroids;
     }
 
+    // Set the number of player slots for the next match. Local mode calls this
+    // before generate() (spawnPlayers rebuilds the vector to this count). The
+    // server calls it in place to grow/shrink WITHOUT dropping connected clients:
+    // low-index slots keep their id/state, new slots get a fresh id + round-robin
+    // color (same as spawnPlayers), extra slots are popped off the tail. Clamped
+    // to >= 1 (always at least the local human / one slot).
+    void setPlayerCount(int n) {
+        number_of_players = n < 1 ? 1 : n;
+        while ((int)players.size() > number_of_players) players.pop_back();
+        while ((int)players.size() < number_of_players) {
+            Player player;
+            player.id = nextPlayerID++;
+            int i = (int)players.size();
+            player.color_outline = HUMAN_PLAYER_COLORS[i % HUMAN_PLAYER_COLORS.size()];
+            Color fill = player.color_outline;
+            fill.a = 40;
+            player.color_fill = fill;
+            players.push_back(player);
+        }
+    }
+
     Walls& getWalls() { return walls; }
     std::vector<Platform>& getPlatforms() { return platforms; }
     std::vector<Asteroid>& getAsteroids() { return asteroids; }
