@@ -144,15 +144,18 @@ const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target hea
 // the center of the personality distribution [0..1]; each bot's aggression &
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
 // with bot count (so a lone bot ~= difficulty, a crowd is varied).
-const float BOT_DIFFICULTY = 0.2f;         // 0 easy .. 1 hard; center for all bot personalities
+const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; center for all bot personalities
 const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
-const float BOT_MAX_AIM_SPREAD = 0.30f;    // radians of aim error at accuracy=0 (0 at accuracy=1)
+const float BOT_MAX_AIM_SPREAD = 0.50f;    // radians of aim error at accuracy=0 (0 at accuracy=1) 0.5 = ~28.6 degrees 0.3 = ~17.2 degrees
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
 const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 const bool DISABLE_BOT_FIRE_PLAYER = false;     // If true, bots don't fire rockets (for testing other features)
 const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
+const float BOT_FIRERATE_MAX = PLAYER_FIRE_RATE; // max shots/sec for bots (lower = easier)
+const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bots (higher = harder)
+
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
 const char* const BOT_NAME_STRINGS[] = {

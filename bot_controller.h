@@ -29,7 +29,8 @@ struct BotController {
     // it an id here.
     enum LatchId { LATCH_MOVEMENT, LATCH_MOVE_TO_SAFETY,
                    LATCH_ATTACK_STYLE, LATCH_FIRE,
-                   LATCH_KITE_CHANCE, LATCH_RETREAT_CD, LATCH_COUNT };
+                   LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
+                   LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -47,12 +48,25 @@ struct BotController {
 
     // --- Composed tree (declaration order matters: composites reference the
     // addresses of nodes declared above; members initialise top-to-bottom). ---
+
+
+
+    // Rate-limit the bots' fire to make the difficulty setting meaningful. Fire
+    // cadence scales with aggression: aggressive bots approach PLAYER_FIRE_RATE,
+    // timid bots fire ~1/4 as often. Computed per-bot from bb.profile because the
+    // tree nodes are shared across all bots (there's no bot instance at construction).
+    static float botFirePeriod(Blackboard<Player>& bb) {
+        float rate = (BOT_FIRERATE_MAX - BOT_FIRERATE_MIN) * bb.profile.aggression + BOT_FIRERATE_MIN; // shots/sec
+        return 1.0f / rate; // seconds between shots (the Cooldown period)
+    }
+    Cooldown<Player>               rateLimitedFireAtPlayer{ LATCH_FIRE_PLAYER_CD, botFirePeriod, &fireAtPlayer };
+    Cooldown<Player>               rateLimitedAttackAsteriod { LATCH_ATTACK_AST_CD, botFirePeriod, &attackAsteroid };
     // needsBonus is a GUARD, so it gates attackAsteroid via a Sequence: only hunt
     // asteroids when a bonus is actually wanted.
-    Sequence<Player>               attackAsteroidForBonus{ { &needsBonus, &attackAsteroid } };
+    Sequence<Player>               attackAsteroidForBonus{ { &needsBonus, &rateLimitedAttackAsteriod } };
     // fireAtTarget sits in the top Parallel, so aim/fire stay per-frame regardless
     // of the movement decision cadence.
-    LatchedSelector<Player>        fireAtTarget{ LATCH_FIRE, { &fireAtPlayer, &attackAsteroidForBonus } };
+    LatchedSelector<Player>        fireAtTarget{ LATCH_FIRE, { &rateLimitedFireAtPlayer, &attackAsteroidForBonus } };
     // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite). "Kiting":
     // retreating while keeping an enemy at a distance you control. avoidAsteroid
     // stays a hard priority ahead of the kite/cover.

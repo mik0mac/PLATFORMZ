@@ -721,13 +721,19 @@ public:
 template <typename TargetT>
 class Cooldown : public Node<TargetT> {
     int stateId; float cooldown; Node<TargetT>* child;
+    float (*periodFn)(Blackboard<TargetT>&) = nullptr; // per-bot period (s); overrides `cooldown` when set
 public:
     Cooldown(int id, float seconds, Node<TargetT>* c) : stateId(id), cooldown(seconds), child(c) {}
+    // Per-bot variant: the period is computed from the blackboard each tick (e.g.
+    // scaled by bb.profile), since the shared tree node can't bake a per-bot value.
+    Cooldown(int id, float (*period)(Blackboard<TargetT>&), Node<TargetT>* c)
+        : stateId(id), cooldown(0.0f), child(c), periodFn(period) {}
     Status tick(Blackboard<TargetT>& bb) override {
         BotDecision& s = bb.decisions[stateId];
-        if (s.activeBranch < 0) { s.activeBranch = 0; s.timer = cooldown; } // fresh: ready now
+        float cd = periodFn ? periodFn(bb) : cooldown;             // per-bot period when a fn is supplied
+        if (s.activeBranch < 0) { s.activeBranch = 0; s.timer = cd; } // fresh: ready now
         s.timer += bb.dt;
-        if (s.timer < cooldown) return Status::Failure;            // still cooling down
+        if (s.timer < cd) return Status::Failure;                  // still cooling down
         Status st = child->tick(bb);
         if (st == Status::Success) s.timer = 0.0f;                 // restart cooldown on completion
         return st;

@@ -519,7 +519,7 @@ void CheckPlayerWallCollisions(GameSpace& space) {
         }
 
         if (hitWall) {
-            player.takeDamage(walls.damage);
+            if (walls.damage > 0.0f) player.takeDamage(walls.damage);
             space.emitAudio(FX_WALL_BOUNCE_PLAYER, player.position, player.id);
         }
     }
