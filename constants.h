@@ -67,7 +67,7 @@ const bool WALLS_STOP_ROCKETS = false; // if true, rockets are destroyed on wall
 
 //MARK: Platform Constants
 const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
-const float PLATFORM_ELASTICITY_ASTEROID = 0.95f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
+const float PLATFORM_ELASTICITY_ASTEROID = 0.99f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
 
 const float PLATFORM_MIN_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 12.0f; // 5.0f; // Minimum width of the platform
 const float PLATFORM_MAX_WIDTH = 18.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform

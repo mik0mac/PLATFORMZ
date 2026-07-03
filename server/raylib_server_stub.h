@@ -94,6 +94,7 @@ inline Vector2 Vector2Normalize(Vector2 v) {
 inline Vector3 Vector3Add(Vector3 a, Vector3 b)      { return {a.x+b.x, a.y+b.y, a.z+b.z}; }
 inline Vector3 Vector3Subtract(Vector3 a, Vector3 b) { return {a.x-b.x, a.y-b.y, a.z-b.z}; }
 inline Vector3 Vector3Scale(Vector3 v, float s)      { return {v.x*s, v.y*s, v.z*s}; }
+inline Vector3 Vector3Negate(Vector3 v)              { return {-v.x, -v.y, -v.z}; }
 inline float   Vector3Length(Vector3 v)               { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
 inline float   Vector3LengthSqr(Vector3 v)            { return v.x*v.x + v.y*v.y + v.z*v.z; }
 inline float   Vector3Distance(Vector3 a, Vector3 b)  { return Vector3Length(Vector3Subtract(a, b)); }
