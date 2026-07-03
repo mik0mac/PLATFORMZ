@@ -20,6 +20,11 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h> // emscripten_run_script_string (read page URL)
+// Tell shell.html whether a title-screen modal (CONTROLS/OPTIONS) is open, so its
+// mousedown pointer-lock handler can skip grabbing the cursor for menu popups.
+EM_JS(void, PlatformzSetModalOpen, (int open), { if (window.Module) Module.modalOpen = !!open; });
+#else
+inline void PlatformzSetModalOpen(int) {} // no-op on native builds
 #endif
 
 
@@ -180,7 +185,14 @@ int main(int argc, char** argv) {
     bool        nameFocused = true;  // text field owns keyboard focus on entry (type without a click)
     bool        namePristine = true; // still the untouched "PLAYER" default; first keystroke clears it
     bool        showControls = false; // controls popup is open
-    bool        showOptions  = false; // options popup is open (placeholder)
+    bool        showOptions  = false; // options popup is open
+
+    // OPTIONS sliders (see the OPTIONS modal below). Stored as floats so UiSlider
+    // can drive them; cast where an int is needed. Defaults match the constants.
+    float optNumPlayers    = (float)GAMESPACE_NUMBER_OF_PLAYERS; // 1..GAMESPACE_NUMBER_OF_PLAYERS
+    float optBotDifficulty = BOT_DIFFICULTY;                     // 0.0..BOT_DIFFICULTY
+    bool  sliderPlayersActive = false; // drag latch for the players slider
+    bool  sliderDiffActive    = false; // drag latch for the difficulty slider
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -195,12 +207,14 @@ int main(int argc, char** argv) {
     // the screen flips to PLAYING when the server's phase says so (see the loop).
     auto startGame = [&](float halfSize, int platforms, int asteroids) {
         if (networked) {
-            // Send the chosen map preset; the server applies it before generating
-            // the world (first press wins for the round).
-            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids));
+            // Send the chosen map preset + OPTIONS (match size, bot difficulty); the
+            // server applies them before generating the world (first press wins).
+            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
+                                                      (int)optNumPlayers, optBotDifficulty));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
+        gameSpace.setPlayerCount((int)optNumPlayers); // OPTIONS: 1 human + (N-1) bots
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
@@ -217,7 +231,7 @@ int main(int argc, char** argv) {
         }
         // Size per-slot bot state and seed personalities (deterministic from each
         // slot's id, so the same map replays the same bots).
-        botController.init(ps);
+        botController.init(ps, optBotDifficulty);
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         DisableCursor(); // capture the mouse for free-look while playing
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
@@ -233,6 +247,7 @@ int main(int argc, char** argv) {
     auto enterNetworkedMatch = [&]() {
         predInit = false; prevHealth = -1; netHurt = 0.0f;
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
+        showControls = false; showOptions = false; // close any open lobby modal so it can't hold the freed cursor
         DisableCursor();
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
         consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
@@ -261,6 +276,7 @@ int main(int argc, char** argv) {
     auto returnToTitle = [&]() {
         if (!networked) gameSpace.clear();
         EnableCursor(); // free the cursor for the title menu
+        showControls = false; showOptions = false; // no stale modal flag leaking back onto the lobby
         nameFocused = true; // re-focus the name field so the player can type without a click
         screen = GameScreen::TITLE;
     };
@@ -284,6 +300,11 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        // Web only: keep shell.html's pointer-lock handler in sync with whether a
+        // title-screen modal is open (no-op on native). Modals live only on the
+        // title screen, so force it false everywhere else.
+        PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions));
 
         // MARK: TITLE SCREEN
         // Placeholder front/end screens. Each handles its own input + draw and
@@ -331,7 +352,7 @@ int main(int argc, char** argv) {
                     for (const Player& p : titlePlayers) if (p.isConnected) rowsShown++;
                     if (rowsShown == 0) rowsShown = 1; // "waiting" line
                 } else {
-                    rowsShown = GAMESPACE_NUMBER_OF_PLAYERS;
+                    rowsShown = (int)optNumPlayers; // OPTIONS slider previews the roster
                 }
                 const float rowH = 24.0f, headerH = 30.0f;
                 Rectangle playersBox = {350, 300, 300, headerH + rowsShown * rowH + 10.0f};
@@ -418,20 +439,37 @@ int main(int argc, char** argv) {
                     if (controlsWasOpen && UiButton(closeBtn, "CLOSE")) showControls = false;
                 }
 
-                // Options popup (placeholder for now), same opaque modal style.
+                // Options popup, same opaque modal style. Two functional sliders
+                // (match size + bot difficulty); they drive local play directly and
+                // ride the start request to the server for networked play.
                 if (showOptions) {
                     DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.7f));
                     Rectangle m = {250, 170, 500, 360};
                     UiModalPanel(m);
                     UiTextCentered("OPTIONS", screenWidth, (int)m.y + 20, 30, ui::OUTLINE);
-                    const char* lines[] = {
-                        "Master volume       coming soon",
-                        "Mouse sensitivity   coming soon",
-                        "Invert Y            coming soon",
-                        "Field of view       coming soon",
+
+                    float lx = m.x + 40, sw = m.width - 80;
+                    // Right-aligned value readout next to each label.
+                    auto valueRight = [&](const char* v, int y) {
+                        int vw = MeasureText(v, 18);
+                        DrawText(v, (int)(m.x + m.width - 40 - vw), y, 18, ui::OUTLINE);
                     };
-                    int ly = (int)m.y + 90;
-                    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, GRAY); ly += 40; }
+
+                    // NUMBER OF PLAYERS (integer, 1..GAMESPACE_NUMBER_OF_PLAYERS).
+                    int y1 = (int)m.y + 80;
+                    DrawText("NUMBER OF PLAYERS", (int)lx, y1, 18, RAYWHITE);
+                    valueRight(TextFormat("%d", (int)optNumPlayers), y1);
+                    UiSlider({lx, (float)(y1 + 26), sw, 22}, optNumPlayers,
+                             1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
+                             sliderPlayersActive, 1.0f);
+
+                    // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
+                    int y2 = y1 + 90;
+                    DrawText("BOT DIFFICULTY", (int)lx, y2, 18, RAYWHITE);
+                    valueRight(TextFormat("%.2f", optBotDifficulty), y2);
+                    UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
+                             0.0f, BOT_DIFFICULTY, sliderDiffActive);
+
                     Rectangle closeBtn = {(float)(screenWidth / 2 - 70), m.y + m.height - 60, 140, 40};
                     if (optionsWasOpen && UiButton(closeBtn, "CLOSE")) showOptions = false;
                 }

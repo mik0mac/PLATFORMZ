@@ -45,6 +45,7 @@
       }
       canvas.addEventListener('mousedown', function () {
         if (locked() || !requestLock) return;
+        if (window.Module && Module.modalOpen) return; // don't grab the cursor for menu popups (CONTROLS/OPTIONS)
         var r = requestLock.call(canvas);
         if (r && typeof r.catch === 'function') r.catch(function () {}); // Chrome returns a Promise
       });

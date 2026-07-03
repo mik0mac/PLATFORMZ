@@ -14,6 +14,7 @@
 
 #include "raylib.h"
 #include <string>
+#include <cmath> // fminf/fmaxf/roundf (UiSlider)
 
 //MARK: Theme
 // Defaults match the cyan element palette (color_outline {0,255,200}). Callers
@@ -104,6 +105,40 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
         DrawRectangle(caretX, ty, 2, fontSize, ui::OUTLINE);
     }
     return changed;
+}
+
+//MARK: Slider
+// Horizontal slider. Drag the handle or press anywhere on the track to set value
+// in [minV, maxV]. `value` and `active` (the drag latch) are caller-owned by
+// reference so multiple sliders don't fight over the mouse - the same pattern
+// UiTextField uses for `focused`. `step > 0` snaps the value (e.g. 1.0 for an
+// integer slider). Returns true if the value changed this frame.
+inline bool UiSlider(Rectangle r, float& value, float minV, float maxV,
+                     bool& active, float step = 0.0f) {
+    bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hovered) active = true;
+    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) active = false; // released anywhere
+
+    float old = value;
+    if (active && r.width > 0.0f) {
+        float t = (GetMousePosition().x - r.x) / r.width;
+        t = fminf(fmaxf(t, 0.0f), 1.0f);
+        value = minV + t * (maxV - minV);
+        if (step > 0.0f) value = minV + step * roundf((value - minV) / step);
+        value = fminf(fmaxf(value, minV), maxV);
+    }
+
+    // Track (dimmed when idle, bright when hovered/dragging - like UiTextField).
+    UiPanel(r, (hovered || active) ? ui::OUTLINE : Fade(ui::OUTLINE, 0.6f),
+               (hovered || active) ? ui::FILL_HI : ui::FILL);
+    // Filled portion up to the current value, then an opaque handle on top.
+    float frac = (maxV > minV) ? (value - minV) / (maxV - minV) : 0.0f;
+    frac = fminf(fmaxf(frac, 0.0f), 1.0f);
+    if (frac > 0.0f)
+        DrawRectangleRec({r.x, r.y, frac * r.width, r.height}, ui::FILL_HI);
+    float hx = r.x + frac * r.width;
+    DrawRectangleRec({hx - 3.0f, r.y - 3.0f, 6.0f, r.height + 6.0f}, ui::OUTLINE);
+    return value != old;
 }
 
 //MARK: Centered text
