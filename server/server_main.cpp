@@ -151,7 +151,10 @@ static void refreshBotSlots(const std::set<int>& claimed) {
         bool bot = claimed.count(i) == 0;
         players[i].isBot = bot;
         if (bot) {
-            players[i].name          = BOT_NAME_STRINGS[i % BOT_NAME_COUNT];
+            // Same NATO label local mode shows (slot 1 -> first name). Guarded
+            // modulo so a bot at slot 0 (all humans gone) still names cleanly.
+            int nameIdx = ((i - 1) % BOT_NAME_COUNT + BOT_NAME_COUNT) % BOT_NAME_COUNT;
+            players[i].name          = BOT_NAME_STRINGS[nameIdx];
             players[i].color_outline = BOT_OUTLINE_COLOR;
             players[i].color_fill    = BOT_FILL_COLOR;
         }
@@ -587,13 +590,10 @@ void SimulationLoop() {
                 gameSpace.generatePlatforms();
                 gameSpace.resetPlayersForMatch();
                 gameSpace.generateAsteroids();
-                {
-                    std::lock_guard<std::mutex> gc(clientMutex);
-                    matchStartConnected = (int)clients.size();
-                    // Fill every unoccupied slot with a bot for this match, then
-                    // seed all slots' bot personalities (stable per slot id).
-                    refreshBotSlots(gatherClaimedSlots());
-                }
+                { std::lock_guard<std::mutex> gc(clientMutex); matchStartConnected = (int)clients.size(); }
+                // Seed every slot's bot personality once for this match (stable per
+                // slot id). Which slots are bots is set by the per-tick reconcile
+                // above; drive() reads the profiles seeded here.
                 botController.init(gameSpace.getPlayers());
                 gamePhase = Phase::PLAYING;
                 justStarted = true;
@@ -620,6 +620,15 @@ void SimulationLoop() {
                 }
             }
 
+            // Reconcile bot ownership every tick in EVERY phase: any slot without a
+            // connected client is a bot (named + colored). Running it in the lobby
+            // too means the title-screen player list previews the bots that will
+            // fill the match (and updates live as humans join/leave); in a match it
+            // also handles a mid-match disconnect (a bot reclaims the body) and a
+            // join (the bot yields). Cheap - a handful of slots. Bots are only
+            // DRIVEN in PLAYING/GAMEOVER (below); in the lobby they just hold a slot.
+            { std::lock_guard<std::mutex> gc(clientMutex); refreshBotSlots(gatherClaimedSlots()); }
+
             // Keep simulating through PLAYING *and* GAMEOVER; only LOBBY (no world
             // yet) is idle. The GAMEOVER sim keeps the world moving during the
             // client's game-over countdown so networked play matches local, where
@@ -645,12 +654,6 @@ void SimulationLoop() {
                         ApplyInputToPlayer(player, input, TICK_DT, gravity);
                     }
                 }
-
-                // Reconcile bot ownership every tick: any slot without a connected
-                // client is a bot. Covers a mid-match disconnect (the slot's body
-                // is reclaimed by a bot) and a join (the bot yields). Cheap - a
-                // handful of slots. Done under clientMutex (gameMutex already held).
-                { std::lock_guard<std::mutex> gc(clientMutex); refreshBotSlots(gatherClaimedSlots()); }
 
                 // Drive every bot slot (unoccupied slots) through the behaviour
                 // tree, straight into ApplyPlayerInput - NOT ApplyInputToPlayer,
