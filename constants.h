@@ -41,8 +41,8 @@ struct mapSizePreset {
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     {"SMALL",  {40.0f, 8, 4}}, // 8 platforms, 4 asteroids
-    {"MEDIUM", {60.0f, 24, 12}}, // 24 platforms, 12 asteroids
-    {"LARGE",  {90.0f, 48, 24}}  // 48 platforms, 24 asteroids
+    {"MEDIUM", {60.0f, 32, 12}}, // 32 platforms, 12 asteroids
+    {"LARGE",  {90.0f, 128, 24}}  // 128 platforms, 24 asteroids
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
@@ -140,8 +140,8 @@ const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target hea
 // the center of the personality distribution [0..1]; each bot's aggression &
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
 // with bot count (so a lone bot ~= difficulty, a crowd is varied).
-const float BOT_DIFFICULTY = 0.6f;         // 0 easy .. 1 hard; center for all bot personalities
-const float BOT_PERSONALITY_SPREAD = 0.4f; // max +/- jitter around difficulty (at high bot counts)
+const float BOT_DIFFICULTY = 0.2f;         // 0 easy .. 1 hard; center for all bot personalities
+const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
 const float BOT_MAX_AIM_SPREAD = 0.30f;    // radians of aim error at accuracy=0 (0 at accuracy=1)
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
 const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi

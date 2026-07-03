@@ -169,11 +169,13 @@ int main(int argc, char** argv) {
     // independent state (see LatchedSelector). Add a new LatchedSelector? Give
     // it an id here.
     enum LatchId { LATCH_MOVEMENT, LATCH_MOVE_TO_SAFETY,
-                   LATCH_ATTACK_PLAYER, LATCH_FIRE, LATCH_COUNT };
+                   LATCH_ATTACK_STYLE, LATCH_FIRE,
+                   LATCH_KITE_CHANCE, LATCH_RETREAT_CD, LATCH_COUNT };
     /// Instantiate leaf nodes
     IsLowFuel<Player>      isLowFuel;
     IsLowHealth<Player>    isLowHealth;
     FindLineOfSight<Player> findLineOfSight;
+    FindCover<Player>      findCover;
     MoveToPlayer<Player>   moveToPlayer;
     MoveFromPlayer<Player>   moveFromPlayer;
     MoveToPlatform<Player> moveToPlatform;
@@ -187,12 +189,23 @@ int main(int argc, char** argv) {
     // every frame. fireAtTarget sits in the top Parallel, so aim/fire stay
     // per-frame regardless of the movement decision cadence.
     LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &fireAtPlayer, &attackAsteroid });
-    LatchedSelector<Player>        moveToSafety(LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &moveFromPlayer });
-    Sequence<Player>               lowHealthResponse({ &isLowHealth, &moveToSafety });
+    // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite), and once
+    // it does retreat it can't again for a few seconds (Cooldown wraps the whole
+    // retreat) — no fight/flight yo-yo. avoidAsteroid stays a hard priority.
+    Chance<Player>                 maybeKite(LATCH_KITE_CHANCE, 0.6f, &moveFromPlayer);
+    LatchedSelector<Player>        moveToSafety(LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover });
+    Cooldown<Player>               retreatGate(LATCH_RETREAT_CD, 4.0f, &moveToSafety);
+    Sequence<Player>               lowHealthResponse({ &isLowHealth, &retreatGate });
     Sequence<Player>               lowFuelResponse({ &isLowFuel, &moveToPlatform, &idle });
-    LatchedSelector<Player>        attackFromLongRange(LATCH_ATTACK_PLAYER, { &avoidAsteroid, &findLineOfSight });
-    LatchedSelector<Player>        attackFromCloseRange(LATCH_ATTACK_PLAYER, { &avoidAsteroid, &moveToPlayer });
-    LatchedSelector<Player>        movement(LATCH_MOVEMENT, { &lowHealthResponse, &lowFuelResponse, &attackFromLongRange, &attackFromCloseRange });
+    // Attack: personality-weighted random pick between sniping from range
+    // (findLineOfSight) and closing in (moveToPlayer) — aggressive bots close,
+    // timid bots hold. avoidAsteroid is a hard priority ahead of either.
+    WeightedRandomSelector<Player> attackStyle(LATCH_ATTACK_STYLE, {
+        { &findLineOfSight, [](Blackboard<Player>& bb){ return 1.0f - bb.profile.aggression; } },
+        { &moveToPlayer,    [](Blackboard<Player>& bb){ return bb.profile.aggression; } },
+    });
+    Selector<Player>               attack({ &avoidAsteroid, &attackStyle });
+    LatchedSelector<Player>        movement(LATCH_MOVEMENT, { &lowHealthResponse, &lowFuelResponse, &attack });
     Parallel<Player>               botTree({ &movement, &fireAtTarget });
 
 
