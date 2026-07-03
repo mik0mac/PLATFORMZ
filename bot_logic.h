@@ -173,6 +173,68 @@ public:
     virtual ~Node() = default;
     virtual Status tick(Blackboard<TargetT>& bb) = 0;
 };
+// MARK: Find Line of Sight
+template <typename TargetT>
+class FindLineOfSight : public Node<TargetT> {
+public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        // Is there already a clear shot? Test the bot->target ray against every
+        // platform's extent. If nothing covers the ray, hold position and let
+        // fireAtTarget (top Parallel) take the shot.
+        Vector3 toTarget = Vector3Subtract(bb.target.position, bb.bot.position);
+        float distToTarget = Vector3Length(toTarget);
+        if (distToTarget < 1e-4f) return Status::Success; // on top of the target
+        Vector3 los = Vector3Scale(toTarget, 1.0f / distToTarget); // normalized LOS ray
+
+        // Find the closest platform that actually covers the ray between bot and target.
+        // `along`/`perp` (projection onto the ray + offset from it) do triple duty:
+        // select the blocker, drive the strafe direction, and pick over/under vs sideways.
+        const Platform* blocker = nullptr;
+        float blockerAlong = std::numeric_limits<float>::max();
+        Vector3 blockerPerp = {0.0f, 0.0f, 0.0f};
+        for (const Platform& platform : bb.allPlatforms) {
+            Vector3 toPlatform = Vector3Subtract(platform.position, bb.bot.position);
+            float along = Vector3DotProduct(toPlatform, los); // projection onto the ray
+            if (along <= 0.0f || along >= distToTarget) continue;           // behind bot / past target
+            // Skip a platform the target is sitting on/near (would be firing at its underside).
+            if (distToTarget - along < EXPLOSION_DAMAGE_RADIUS) continue;
+            Vector3 perp = Vector3Subtract(toPlatform, Vector3Scale(los, along)); // offset from ray
+            float perpDist = Vector3Length(perp);
+            // largest horizontal half-extent as a blocking radius, + bot radius margin
+            float blockRadius = 0.5f * fmaxf(platform.size.x, platform.size.z) + bb.bot.radius;
+            if (perpDist > blockRadius) continue;                          // ray misses this platform
+            if (along < blockerAlong) { blocker = &platform; blockerAlong = along; blockerPerp = perp; }
+        }
+
+        if (!blocker) return Status::Success; // clear line of sight — hold and snipe
+
+        // Strafe opposite the platform's offset so it slides off the ray. The
+        // direction is derived purely from geometry, so the same choice recurs each
+        // tick and the bot converges — no random vantage point, no wandering. A
+        // dead-center blocker (zero offset) gets a fixed tie-break, not a random pick.
+        Vector3 strafe;
+        if (Vector3Length(blockerPerp) > 1e-3f) {
+            strafe = Vector3Normalize(Vector3Negate(blockerPerp));
+        } else {
+            strafe = Vector3CrossProduct(los, {0.0f, 1.0f, 0.0f}); // horizontal perpendicular to LOS
+            if (Vector3Length(strafe) < 1e-3f) strafe = {1.0f, 0.0f, 0.0f};
+            strafe = Vector3Normalize(strafe);
+        }
+
+        Vector3 fwd = bb.bot.ForwardFlat();
+        Vector3 right = bb.bot.Right();
+        bb.out.moveAxis.y = Vector3DotProduct(strafe, fwd);
+        bb.out.moveAxis.x = Vector3DotProduct(strafe, right);
+        // strafe.y != 0 when going over/under is the shorter way off the ray;
+        // applyVerticalIntent realizes that via jetpack/earthGravity.
+        applyVerticalIntent(bb.bot.position.y, bb.bot.position.y + strafe.y, bb.out);
+        return Status::Running;
+    }
+};
+
+
+
+
 
 //MARK: Move To Player
 // Writes out.moveAxis (local strafe/forward, not world space) — see

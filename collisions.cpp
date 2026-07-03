@@ -540,8 +540,13 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
 
                 // Separate the two so they don't stay overlapped and re-damage
                 // every frame (mirrors the asteroid-vs-player response). Push
-                // each clear by half the overlap along the contact normal, and
-                // add a velocity bump so they keep drifting apart.
+                // each clear by half the overlap along the contact normal, then
+                // reflect their velocities so they genuinely bounce apart. A
+                // plain velocity bump wasn't enough: it left the closing speed
+                // intact, so any real approach speed re-overlapped them next
+                // frame and dealt damage every frame (a collision = instant
+                // elimination). Reflecting flips the closing component to a
+                // separating one, so each collision deals damage exactly once.
                 Vector3 offset = Vector3Subtract(playerA.position, playerB.position);
                 float dist = Vector3Length(offset);
                 if (dist > 1e-4f) {
@@ -550,9 +555,9 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                     playerA.position = Vector3Add(playerA.position, Vector3Scale(normal, overlap * 0.5f));
                     playerB.position = Vector3Subtract(playerB.position, Vector3Scale(normal, overlap * 0.5f));
 
-                    float pushStrength = 1.0f; // velocity bump along the contact normal
-                    playerA.velocity = Vector3Add(playerA.velocity, Vector3Scale(normal, pushStrength));
-                    playerB.velocity = Vector3Subtract(playerB.velocity, Vector3Scale(normal, pushStrength));
+                    // Bounce apart, same elasticity as the walls (matches the asteroid-vs-player bounce).
+                    playerA.velocity = Vector3Scale(Vector3Reflect(playerA.velocity, normal), 1.0f);
+                    playerB.velocity = Vector3Scale(Vector3Reflect(playerB.velocity, normal), 1.0f);
                 }
             }
         }
