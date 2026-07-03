@@ -173,6 +173,7 @@ int main(int argc, char** argv) {
     /// Instantiate leaf nodes
     IsLowFuel<Player>      isLowFuel;
     IsLowHealth<Player>    isLowHealth;
+    FindLineOfSight<Player> findLineOfSight;
     MoveToPlayer<Player>   moveToPlayer;
     MoveFromPlayer<Player>   moveFromPlayer;
     MoveToPlatform<Player> moveToPlatform;
@@ -185,14 +186,14 @@ int main(int argc, char** argv) {
     // branch wins only every BOT_TICK_TIME, but the chosen action still ticks
     // every frame. fireAtTarget sits in the top Parallel, so aim/fire stay
     // per-frame regardless of the movement decision cadence.
-    LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &attackAsteroid, &fireAtPlayer });
+    LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &fireAtPlayer, &attackAsteroid });
     LatchedSelector<Player>        moveToSafety(LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &moveFromPlayer });
-    // Parallel<Player>        evadeAndShootAsteroid({ &moveToSafety, &attackAsteroid });
-    Sequence<Player>        lowHealthResponse({ &isLowHealth, &moveToSafety });
-    Sequence<Player>        lowFuelResponse({ &isLowFuel, &moveToPlatform, &idle });
-    LatchedSelector<Player>        attackPlayer(LATCH_ATTACK_PLAYER, { &avoidAsteroid, &moveToPlayer });
-    LatchedSelector<Player> movement(LATCH_MOVEMENT, { &avoidAsteroid, &lowHealthResponse, &lowFuelResponse, &attackPlayer });
-    Parallel<Player>        botTree({ &movement, &fireAtTarget });
+    Sequence<Player>               lowHealthResponse({ &isLowHealth, &moveToSafety });
+    Sequence<Player>               lowFuelResponse({ &isLowFuel, &moveToPlatform, &idle });
+    LatchedSelector<Player>        attackFromLongRange(LATCH_ATTACK_PLAYER, { &avoidAsteroid, &findLineOfSight });
+    LatchedSelector<Player>        attackFromCloseRange(LATCH_ATTACK_PLAYER, { &avoidAsteroid, &moveToPlayer });
+    LatchedSelector<Player>        movement(LATCH_MOVEMENT, { &lowHealthResponse, &lowFuelResponse, &attackFromLongRange, &attackFromCloseRange });
+    Parallel<Player>               botTree({ &movement, &fireAtTarget });
 
 
     // MARK: SCREEN STATE

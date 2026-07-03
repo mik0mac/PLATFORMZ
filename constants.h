@@ -147,7 +147,7 @@ const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (L
 const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
-const bool DISABLE_BOT_FIRE_PLAYER = true;     // If true, bots don't fire rockets (for testing other features)
+const bool DISABLE_BOT_FIRE_PLAYER = false;     // If true, bots don't fire rockets (for testing other features)
 const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
