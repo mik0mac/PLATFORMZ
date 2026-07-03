@@ -72,7 +72,10 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/asteroid_break.wav", 1.0f, true, false), // FX_ASTEROID_BREAK (this is more of a bonus sound now)
         audioFX("assets/sounds/player_hit.wav",     1.0f, true, false), // FX_PLAYER_HIT (local player only, not spatial)
         audioFX("assets/sounds/player_death.wav",   1.0f, true, false), // FX_PLAYER_DEATH (local player only, not spatial)
-        audioFX("assets/sounds/no_ammo.wav",        0.5f, true, false)  // FX_NO_AMMO (local player only, not spatial)
+        audioFX("assets/sounds/no_ammo.wav",        0.5f, true, false),  // FX_NO_AMMO (local player only, not spatial)
+        audioFX("assets/sounds/firerate_choke.wav", 0.5f, true, false), // FX_FIRERATE_CHOKE (local player only, not spatial)
+        audioFX("assets/sounds/wall_bounce_player.wav", 1.0f, false, true), // FX_WALL_BOUNCE_PLAYER (all players, spatial)
+        audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true) // FX_ROCKET_THROUGH_WALL (all players, spatial)
     };
     for (audioFX& fx : fxTable) fx.load();
 
@@ -174,6 +177,7 @@ int main(int argc, char** argv) {
     /// Instantiate leaf nodes
     IsLowFuel<Player>      isLowFuel;
     IsLowHealth<Player>    isLowHealth;
+    NeedsBonus<Player>        needsBonus;
     FindLineOfSight<Player> findLineOfSight;
     FindCover<Player>      findCover;
     MoveToPlayer<Player>   moveToPlayer;
@@ -188,14 +192,23 @@ int main(int argc, char** argv) {
     // branch wins only every BOT_TICK_TIME, but the chosen action still ticks
     // every frame. fireAtTarget sits in the top Parallel, so aim/fire stay
     // per-frame regardless of the movement decision cadence.
-    LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &fireAtPlayer, &attackAsteroid });
+    // needsBonus is a GUARD, so it gates attackAsteroid via a Sequence (not as a
+    // Selector sibling): only hunt asteroids when a bonus is actually wanted.
+    Sequence<Player>               attackAsteroidForBonus({ &needsBonus, &attackAsteroid });
+    LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &fireAtPlayer, &attackAsteroidForBonus });
     // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite), and once
     // it does retreat it can't again for a few seconds (Cooldown wraps the whole
     // retreat) — no fight/flight yo-yo. avoidAsteroid stays a hard priority.
-    Chance<Player>                 maybeKite(LATCH_KITE_CHANCE, 0.6f, &moveFromPlayer);
+
+    // KITE def: "Kiting" is a term from combat games (originally MMOs/RTS, now 
+    // common in shooters and MOBAs). It means retreating while keeping an enemy
+    // at a distance you control — you back away just fast enough to stay out of 
+    // their reach while still able to attack them, so they chase you without ever closing in.
+
+    Chance<Player>                 maybeKite(LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer);
     LatchedSelector<Player>        moveToSafety(LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover });
-    Cooldown<Player>               retreatGate(LATCH_RETREAT_CD, 4.0f, &moveToSafety);
-    Sequence<Player>               lowHealthResponse({ &isLowHealth, &retreatGate });
+    // Cooldown<Player>               retreatGate(LATCH_RETREAT_CD, 4.0f, &moveToSafety);
+    Sequence<Player>               lowHealthResponse({ &isLowHealth, &moveToSafety, &idle });
     Sequence<Player>               lowFuelResponse({ &isLowFuel, &moveToPlatform, &idle });
     // Attack: personality-weighted random pick between sniping from range
     // (findLineOfSight) and closing in (moveToPlayer) — aggressive bots close,
@@ -693,6 +706,7 @@ int main(int argc, char** argv) {
                 // earth-gravity key (to descend), so derive gravity from the input.
                 PlayerInput botIn = botInput(players[i], players[0], players,
                                              gameSpace.getPlatforms(), gameSpace.getAsteroids(),
+                                             gameSpace.getWalls(),
                                              botTree, dt, botDecisions[i - 1], botProfiles[i - 1]);
                 float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
                 ApplyPlayerInput(players[i], botIn, dt, gravity, gameSpace);

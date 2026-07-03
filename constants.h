@@ -13,6 +13,9 @@ enum AudioFXId {
     FX_PLAYER_HIT,
     FX_PLAYER_DEATH,
     FX_NO_AMMO,
+    FX_FIRERATE_CHOKE,
+    FX_WALL_BOUNCE_PLAYER,
+    FX_ROCKET_THROUGH_WALL,
     FX_COUNT
 };
 
@@ -60,6 +63,7 @@ const float NET_CAM_SMOOTH_RATE = 20.0f;
 const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
+const bool WALLS_STOP_ROCKETS = false; // if true, rockets are destroyed on wall impact; if false, they fly through.
 
 //MARK: Platform Constants
 const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)

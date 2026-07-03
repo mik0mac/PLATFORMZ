@@ -257,6 +257,11 @@ void CheckRocketWallCollisions(GameSpace& space) {
                        rocket.position.z > halfSize || rocket.position.z < -halfSize;
         if (!hitWall) continue;
 
+        if (!WALLS_STOP_ROCKETS) {
+            space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.owner ? rocket.owner->id : 0);
+            continue; // rocket flies through the wall, no detonation
+        }
+
         // Clamp onto the wall so the explosion appears at the impact point.
         rocket.position.x = Clamp(rocket.position.x, -halfSize, halfSize);
         rocket.position.y = Clamp(rocket.position.y, -halfSize, halfSize);
@@ -512,9 +517,10 @@ void CheckPlayerWallCollisions(GameSpace& space) {
             hitWall = true;
         }
 
-        // if (hitWall) {
-        //     player.takeDamage(walls.damage);
-        // }
+        if (hitWall) {
+            player.takeDamage(walls.damage);
+            space.emitAudio(FX_WALL_BOUNCE_PLAYER, player.position, player.id);
+        }
     }
 }
 

@@ -14,6 +14,7 @@ const float BOT_ASTEROID_ATTACK_BUFFER = 20.0f; // don't fire at asteroids close
 const float BOT_ASTEROID_AVOID_BUFFER = 20.0f;    // distance to which bots will avoid asteroids.
 const float BOT_ASTEROID_COLLISION_TIME_WINDOW = 3.0f; // worry about asteroids that will collide with bot within this window.
 const float BOT_RETREAT_DISTANCE = 120.0f; // distance to which bots will retreat.
+const float BOT_WALL_AVOID_BUFFER = 6.0f;  // steer along a wall once within this distance of it (> bot radius, so it triggers on approach, before the clamp pins the bot).
 const float BOT_VERTICAL_THRESHOLD = 5.0f; // y-delta below which vertical corrections are ignored.
 const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will seek a platform to land and regen.
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
@@ -192,6 +193,7 @@ struct Blackboard {
     const std::vector<Player>& allPlayers; // for MoveToSafety's avoidance scan
     const std::vector<Platform>& allPlatforms;
     const std::vector<Asteroid>& allAsteroids;
+    const Walls& walls;
     PlayerInput& out;
     float dt;
     std::vector<BotDecision>& decisions; // per-bot latch/timer, one slot per LatchedSelector (indexed by its latchId)
@@ -308,7 +310,7 @@ public:
     }
 };
 
-//MARK: Move To Safety
+//MARK: Move From Player
 // Steers away from any player within BOT_RETREAT_DISTANCE, weighted by
 // proximity. Writes out.moveAxis like MoveToTarget — same local-space rule.
 template <typename TargetT>
@@ -326,16 +328,39 @@ public:
             }
         }
         if (Vector3LengthSqr(totalAvoidance) <= 0.0f) return Status::Failure; // no threat — not applicable, let the Selector fall through to Attack etc..
-        // Determine the Bot's next move to get to safety.
+        // Don't steer into a boundary: if the escape direction points at a wall the
+        // bot is already near, drop that component and slide along the wall instead.
+        // The cube is symmetric (-halfSize..+halfSize on every axis). Trigger on
+        // approach (BOT_WALL_AVOID_BUFFER), not just at contact — the collision clamp
+        // otherwise pins the bot right at the wall before this could ever fire.
+        float bound = bb.walls.halfSize - BOT_WALL_AVOID_BUFFER;
+
         Vector3 dir = Vector3Normalize(totalAvoidance);
+        bool blockedX = false;
+        bool blockedY = false;
+        bool blockedZ = false;
+        if (dir.x < 0.0f && bb.bot.position.x < -bound) blockedX = true;
+        if (dir.x > 0.0f && bb.bot.position.x >  bound) blockedX = true;
+        if (dir.y < 0.0f && bb.bot.position.y < -bound) blockedY = true;
+        if (dir.y > 0.0f && bb.bot.position.y >  bound) blockedY = true;
+        if (dir.z < 0.0f && bb.bot.position.z < -bound) blockedZ = true;
+        if (dir.z > 0.0f && bb.bot.position.z >  bound) blockedZ = true;
+        // Cornered on every axis: give up here so the Selector tries another branch.
+        if (blockedX && blockedY && blockedZ) return Status::Failure;
+        // Zero the into-wall components and renormalize so the bot slides along the wall.
+        if (blockedX) dir.x = 0.0f;
+        if (blockedY) dir.y = 0.0f;
+        if (blockedZ) dir.z = 0.0f;
+        dir = Vector3Normalize(dir);
+
         Vector3 fwd = bb.bot.ForwardFlat();
         Vector3 right = bb.bot.Right();
         bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
         bb.out.moveAxis.x = Vector3DotProduct(dir, right);
-        // When evading, prefer gaining altitude over the threat rather than
-        // descending into them — only apply earthGravity if avoidance already
-        // points meaningfully downward.
-        applyVerticalIntent(bb.bot.position.y, bb.bot.position.y + totalAvoidance.y, bb.out);
+        // Vertical intent uses the same escape magnitude, but zeroed when the ceiling
+        // /floor is the blocked side, so the bot won't thrust into a boundary.
+        float verticalAvoid = blockedY ? 0.0f : totalAvoidance.y;
+        applyVerticalIntent(bb.bot.position.y, bb.bot.position.y + verticalAvoid, bb.out);
         return Status::Running;
     }
 };
@@ -431,6 +456,12 @@ public:
         // fireAtTarget selector can fall through to shooting asteroids instead.
         if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius))
             return Status::Failure;
+        // no ammo, can't fire
+        if (bb.bot.ammo <= 0) return Status::Failure; 
+        // A bot with low health returns failure to the fireAtTarget selector, which will fall through to
+        // firing asteroids instead of the player.  The threshold is scaled by the bot's aggression,
+        // so a more aggressive bot will continue to fire at the player longer with lower health than a timid bot.
+        if (bb.bot.health < BOT_LOW_HEALTH_THRESHOLD * (1.0f - 0.8f * bb.profile.aggression)) return Status::Failure;
 
         auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot);
         steerAimToward(bb, aimDir);
@@ -448,7 +479,8 @@ template <typename TargetT>
 class AttackAsteroid : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
-        if (bb.allAsteroids.empty()) return Status::Failure;
+        if (bb.allAsteroids.empty()) return Status::Failure; // no asteroids to attack
+        if (bb.bot.ammo <= 0) return Status::Failure; // no ammo, can't fire
 
         // find the closest asteroid that is not within the bot's buffer.
         // Aggressive bots accept a smaller safety buffer (riskier close shots).
@@ -547,6 +579,23 @@ public:
         // floor so even the most reckless bot still bails when nearly dead.
         float thresh = BOT_LOW_HEALTH_THRESHOLD * (1.0f - 0.8f * bb.profile.aggression);
         return bb.bot.health < thresh ? Status::Success : Status::Failure;
+    }
+};
+
+//MARK: Needs Bonus
+template <typename TargetT>
+class NeedsBonus : public Node<TargetT> {
+public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        // A bot benefits from an asteroid bonus when a resource is below max by more
+        // than the bonus would grant, scaled by aggression: a reckless bot grabs
+        // bonuses even when barely down; a timid bot waits until it can bank the full
+        // value. Guard node -> Success when a bonus is wanted, Failure when topped up.
+        bool needsBonus =
+            bb.bot.health < PLAYER_MAX_HEALTH - (ASTEROID_HEALTH_AWARD * (1.0f - bb.profile.aggression)) ||
+            bb.bot.fuel   < PLAYER_MAX_FUEL   - (ASTEROID_FUEL_AWARD   * (1.0f - bb.profile.aggression)) ||
+            bb.bot.ammo   < PLAYER_MAX_AMMO   - (ASTEROID_AMMO_AWARD   * (1.0f - bb.profile.aggression));
+        return needsBonus ? Status::Success : Status::Failure;
     }
 };
 
@@ -748,20 +797,14 @@ PlayerInput botInput(Player& bot,
                     const std::vector<Player>& allPlayers,
                     const std::vector<Platform>& platforms,
                     const std::vector<Asteroid>& asteroids,
-                    Node<TargetT>& tree, float dt,
+                    const Walls& walls,
+                    Node<TargetT>& tree,
+                    float dt,
                     std::vector<BotDecision>& decisions,
                     const BotProfile& profile) {
     PlayerInput out;
-    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, out, dt, decisions, profile};
+    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, walls, out, dt, decisions, profile};
     tree.tick(bb);
     return out;
 }
-
-// #include <type_traits>
-
-// if constexpr (std::is_same_v<TargetT, Player>) {
-//     bb.out.fire = !DISABLE_BOT_FIRE_PLAYER;
-// } else if constexpr (std::is_same_v<TargetT, Asteroid>) {
-//     bb.out.fire = !DISABLE_BOT_FIRE_ASTEROIDS;
-// }
 
