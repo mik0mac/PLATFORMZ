@@ -20,6 +20,7 @@
 #include "../gamespace.h"
 #include "../collisions.h"
 #include "../input.h"     // PlayerInput, ApplyPlayerInput() - reused directly
+#include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -100,6 +101,10 @@ GameSpace     gameSpace;
 CollisionGrid collisionGrid;
 std::mutex    gameMutex;
 std::atomic<uint32_t> serverTick{0};
+// Drives the bot slots (every player slot with no connected client). Same tree
+// and per-slot state the local client uses, so networked bots == local bots.
+// Sim-thread only; guarded by gameMutex like the rest of gameSpace.
+BotController botController;
 
 //MARK: Match phase
 // The world doesn't exist until a client starts a match; after one ends, any
@@ -131,6 +136,34 @@ static const char* phaseString(Phase p) {
 // Using map so iteration order is stable (useful for state serialization).
 std::map<void*, ConnectedClient> clients;
 std::mutex clientMutex;
+
+// "Fill empty slots": every player slot NOT owned by a connected client becomes
+// a bot; claimed slots are humans. Flipping isBot on/off is all that's needed to
+// enable/disable the tree drive for that slot (personalities are seeded once at
+// match start by botController.init). Bot slots get a NATO name + magenta color;
+// a slot that flips to human keeps its name until the client's name message
+// applies (see nameDirty). Caller MUST hold gameMutex; `claimed` is the set of
+// client-owned slot indices, gathered by the caller under clientMutex (this
+// helper never touches `clients`, so it can't deadlock on the lock order).
+static void refreshBotSlots(const std::set<int>& claimed) {
+    auto& players = gameSpace.getPlayers();
+    for (int i = 0; i < (int)players.size(); ++i) {
+        bool bot = claimed.count(i) == 0;
+        players[i].isBot = bot;
+        if (bot) {
+            players[i].name          = BOT_NAME_STRINGS[i % BOT_NAME_COUNT];
+            players[i].color_outline = BOT_OUTLINE_COLOR;
+            players[i].color_fill    = BOT_FILL_COLOR;
+        }
+    }
+}
+
+// Gather the claimed-slot set. Caller must hold clientMutex.
+static std::set<int> gatherClaimedSlots() {
+    std::set<int> claimed;
+    for (auto& [ws, c] : clients) claimed.insert(c.playerId);
+    return claimed;
+}
 
 // -------------------------------------------------------------------------
 // Packet parsing - JSON input from client into PlayerInput.
@@ -254,9 +287,11 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"fuel\":"   + jf(p.fuel);
         s += ",\"ammo\":"   + ji(p.ammo);
         s += ",\"alive\":"  + jb(p.isAlive);
-        s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (false until server bot AI exists)
+        s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (set for unoccupied slots during a match)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
-        s += ",\"active\":" + jb(connectedSlots.count(i) > 0); // slot occupied?
+        // A slot renders if a client occupies it OR a bot drives it; genuinely
+        // empty slots (lobby / no bot) stay hidden client-side.
+        s += ",\"active\":" + jb(connectedSlots.count(i) > 0 || p.isBot); // slot occupied by human or bot?
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
         s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
         s += "}";
@@ -369,6 +404,11 @@ public:
                 ConnectedClient c;
                 c.playerId = playerId;
                 clients[self.get()] = c;
+                // Note: no bot-slot refresh here. Bots exist only during a match
+                // (set at match start + reconciled each sim tick), so the lobby
+                // stays bot-free and a mid-match join's slot yields on the next
+                // tick's reconcile (see SimulationLoop). Marking bots here would
+                // also invert the gameMutex->clientMutex order we hold above.
                 std::cout << "Client connected -> player slot " << playerId
                           << ". Active: " << clients.size() << "\n";
             }
@@ -547,7 +587,14 @@ void SimulationLoop() {
                 gameSpace.generatePlatforms();
                 gameSpace.resetPlayersForMatch();
                 gameSpace.generateAsteroids();
-                { std::lock_guard<std::mutex> gc(clientMutex); matchStartConnected = (int)clients.size(); }
+                {
+                    std::lock_guard<std::mutex> gc(clientMutex);
+                    matchStartConnected = (int)clients.size();
+                    // Fill every unoccupied slot with a bot for this match, then
+                    // seed all slots' bot personalities (stable per slot id).
+                    refreshBotSlots(gatherClaimedSlots());
+                }
+                botController.init(gameSpace.getPlayers());
                 gamePhase = Phase::PLAYING;
                 justStarted = true;
                 std::cout << "Match started (" << matchStartConnected << " connected)\n";
@@ -598,6 +645,18 @@ void SimulationLoop() {
                         ApplyInputToPlayer(player, input, TICK_DT, gravity);
                     }
                 }
+
+                // Reconcile bot ownership every tick: any slot without a connected
+                // client is a bot. Covers a mid-match disconnect (the slot's body
+                // is reclaimed by a bot) and a join (the bot yields). Cheap - a
+                // handful of slots. Done under clientMutex (gameMutex already held).
+                { std::lock_guard<std::mutex> gc(clientMutex); refreshBotSlots(gatherClaimedSlots()); }
+
+                // Drive every bot slot (unoccupied slots) through the behaviour
+                // tree, straight into ApplyPlayerInput - NOT ApplyInputToPlayer,
+                // whose absolute-aim conversion is only for network clients. Bots
+                // emit per-frame deltas exactly like the local client's drive loop.
+                botController.drive(gameSpace, TICK_DT);
 
                 gameSpace.updatePositions(TICK_DT);
                 RunCollisionChecks(gameSpace, collisionGrid);

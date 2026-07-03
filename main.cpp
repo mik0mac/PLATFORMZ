@@ -12,6 +12,7 @@
 #include "net_client.h" // multiplayer: WebSocket client
 #include "wire.h"       // multiplayer: input serialize / state apply
 #include "bot_logic.h"   // bot AI decision tree
+#include "bot_controller.h" // shared bot orchestration (tree + per-slot state + drive)
 
 #include <string>
 #include <unordered_map>
@@ -154,72 +155,12 @@ int main(int argc, char** argv) {
     float     netHurt   = 0.0f;   // client hit-flash intensity (the server owns damage,
                                   // so flashIntensity() is always 0 here - drive it locally)
 
-    // MARK: BOT STATE & TREE
-    // One wander-bot per non-local player (players[1..]) - LOCAL MODE ONLY.
-    // Index 0 is the local human. In networked mode there are no bots; empty
-    // slots simply stay unoccupied until another client connects.
-    std::vector<BotState> botStates;
-    // Per-bot decision state for the shared behaviour tree's LatchedSelector
-    // (branch latch + timer). Sized alongside botStates in startGame().
-    std::vector<std::vector<BotDecision>> botDecisions; // per bot -> one BotDecision per LatchedSelector (LATCH_COUNT slots)
-    // Per-bot personality (aggression/accuracy), assigned once at spawn in
-    // startGame() and read by the tree nodes. Also sized alongside botStates.
-    std::vector<BotProfile> botProfiles;
-
-    /// BOT DECISION TREE
-    // One latch slot per LatchedSelector in the tree. Each bot gets a
-    // BotDecision vector sized to LATCH_COUNT so nested/sibling latches keep
-    // independent state (see LatchedSelector). Add a new LatchedSelector? Give
-    // it an id here.
-    enum LatchId { LATCH_MOVEMENT, LATCH_MOVE_TO_SAFETY,
-                   LATCH_ATTACK_STYLE, LATCH_FIRE,
-                   LATCH_KITE_CHANCE, LATCH_RETREAT_CD, LATCH_COUNT };
-    /// Instantiate leaf nodes
-    IsLowFuel<Player>      isLowFuel;
-    IsLowHealth<Player>    isLowHealth;
-    NeedsBonus<Player>        needsBonus;
-    FindLineOfSight<Player> findLineOfSight;
-    FindCover<Player>      findCover;
-    MoveToPlayer<Player>   moveToPlayer;
-    MoveFromPlayer<Player>   moveFromPlayer;
-    MoveToPlatform<Player> moveToPlatform;
-    FireAtPlayer<Player>   fireAtPlayer;
-    AttackAsteroid<Player> attackAsteroid;
-    AvoidAsteroid<Player>  avoidAsteroid;
-    Idle<Player>           idle;
-
-    // Compose the tree. `movement` is a LatchedSelector: it re-evaluates WHICH
-    // branch wins only every BOT_TICK_TIME, but the chosen action still ticks
-    // every frame. fireAtTarget sits in the top Parallel, so aim/fire stay
-    // per-frame regardless of the movement decision cadence.
-    // needsBonus is a GUARD, so it gates attackAsteroid via a Sequence (not as a
-    // Selector sibling): only hunt asteroids when a bonus is actually wanted.
-    Sequence<Player>               attackAsteroidForBonus({ &needsBonus, &attackAsteroid });
-    LatchedSelector<Player>        fireAtTarget(LATCH_FIRE, { &fireAtPlayer, &attackAsteroidForBonus });
-    // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite), and once
-    // it does retreat it can't again for a few seconds (Cooldown wraps the whole
-    // retreat) — no fight/flight yo-yo. avoidAsteroid stays a hard priority.
-
-    // KITE def: "Kiting" is a term from combat games (originally MMOs/RTS, now 
-    // common in shooters and MOBAs). It means retreating while keeping an enemy
-    // at a distance you control — you back away just fast enough to stay out of 
-    // their reach while still able to attack them, so they chase you without ever closing in.
-
-    Chance<Player>                 maybeKite(LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer);
-    LatchedSelector<Player>        moveToSafety(LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover });
-    // Cooldown<Player>               retreatGate(LATCH_RETREAT_CD, 4.0f, &moveToSafety);
-    Sequence<Player>               lowHealthResponse({ &isLowHealth, &moveToSafety, &idle });
-    Sequence<Player>               lowFuelResponse({ &isLowFuel, &moveToPlatform, &idle });
-    // Attack: personality-weighted random pick between sniping from range
-    // (findLineOfSight) and closing in (moveToPlayer) — aggressive bots close,
-    // timid bots hold. avoidAsteroid is a hard priority ahead of either.
-    WeightedRandomSelector<Player> attackStyle(LATCH_ATTACK_STYLE, {
-        { &findLineOfSight, [](Blackboard<Player>& bb){ return 1.0f - bb.profile.aggression; } },
-        { &moveToPlayer,    [](Blackboard<Player>& bb){ return bb.profile.aggression; } },
-    });
-    Selector<Player>               attack({ &avoidAsteroid, &attackStyle });
-    LatchedSelector<Player>        movement(LATCH_MOVEMENT, { &lowHealthResponse, &lowFuelResponse, &attack });
-    Parallel<Player>               botTree({ &movement, &fireAtTarget });
+    // MARK: BOT CONTROLLER
+    // Owns the behaviour tree + per-slot decision/personality state and the
+    // spawn/drive glue (see bot_controller.h). Shared with the server so local
+    // and networked bots are built identically. LOCAL MODE marks slots 1+ as
+    // bots in startGame(); networked mode takes isBot from the server.
+    BotController botController;
 
 
     // MARK: SCREEN STATE
@@ -261,32 +202,22 @@ int main(int argc, char** argv) {
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.generate(); // platforms, asteroids, and player slots
-        botStates.assign(gameSpace.getPlayers().size() - 1, BotState{});
-        botDecisions.assign(gameSpace.getPlayers().size() - 1, std::vector<BotDecision>(LATCH_COUNT));
-        botProfiles.assign(gameSpace.getPlayers().size() - 1, BotProfile{});
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
         std::vector<Player>& ps = gameSpace.getPlayers();
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
         ps[0].name = playerName.empty() ? "PLAYER" : playerName;
-        // Personality spread widens with bot count: a lone bot ~= BOT_DIFFICULTY,
-        // a crowd fans out around it. Seeded from player.id so the same map
-        // replays the same personalities.
-        int nBots = (int)ps.size() - 1;
-        float spread = nBots > 0 ? BOT_PERSONALITY_SPREAD * (nBots - 1) / nBots : 0.0f;
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
             ps[i].color_fill    = BOT_FILL_COLOR;
             // Same NATO label the title-screen lobby shows for this bot slot.
             ps[i].name = BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT];
-            // Seed each bot's personality once, deterministically from its id.
-            std::mt19937 rng(ps[i].id);
-            std::uniform_real_distribution<float> jitter(-spread, spread);
-            botProfiles[i - 1].aggression = Clamp(BOT_DIFFICULTY + jitter(rng), 0.0f, 1.0f);
-            botProfiles[i - 1].accuracy   = Clamp(BOT_DIFFICULTY + jitter(rng), 0.0f, 1.0f);
         }
+        // Size per-slot bot state and seed personalities (deterministic from each
+        // slot's id, so the same map replays the same bots).
+        botController.init(ps);
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         DisableCursor(); // capture the mouse for free-look while playing
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
@@ -695,26 +626,12 @@ int main(int argc, char** argv) {
             float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
             ApplyPlayerInput(player, in, dt, gravity, gameSpace);
 
-            // Drive the test bots (players[1..]) through the same input path with
-            // randomly-generated wander input. Bots always use moon gravity - they
-            // never hold the earth-gravity key.
-            
-            std::vector<Player>& players = gameSpace.getPlayers();
-            for (int i = 1; i < (int)players.size(); ++i) {
-                // Per bot, per frame: run the behaviour tree. botDecisions[i-1]
-                // is this bot's LatchedSelector state. Bots may hold the
-                // earth-gravity key (to descend), so derive gravity from the input.
-                PlayerInput botIn = botInput(players[i], players[0], players,
-                                             gameSpace.getPlatforms(), gameSpace.getAsteroids(),
-                                             gameSpace.getWalls(),
-                                             botTree, dt, botDecisions[i - 1], botProfiles[i - 1]);
-                float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
-                ApplyPlayerInput(players[i], botIn, dt, gravity, gameSpace);
-                // OG bot code (pre-BT) - replaced by the above botInput() call:
-                // PlayerInput botIn = MakeBotInput(players[i], botStates[i - 1], dt);
-                // ApplyPlayerInput(players[i], botIn, dt, MOON_GRAVITY, gameSpace);
-            }
+            // Drive every isBot slot through the behaviour tree (same input path
+            // as the human above). Bots may hold the earth-gravity key to descend,
+            // so drive() derives gravity per-bot from its input.
+            botController.drive(gameSpace, dt);
 
+            std::vector<Player>& players = gameSpace.getPlayers();
             gameSpace.updatePositions(dt);
             RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
             gameSpace.updateActiveObjects();                // erase destroyed/finished
