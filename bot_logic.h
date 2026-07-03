@@ -17,6 +17,7 @@ const float BOT_RETREAT_DISTANCE = 120.0f; // distance to which bots will retrea
 const float BOT_VERTICAL_THRESHOLD = 5.0f; // y-delta below which vertical corrections are ignored.
 const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will seek a platform to land and regen.
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
+const float BOT_LOW_AMMO_THRESHOLD = 20.0f; // ammo level below which bots will avoid firing rockets.
 
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
@@ -113,6 +114,35 @@ bool vec3ApproxEqual(Vector3 a, Vector3 b, float threshold = 1e-6f) {
     return (fabs(a.x - b.x) < threshold) && (fabs(a.y - b.y) < threshold) && (fabs(a.z - b.z) < threshold);
 }
 
+// Closest platform whose body covers the segment `from`->`to` (nullptr if the
+// segment is clear). *outPerp (if given) receives the blocker's offset from the
+// ray — callers that need to strafe around it use that; a cover check just needs
+// the pointer. Shared by FindLineOfSight (clear a shot) and FindCover (hide).
+inline const Platform* platformBlockingSegment(Vector3 from, Vector3 to,
+        const std::vector<Platform>& platforms, float radiusMargin,
+        Vector3* outPerp = nullptr) {
+    Vector3 seg = Vector3Subtract(to, from);
+    float len = Vector3Length(seg);
+    if (len < 1e-4f) { if (outPerp) *outPerp = {0.0f, 0.0f, 0.0f}; return nullptr; }
+    Vector3 dir = Vector3Scale(seg, 1.0f / len);
+    const Platform* blocker = nullptr;
+    float bestAlong = std::numeric_limits<float>::max();
+    Vector3 bestPerp = {0.0f, 0.0f, 0.0f};
+    for (const Platform& p : platforms) {
+        Vector3 toP = Vector3Subtract(p.position, from);
+        float along = Vector3DotProduct(toP, dir);           // projection onto the ray
+        if (along <= 0.0f || along >= len) continue;         // behind `from` / past `to`
+        if (len - along < EXPLOSION_DAMAGE_RADIUS) continue; // platform hugging `to`
+        Vector3 perp = Vector3Subtract(toP, Vector3Scale(dir, along)); // offset from the ray
+        // largest horizontal half-extent as a blocking radius, + caller's margin
+        float blockRadius = 0.5f * fmaxf(p.size.x, p.size.z) + radiusMargin;
+        if (Vector3Length(perp) > blockRadius) continue;     // ray misses this platform
+        if (along < bestAlong) { blocker = &p; bestAlong = along; bestPerp = perp; }
+    }
+    if (outPerp) *outPerp = bestPerp;
+    return blocker;
+}
+
 template <typename TargetT>
 std::tuple<bool, Vector3> onTarget (const TargetT& target, Player& shooter, float threshold = 0.0f, float projectileSpeed = ROCKET_SPEED, float time_window = BOT_TICK_TIME) {
     Vector3 shooterAimDirection = shooter.Forward(); // Get the shooter's forward direction
@@ -130,15 +160,16 @@ std::tuple<bool, Vector3> onTarget (const TargetT& target, Player& shooter, floa
 //
 enum class Status { Success, Failure, Running };
 
-// Decision state for one LatchedSelector, for one bot. Lives outside the
-// (shared) tree nodes so each bot keeps its own branch latch and timer. Each
-// bot holds a vector of these — one slot per LatchedSelector in the tree,
-// indexed by the selector's latchId — so nested/sibling latches don't clobber
-// each other's state. See LatchedSelector.
+// Generic per-bot node state. Lives outside the (shared) tree nodes so each bot
+// keeps its own latch/timer. Each bot holds a vector of these — one slot per
+// stateful node in the tree, indexed by that node's latchId/stateId — so
+// nested/sibling nodes don't clobber each other's state. Shared by
+// LatchedSelector, WeightedRandomSelector (branch latch), Cooldown (timer), and
+// Chance (open/closed latch); each node reads the fields to suit.
 struct BotDecision {
-    float timer = 0.0f;         // seconds accumulated since the last branch decision
+    float timer = 0.0f;         // seconds accumulated since the last decision (or since a Cooldown's last success)
     float interval = BOT_TICK_TIME; // this decision's jittered period (set on each re-decide)
-    int   activeBranch = -1;    // index of the latched Selector child (-1 = decide now)
+    int   activeBranch = -1;    // latched child index / Chance open(1)/closed(0) / Cooldown init flag (-1 = decide now)
 };
 
 // Per-bot personality. Assigned once at spawn (seeded from player.id, see
@@ -178,35 +209,15 @@ template <typename TargetT>
 class FindLineOfSight : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
-        // Is there already a clear shot? Test the bot->target ray against every
-        // platform's extent. If nothing covers the ray, hold position and let
-        // fireAtTarget (top Parallel) take the shot.
-        Vector3 toTarget = Vector3Subtract(bb.target.position, bb.bot.position);
-        float distToTarget = Vector3Length(toTarget);
-        if (distToTarget < 1e-4f) return Status::Success; // on top of the target
-        Vector3 los = Vector3Scale(toTarget, 1.0f / distToTarget); // normalized LOS ray
-
-        // Find the closest platform that actually covers the ray between bot and target.
-        // `along`/`perp` (projection onto the ray + offset from it) do triple duty:
-        // select the blocker, drive the strafe direction, and pick over/under vs sideways.
-        const Platform* blocker = nullptr;
-        float blockerAlong = std::numeric_limits<float>::max();
-        Vector3 blockerPerp = {0.0f, 0.0f, 0.0f};
-        for (const Platform& platform : bb.allPlatforms) {
-            Vector3 toPlatform = Vector3Subtract(platform.position, bb.bot.position);
-            float along = Vector3DotProduct(toPlatform, los); // projection onto the ray
-            if (along <= 0.0f || along >= distToTarget) continue;           // behind bot / past target
-            // Skip a platform the target is sitting on/near (would be firing at its underside).
-            if (distToTarget - along < EXPLOSION_DAMAGE_RADIUS) continue;
-            Vector3 perp = Vector3Subtract(toPlatform, Vector3Scale(los, along)); // offset from ray
-            float perpDist = Vector3Length(perp);
-            // largest horizontal half-extent as a blocking radius, + bot radius margin
-            float blockRadius = 0.5f * fmaxf(platform.size.x, platform.size.z) + bb.bot.radius;
-            if (perpDist > blockRadius) continue;                          // ray misses this platform
-            if (along < blockerAlong) { blocker = &platform; blockerAlong = along; blockerPerp = perp; }
-        }
-
+        // Is there already a clear shot? If no platform covers the bot->target
+        // segment, hold position and let fireAtTarget (top Parallel) take the shot.
+        // blockerPerp is the blocker's offset from the ray — used to strafe around it.
+        Vector3 blockerPerp;
+        const Platform* blocker = platformBlockingSegment(bb.bot.position, bb.target.position,
+                                                          bb.allPlatforms, bb.bot.radius, &blockerPerp);
         if (!blocker) return Status::Success; // clear line of sight — hold and snipe
+
+        Vector3 los = Vector3Normalize(Vector3Subtract(bb.target.position, bb.bot.position));
 
         // Strafe opposite the platform's offset so it slides off the ray. The
         // direction is derived purely from geometry, so the same choice recurs each
@@ -232,7 +243,44 @@ public:
     }
 };
 
+// MARK: Find cover
+// Essentially the inverse of FindLineOfSight.
+template <typename TargetT>
+class FindCover : public Node<TargetT> {
+public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        if (bb.allPlatforms.empty()) return Status::Failure; // no cover to seek — let the Selector fall through
 
+        // Already behind cover? (a platform covers the bot<->target segment) — hold
+        // position; the top Parallel keeps firing back from cover.
+        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius))
+            return Status::Success;
+
+        // Otherwise pick the closest platform and move to its far side from the target.
+        const Platform* closest = nullptr;
+        float best = std::numeric_limits<float>::max();
+        for (const Platform& platform : bb.allPlatforms) {
+            float d = Vector3Length(Vector3Subtract(platform.position, bb.bot.position));
+            if (d < best) { closest = &platform; best = d; }
+        }
+
+        // Direction target->platform, continued past the platform to its far face; the
+        // EXPLOSION_DAMAGE_RADIUS standoff keeps the bot clear of splash on the near face.
+        Vector3 targetToPlat = Vector3Subtract(closest->position, bb.target.position);
+        if (Vector3Length(targetToPlat) < 1e-3f) return Status::Failure; // platform ~on the target: useless as cover
+        targetToPlat = Vector3Normalize(targetToPlat);
+        Vector3 coveredPos = Vector3Add(closest->position, Vector3Scale(targetToPlat, EXPLOSION_DAMAGE_RADIUS));
+
+        Vector3 dir = Vector3Normalize(Vector3Subtract(coveredPos, bb.bot.position));
+        Vector3 fwd = bb.bot.ForwardFlat();
+        Vector3 right = bb.bot.Right();
+        bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
+        bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+        applyVerticalIntent(bb.bot.position.y, coveredPos.y, bb.out);
+        return Status::Running;
+    }
+};
+        
 
 
 
@@ -379,6 +427,11 @@ template <typename TargetT>
 class FireAtPlayer : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
+        // No shot through a platform: don't aim or fire, and fail so the
+        // fireAtTarget selector can fall through to shooting asteroids instead.
+        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius))
+            return Status::Failure;
+
         auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot);
         steerAimToward(bb, aimDir);
 
@@ -405,6 +458,8 @@ public:
         for (const Asteroid& asteroid : bb.allAsteroids) {
             float dist = Vector3Length(Vector3Subtract(asteroid.position, bb.bot.position));
             if (dist < closestDist && dist > buffer) {
+                // no shot through a platform — skip and keep looking for a clear one
+                if (platformBlockingSegment(bb.bot.position, asteroid.position, bb.allPlatforms, bb.bot.radius)) continue;
                 closestAsteroid = &asteroid;
                 closestDist = dist;
             }
@@ -551,6 +606,103 @@ public:
             d.timer = d.interval; // force a fresh decision next tick
         }
         return Status::Failure;
+    }
+};
+
+// Like LatchedSelector, but the branch choice each decision is WEIGHTED RANDOM
+// instead of first-non-failing. Children are evaluated in a random order biased
+// by their weight; the first that doesn't fail is latched for the (jittered)
+// decision window — so it still honors the Failure = not-applicable convention,
+// but two bots with the same tree diverge. Weight is a captureless function
+// pointer so it can read bb.profile (personality) with no <functional> cost.
+// Latch/timer live per-bot in bb.decisions[latchId], same as LatchedSelector.
+template <typename TargetT>
+class WeightedRandomSelector : public Node<TargetT> {
+    int latchId;                            // slot into bb.decisions — unique per node
+    struct Child { Node<TargetT>* node; float (*weight)(Blackboard<TargetT>&); };
+    std::vector<Child> children;
+public:
+    WeightedRandomSelector(int id, std::vector<Child> kids) : latchId(id), children(std::move(kids)) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& d = bb.decisions[latchId];
+        d.timer += bb.dt;
+
+        if (d.activeBranch < 0 || d.timer >= d.interval) {         // (re)decide
+            d.timer = (d.activeBranch < 0) ? 0.0f : d.timer - d.interval; // carry, don't zero
+            d.interval = BOT_TICK_TIME * RandomFloat(BOT_TICK_JITTER_MIN, BOT_TICK_JITTER_MAX);
+            d.activeBranch = -1;
+            // Weighted pick-without-replacement; first non-failing pick wins & latches.
+            std::vector<int> pool;
+            for (int i = 0; i < (int)children.size(); ++i) pool.push_back(i);
+            while (!pool.empty()) {
+                float total = 0.0f;
+                for (int i : pool) total += fmaxf(0.0f, children[i].weight(bb));
+                float r = RandomFloat(0.0f, total), acc = 0.0f;
+                size_t k = pool.size() - 1;                        // fallback if total==0
+                for (size_t j = 0; j < pool.size(); ++j) {
+                    acc += fmaxf(0.0f, children[pool[j]].weight(bb));
+                    if (r <= acc) { k = j; break; }
+                }
+                int pick = pool[k];
+                pool.erase(pool.begin() + k);
+                if (children[pick].node->tick(bb) != Status::Failure) { d.activeBranch = pick; break; }
+            }
+            return d.activeBranch >= 0 ? Status::Running : Status::Failure;
+        }
+
+        // Between decisions: run the latched child; if its guard flipped and it
+        // now fails, force a fresh decision next frame rather than coast.
+        if (d.activeBranch >= 0 && d.activeBranch < (int)children.size()) {
+            Status s = children[d.activeBranch].node->tick(bb);
+            if (s != Status::Failure) return s;
+            d.timer = d.interval;
+        }
+        return Status::Failure;
+    }
+};
+
+//MARK: Decorators
+// Single-child wrappers that transform their child's result. Like the
+// composites, they're shared across bots and keep per-bot state in a
+// bb.decisions[stateId] slot (see BotDecision).
+
+// Rate-gates its child: returns Failure until `cooldown` seconds have passed
+// since the child last returned Success, so a parent Selector falls through in
+// the meantime. Available immediately on spawn, then blocked after each success.
+template <typename TargetT>
+class Cooldown : public Node<TargetT> {
+    int stateId; float cooldown; Node<TargetT>* child;
+public:
+    Cooldown(int id, float seconds, Node<TargetT>* c) : stateId(id), cooldown(seconds), child(c) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& s = bb.decisions[stateId];
+        if (s.activeBranch < 0) { s.activeBranch = 0; s.timer = cooldown; } // fresh: ready now
+        s.timer += bb.dt;
+        if (s.timer < cooldown) return Status::Failure;            // still cooling down
+        Status st = child->tick(bb);
+        if (st == Status::Success) s.timer = 0.0f;                 // restart cooldown on completion
+        return st;
+    }
+};
+
+// Probabilistic gate: rolls once per (jittered) decision window — with
+// probability p the child is "open" (passes through) for that window, else
+// Failure. Latching the roll (not re-rolling per frame) keeps the gated action
+// from flickering on and off.
+template <typename TargetT>
+class Chance : public Node<TargetT> {
+    int stateId; float probability; Node<TargetT>* child;
+public:
+    Chance(int id, float p, Node<TargetT>* c) : stateId(id), probability(p), child(c) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& s = bb.decisions[stateId];
+        s.timer += bb.dt;
+        if (s.activeBranch < 0 || s.timer >= s.interval) {         // (re)roll open/closed
+            s.timer = (s.activeBranch < 0) ? 0.0f : s.timer - s.interval;
+            s.interval = BOT_TICK_TIME * RandomFloat(BOT_TICK_JITTER_MIN, BOT_TICK_JITTER_MAX);
+            s.activeBranch = (RandomFloat(0.0f, 1.0f) < probability) ? 1 : 0; // 1=open, 0=closed
+        }
+        return s.activeBranch == 1 ? child->tick(bb) : Status::Failure;
     }
 };
 
