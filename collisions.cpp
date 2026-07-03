@@ -259,6 +259,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
 
         if (!WALLS_STOP_ROCKETS) {
             space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.owner ? rocket.owner->id : 0);
+            rocket.isOutOfBounds = true; // mark the rocket as out of bounds so it starts to fade.
             continue; // rocket flies through the wall, no detonation
         }
 

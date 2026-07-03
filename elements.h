@@ -434,16 +434,8 @@ public:
     }
 
 private:
-    // static constexpr (not per-instance const) so Asteroid stays
-    // copy-assignable - std::remove_if/erase in GameSpace needs that.
-    // static constexpr float min_size = ASTEROID_MIN_SIZE; // Minimum radius of the asteroid
-    // static constexpr float max_size = ASTEROID_MAX_SIZE; // Maximum radius of the asteroid
-    // static constexpr float min_speed = ASTEROID_MIN_SPEED; // Minimum speed of the asteroid
-    // static constexpr float max_speed = ASTEROID_MAX_SPEED; // Maximum speed of the asteroid
 
     static constexpr int starting_health = ASTEROID_STARTING_HEALTH; // Initial health of the asteroid.
-
-    // static const float flash_duration = ASTEROID_FLASH_DURATION; // length of the hot-glow damage flash, seconds
 };
 
 //MARK: Rocket
@@ -457,6 +449,7 @@ public:
     Vector3 position;
     Vector3 prevPosition{}; // position at the start of this frame's movement; the
                             // swept collision segment is prevPosition -> position
+    bool isOutOfBounds = false;
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
     float speed = ROCKET_SPEED; // units/sec
@@ -481,6 +474,12 @@ public:
         //     velocity = Vector3Add(velocity, inheritedVelocity); // Inherit player's velocity
         // }
         position = Vector3Add(position, Vector3Scale(velocity, dt));
+        if (isOutOfBounds) {
+            fadeTimer -= (dt / 1.0f);
+            color_outline.a = (int)(255.0f * (fadeTimer / fadeLength));
+            color_fill.a = (int)(40.0f * (fadeTimer / fadeLength));
+            if (fadeTimer <= 0.0f) isDestroyed = true;
+        }
     }
 
     // size and collision box
@@ -493,6 +492,8 @@ public:
     // appearance
     Color color_outline = {255, 255, 0, 255};  // yellow.
     Color color_fill = {255, 255, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
+    float fadeLength = 2.0f;
+    float fadeTimer = fadeLength; // seconds of fade remaining; set on spawn, decayed in updatePos
 
     // attributes
     // damage and explosion radius are properties of the resulting Explosion.
