@@ -171,12 +171,8 @@ public:
             Player player;
             //MARK: Player ID
             player.id = nextPlayerID++;
-            //MARK: Player Color
-            //assign colors to players in a round-robin fashion from the HUMAN_PLAYER_COLORS vector
-            player.color_outline = HUMAN_PLAYER_COLORS[i % HUMAN_PLAYER_COLORS.size()];
-            Color fill = player.color_outline;
-            fill.a = 40; // low alpha translucent fill for the "glowing vector glass" effect
-            player.color_fill = fill;
+            //MARK: Player Color (round-robin human colors; bots recolored by the caller)
+            assignPlayerColor(player, i);
 
             players.push_back(player);
         }
@@ -254,12 +250,8 @@ public:
     // networked modes (asteroid.velocity is synced on net clients), replacing the old
     // GetTime()*speed formula in DrawAsteroidShape that snapped on bounce.
     void updateAsteroidSpin(float dt) {
-        auto hash01 = [](float a, float b, float c) {
-            float h = sinf(a * 12.9898f + b * 78.233f + c * 37.719f) * 43758.5453f;
-            return h - floorf(h);
-        };
         for (Asteroid& a : asteroids) {
-            float rate = 0.3f + 0.7f * hash01(a.startingPosition.x, a.startingPosition.z, 4.0f);
+            float rate = 0.3f + 0.7f * Hash01(a.startingPosition.x, a.startingPosition.z, 4.0f);
             rate *= Vector3Length(a.velocity) / ASTEROID_MIN_SPEED;
             a.spinAngle += rate * dt;
         }
@@ -402,11 +394,7 @@ public:
         while ((int)players.size() < number_of_players) {
             Player player;
             player.id = nextPlayerID++;
-            int i = (int)players.size();
-            player.color_outline = HUMAN_PLAYER_COLORS[i % HUMAN_PLAYER_COLORS.size()];
-            Color fill = player.color_outline;
-            fill.a = 40;
-            player.color_fill = fill;
+            assignPlayerColor(player, (int)players.size());
             players.push_back(player);
         }
     }

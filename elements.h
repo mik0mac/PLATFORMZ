@@ -151,7 +151,7 @@ public:
     // (shooting direction). A Vector3 can't cleanly accumulate frame-over-frame
     // mouse deltas or express a pitch clamp, so yaw/pitch are the source of
     // truth and Forward()/Right() below derive a Vector3 from them on demand.
-    float yaw = -90.0f * DEG2RAD; // facing -Z initially, matches FlyCam's default
+    float yaw = -90.0f * DEG2RAD; // facing -Z initially
     float pitch = 0.0f;
     const float pitchLimit = 89.0f * DEG2RAD;
     const float lookSensitivity = 0.0025f;
@@ -349,6 +349,22 @@ private:
     // flash rather than a blip. static constexpr keeps Player copy-assignable.
     static constexpr float flash_duration = 0.5f;
 };
+
+// Assign a player's outline + fill color by slot: bots get the fixed magenta,
+// humans round-robin through HUMAN_PLAYER_COLORS. The fill is the same hue at
+// low alpha for the translucent "glowing glass" look. Single source of truth for
+// the color rule - used at spawn (gamespace.h) and re-derived each frame for
+// networked slots (main.cpp), since color isn't sent over the wire.
+inline void assignPlayerColor(Player& player, int index) {
+    if (player.isBot) {
+        player.color_outline = BOT_OUTLINE_COLOR;
+        player.color_fill    = BOT_FILL_COLOR;
+    } else {
+        Color c = HUMAN_PLAYER_COLORS[index % HUMAN_PLAYER_COLORS.size()];
+        c.a = 255; player.color_outline = c;
+        c.a = 40;  player.color_fill    = c;
+    }
+}
 
 //MARK: Asteroid
 class Asteroid {

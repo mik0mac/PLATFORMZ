@@ -649,18 +649,8 @@ int main(int argc, char** argv) {
             // Color each player slot by its index, matching GameSpace::spawnPlayers():
             // bots are magenta (BOT_*_COLOR), humans round-robin through HUMAN_PLAYER_COLORS.
             // Color isn't sent over the wire (it's static per slot); the `bot` flag is.
-            for (int i = 0; i < (int)players.size(); ++i) {
-                if (players[i].isBot) {
-                    players[i].color_outline = BOT_OUTLINE_COLOR;
-                    players[i].color_fill    = BOT_FILL_COLOR;
-                } else {
-                    Color c = HUMAN_PLAYER_COLORS[i % HUMAN_PLAYER_COLORS.size()];
-                    c.a = 255;
-                    players[i].color_outline = c;
-                    c.a = 40;
-                    players[i].color_fill = c;
-                }
-            }
+            for (int i = 0; i < (int)players.size(); ++i)
+                assignPlayerColor(players[i], i);
             // Tick reticles: snap ours, smooth everyone else's.
             for (int i = 0; i < (int)players.size(); ++i)
                 players[i].updateReticle(dt, i != localIndex);
@@ -893,8 +883,10 @@ int main(int argc, char** argv) {
                     remaining_players++;
                     if (p.isBot) remaining_bots++; else remaining_humans++;
                 }
-                // If there's only one player left or only bots left, start the game-over countdown.
-                if (remaining_players <= 1 || remaining_humans <= 0 || (remaining_players <=1 && remaining_asteroids <= 0)) {
+                // Last-man-standing: end once one (or zero) players remain, or no
+                // humans are left. Asteroid count doesn't end a multiplayer match -
+                // only a solo game (handled above) ends on clearing all asteroids.
+                if (remaining_players <= 1 || remaining_humans <= 0) {
                     gameOverTimer -= dt;
                     if (gameOverTimer <= 0.0f) {
                         EnableCursor(); // free the cursor for the game-over menu
