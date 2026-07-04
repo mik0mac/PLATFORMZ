@@ -34,6 +34,12 @@ public:
     float boundaryBufferPlatforms = 0.8f; // Buffer distance to keep platforms from spawning right on the boundary.  As a factor of walls.halfSize.
     float boundaryBufferAsteroids = 0.9f; // Buffer distance to keep objects from spawning right on the boundary.  As a factor of walls.halfSize.
     Color backgroundColor = {0, 0, 0, 255}; // Black background for the game space
+
+    // Player-selectable gameplay rules (set from the OPTIONS modal before a match;
+    // networked play threads them via serializeStart -> server). Default to the
+    // compile-time constants so an unconfigured GameSpace behaves as before.
+    bool wallsStopRockets = WALLS_STOP_ROCKETS;                                    // rockets detonate on the boundary wall vs fly through
+    bool earthGravityPassThroughPlatforms = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // under earth gravity, fall through platforms vs land on them
     
     uint32_t nextID = NON_PLAYER_ID_BASE; // Platforms and Asteroids (0x00000100) 256, 257, 258, ... 
     uint32_t nextPlayerID = PLAYER_ID_BASE; // (0x00000001) 1, 2, 3, ... 255.

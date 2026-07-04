@@ -16,6 +16,7 @@ enum AudioFXId {
     FX_FIRERATE_CHOKE,
     FX_WALL_BOUNCE_PLAYER,
     FX_ROCKET_THROUGH_WALL,
+    FX_PLATFORM_PASSTHROUGH,
     FX_COUNT
 };
 
@@ -75,6 +76,8 @@ const float PLATFORM_MIN_HEIGHT = 0.5f; // Minimum height of the platform
 const float PLATFORM_MAX_HEIGHT = 0.5f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
 const float PLATFORM_MAX_DEPTH = PLATFORM_MAX_WIDTH; // Maximum depth of the platform
+
+const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Default for the OPTIONS toggle.
 
 
 //MARK: Player Shape / Size

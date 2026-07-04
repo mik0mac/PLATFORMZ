@@ -127,6 +127,9 @@ std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
 // clients at consume) and bot difficulty center. Same io->sim handoff as above.
 std::atomic<int>   pendingPlayers{GAMESPACE_NUMBER_OF_PLAYERS};
 std::atomic<float> pendingDiff{BOT_DIFFICULTY};
+// OPTIONS bool toggles carried by a start request; defaults from constants.h.
+std::atomic<bool>  pendingRocketsExplode{WALLS_STOP_ROCKETS};
+std::atomic<bool>  pendingEgPassThrough{EARTH_GRAVITY_PASS_THROUGH_PLATFORMS};
 
 static const char* phaseString(Phase p) {
     switch (p) {
@@ -468,6 +471,8 @@ private:
                     pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
                     pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
                     pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY);
+                    pendingRocketsExplode = parseBool(msg, "rexpl", WALLS_STOP_ROCKETS);
+                    pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
                     startRequested = true; // release: set after the preset values above
                     self->Read();
                     return;
@@ -603,6 +608,10 @@ void SimulationLoop() {
                 }
                 want = std::min(std::max(want, maxClaimed), GAMESPACE_NUMBER_OF_PLAYERS);
                 gameSpace.setPlayerCount(want);
+                // OPTIONS: apply the requesting client's gameplay toggles to the sim
+                // before the world is built (collisions read these off GameSpace).
+                gameSpace.wallsStopRockets = pendingRocketsExplode.load();
+                gameSpace.earthGravityPassThroughPlatforms = pendingEgPassThrough.load();
                 // Issue #5 order: platforms -> players (spread) -> asteroids
                 // (buffered away from the placed players). Same sequence the local
                 // client's generate() uses, so both modes build worlds identically.

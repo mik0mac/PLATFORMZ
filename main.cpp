@@ -81,7 +81,8 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/no_ammo.wav",        0.5f, true, false),  // FX_NO_AMMO (local player only, not spatial)
         audioFX("assets/sounds/firerate_choke.wav", 0.5f, true, false), // FX_FIRERATE_CHOKE (local player only, not spatial)
         audioFX("assets/sounds/wall_bounce_player.wav", 1.0f, false, true), // FX_WALL_BOUNCE_PLAYER (all players, spatial)
-        audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true) // FX_ROCKET_THROUGH_WALL (all players, spatial)
+        audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true), // FX_ROCKET_THROUGH_WALL (all players, spatial)
+        audioFX("assets/sounds/platform_passthrough.wav", 1.0f, false, true) // FX_PLATFORM_PASSTHROUGH (all players, spatial)
     };
     for (audioFX& fx : fxTable) fx.load();
 
@@ -193,6 +194,10 @@ int main(int argc, char** argv) {
     float optBotDifficulty = BOT_DIFFICULTY;                     // 0.0..BOT_DIFFICULTY
     bool  sliderPlayersActive = false; // drag latch for the players slider
     bool  sliderDiffActive    = false; // drag latch for the difficulty slider
+    // OPTIONS toggles (bool gameplay rules; defaults from constants.h). Applied to
+    // the GameSpace at match start - locally in startGame, remotely via serializeStart.
+    bool  optRocketsExplodeOnWalls         = WALLS_STOP_ROCKETS;                    // ON => rockets detonate on the boundary wall
+    bool  optPassThroughPlatformsEarthGrav = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // ON => fall through platforms under earth gravity
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -210,10 +215,13 @@ int main(int argc, char** argv) {
             // Send the chosen map preset + OPTIONS (match size, bot difficulty); the
             // server applies them before generating the world (first press wins).
             if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
-                                                      (int)optNumPlayers, optBotDifficulty));
+                                                      (int)optNumPlayers, optBotDifficulty,
+                                                      optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
+        gameSpace.wallsStopRockets = optRocketsExplodeOnWalls;                    // OPTIONS: rockets detonate on walls vs fly through
+        gameSpace.earthGravityPassThroughPlatforms = optPassThroughPlatformsEarthGrav; // OPTIONS: fall through platforms under earth gravity
         gameSpace.setPlayerCount((int)optNumPlayers); // OPTIONS: 1 human + (N-1) bots
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
@@ -421,10 +429,8 @@ int main(int argc, char** argv) {
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
                 if (showControls) {
-                    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.7f));
                     Rectangle m = {250, 170, 500, 360};
-                    UiModalPanel(m);
-                    UiTextCentered("CONTROLS", screenWidth, (int)m.y + 20, 30, ui::OUTLINE);
+                    UiModalChrome(m, "CONTROLS");
                     const char* lines[] = {
                         "WASD          move",
                         "Mouse         look",
@@ -435,18 +441,15 @@ int main(int argc, char** argv) {
                     };
                     int ly = (int)m.y + 80;
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
-                    Rectangle closeBtn = {(float)(screenWidth / 2 - 70), m.y + m.height - 60, 140, 40};
-                    if (controlsWasOpen && UiButton(closeBtn, "CLOSE")) showControls = false;
+                    if (UiModalClose(m, controlsWasOpen)) showControls = false;
                 }
 
                 // Options popup, same opaque modal style. Two functional sliders
                 // (match size + bot difficulty); they drive local play directly and
                 // ride the start request to the server for networked play.
                 if (showOptions) {
-                    DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.7f));
-                    Rectangle m = {250, 170, 500, 360};
-                    UiModalPanel(m);
-                    UiTextCentered("OPTIONS", screenWidth, (int)m.y + 20, 30, ui::OUTLINE);
+                    Rectangle m = {250, 170, 500, 520}; // taller than CONTROLS: two sliders + two toggles
+                    UiModalChrome(m, "OPTIONS");
 
                     float lx = m.x + 40, sw = m.width - 80;
                     // Right-aligned value readout next to each label.
@@ -470,8 +473,18 @@ int main(int argc, char** argv) {
                     UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
                              0.0f, BOT_DIFFICULTY, sliderDiffActive);
 
-                    Rectangle closeBtn = {(float)(screenWidth / 2 - 70), m.y + m.height - 60, 140, 40};
-                    if (optionsWasOpen && UiButton(closeBtn, "CLOSE")) showOptions = false;
+                    // Toggles: label on its own line, a compact ON/OFF control below
+                    // (labels are long, so keep them off the control's line). Both
+                    // default to their constants.h value; applied at match start.
+                    int y3 = y2 + 90;
+                    DrawText("ROCKETS EXPLODE ON BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
+                    UiToggle({lx, (float)(y3 + 26), 100, 24}, optRocketsExplodeOnWalls);
+
+                    int y4 = y3 + 90;
+                    DrawText("PASS THROUGH PLATFORMS UNDER EARTH GRAVITY", (int)lx, y4, 18, RAYWHITE);
+                    UiToggle({lx, (float)(y4 + 26), 100, 24}, optPassThroughPlatformsEarthGrav);
+
+                    if (UiModalClose(m, optionsWasOpen)) showOptions = false;
                 }
             EndDrawing();
             continue;

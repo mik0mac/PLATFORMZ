@@ -257,7 +257,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
                        rocket.position.z > halfSize || rocket.position.z < -halfSize;
         if (!hitWall) continue;
 
-        if (!WALLS_STOP_ROCKETS) {
+        if (!space.wallsStopRockets) {
             space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.owner ? rocket.owner->id : 0);
             rocket.isOutOfBounds = true; // mark the rocket as out of bounds so it starts to fade.
             continue; // rocket flies through the wall, no detonation
@@ -444,6 +444,10 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
         for (int platformIndex : candidates) {
             Platform& platform = platforms[platformIndex];
             if (SphereIntersectsBox(player.position, player.radius, platform.position, platform.size)) {
+                // OPTIONS: under earth gravity, optionally fall straight through
+                // platforms - skip all collision response for this platform so the
+                // player passes through instead of landing. (Toggle default: on.)
+                if (space.earthGravityPassThroughPlatforms && player.earthGravityEnabled) continue;
                 // Only resolve when the player is moving down into the platform.
                 // This lets the player pass up through it from below, and -
                 // critically - stops the check from re-firing every frame while
@@ -460,6 +464,10 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     } else {
                         player.velocity.y = 0.0f; // land and stop
                     }
+                } else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
+                    // If the player is moving up through the platform.
+                    // play SFX
+                    space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
                 }
                 // un-comment to work on bouncing off the underside of a platform.
                 // else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
