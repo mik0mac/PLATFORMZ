@@ -344,9 +344,9 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                 if (SphereIntersectsSphere(asteroid.position, asteroid.size, player.position, player.radius)) {
                     // damage and audio FX.
                     player.takeDamage(asteroid.damage);
-                    if (player.isAlive) space.emitAudio(FX_PLAYER_HIT, player.position, player.id);
+                    if (player.isAlive) space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
                     asteroid.takeDamage(player.damage);
-                    // if (asteroid.isDestroyed) space.emitAudio(FX_ASTEROID_HIT, asteroid.position, asteroid.id);
+                    if (asteroid.isDestroyed) space.emitAudio(FX_ASTEROID_BONUS, player.position, player.id);
 
                     // velocity bounce: asteroid bounces off the player, player bounces off the asteroid.
                     // The objects need to be pushed clear of each other so they don't re-collide next frame.
@@ -553,8 +553,20 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                 playerA.takeDamage(playerB.damage);
                 playerB.takeDamage(playerA.damage);
 
-                if (playerA.isAlive) space.emitAudio(FX_PLAYER_HIT, playerA.position, playerA.id);
-                if (playerB.isAlive) space.emitAudio(FX_PLAYER_HIT, playerB.position, playerB.id);
+                // determine correct sounds and awards;
+                int playerAsound = FX_PLAYER_LOCAL_DAMAGE;
+                int playerBsound = FX_PLAYER_LOCAL_DAMAGE;
+                if (!playerA.isAlive) {
+                    playerBsound = FX_PLAYER_ELIMINATION_SCORE;
+                    awardPoints(&playerB, PLAYER_ELIMINATION_SCORE_AWARD);
+                }
+                if (!playerB.isAlive) {
+                    playerAsound = FX_PLAYER_ELIMINATION_SCORE;
+                    awardPoints(&playerA, PLAYER_ELIMINATION_SCORE_AWARD);
+                }
+                // play them
+                space.emitAudio(playerAsound, playerA.position, playerA.id);
+                space.emitAudio(playerBsound, playerB.position, playerB.id);
 
                 // Separate the two so they don't stay overlapped and re-damage
                 // every frame (mirrors the asteroid-vs-player response). Push
@@ -658,6 +670,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
                 awardAmmo(explosion.owner, asteroid.ammoAward); // award ammo to the player who caused the explosion.
                 awardHealth(explosion.owner, asteroid.healthAward); // award health to the player who caused the explosion.
 
+                space.emitAudio(FX_ASTEROID_BONUS, explosion.position, explosion.owner ? explosion.owner->id : 0);
                 // spawn debris from the destroyed asteroid and add it to the game space.  FUTURE.
                 // DebrisEffect debris = spawnDebris(asteroid.position, asteroid.velocity); // spawn debris from the destroyed asteroid
                 // debrisEffects.push_back(debris); // add the debris to the game space
@@ -675,10 +688,14 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
             player.takeDamage(splashDamage);
-            if (player.isAlive) space.emitAudio(FX_PLAYER_HIT, player.position, player.id);
+            if (player.isAlive) {
+                space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
+                space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+            }
             // check if player has been eliminated.
             if (!player.isAlive) {
                 awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
+                space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.owner ? explosion.owner->id : 0);
                 // could later add a "player eliminated" event here for UI feedback, etc.
                 // could add fuel/ammo/health awards for eliminating a player, if desired.
             }
