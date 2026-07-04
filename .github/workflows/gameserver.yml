@@ -6,7 +6,7 @@ on:
 jobs:
   serve:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120   # hard cap: the server shuts down after 2h
 
     steps:
       - name: Checkout repo
@@ -81,4 +81,30 @@ jobs:
           echo "--- Server log (live) ---"
           tail -f server/server.log &
 
-          wait $SERVER_PID
+          # Idle watchdog: shut the server down after 15 min with no connected
+          # players (the job's timeout-minutes is the separate hard 2h cap). The
+          # server prints a heartbeat "tick N  players C  asteroids A" once per
+          # second; any C > 0 counts as activity and resets the idle clock. A
+          # fresh server with nobody connected gets a full 15 min grace so there's
+          # time to connect after the tunnel URL is posted above.
+          IDLE_LIMIT=$((15 * 60))       # seconds of zero players before we quit
+          last_active=$(date +%s)
+
+          while kill -0 $SERVER_PID 2>/dev/null; do
+            sleep 30
+            now=$(date +%s)
+            # Latest heartbeat's connected-player count ('|| true' so an empty
+            # grep doesn't trip the shell's pipefail/-e and fail the step).
+            players=$(grep -oE 'players [0-9]+' server/server.log | tail -1 | awk '{print $2}' || true)
+            if [ -n "$players" ] && [ "$players" -gt 0 ]; then
+              last_active=$now
+            fi
+            if [ $((now - last_active)) -ge $IDLE_LIMIT ]; then
+              echo "No connected players for $((IDLE_LIMIT / 60)) min - shutting down idle server."
+              kill $SERVER_PID 2>/dev/null || true
+              break
+            fi
+          done
+
+          echo "Server exiting."
+          wait $SERVER_PID 2>/dev/null || true
