@@ -337,6 +337,7 @@ public:
             isAlive = false; // Player is dead if health reaches zero
         }
         flashTimer = flash_duration; // trigger the full-screen red hurt flash
+        
     }
 
     //MARK: Player Points/Award

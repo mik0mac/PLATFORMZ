@@ -96,7 +96,12 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
         }
         else {
             // no ammo, play a SFX.
-            gameSpace.emitAudio(FX_NO_AMMO, player.position, player.id);
+            if (player.ammo <= 0) {
+                gameSpace.emitAudio(FX_NO_AMMO, player.position, player.id);
+            }
+            else {
+                gameSpace.emitAudio(FX_FIRERATE_CHOKE, player.position, player.id);
+            }
         }
     }
 }

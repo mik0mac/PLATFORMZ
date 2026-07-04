@@ -287,7 +287,7 @@ public:
         for (const Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) {
                 spawnEliminationBurst(asteroid.position);
-                emitAudio(FX_ASTEROID_BREAK, asteroid.position); // owner 0 = world
+                // emitAudio(FX_ASTEROID_BONUS, asteroid.position); // owner 0 = world
             }
         }
 

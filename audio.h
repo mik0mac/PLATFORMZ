@@ -9,6 +9,7 @@
 #include "random.h"
 #include "constants.h"
 
+// MARK: Audio FX
 class audioFX {
 public:
     audioFX(const std::string& file, float volume = 1.0f, bool localOnly = false, bool spacial = true)
@@ -27,7 +28,7 @@ public:
         UnloadSound(sound);
     }
 
-    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection, bool spacial = true) {
+    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection) {
         // for sounds that don't need to exist in 3D space.
         if (!spacial) {
             SetSoundVolume(sound, baseVolume);
@@ -66,11 +67,13 @@ private:
 // Audio event queue
 // ---------------------------------------------------------------------------
 
+// MARK: Audio Event
 struct AudioEvent {
     audioFX* fx;
     Vector3  sourcePos;
 };
 
+// MARK: Audio Queue
 class AudioQueue {
 public:
     void push(audioFX& fx, Vector3 sourcePos, bool isLocal = false) {

@@ -66,26 +66,31 @@ int main(int argc, char** argv) {
                     // captured on entry to PLAYING (startGame) and freed again on
                     // the menu screens (returnToTitle / game-over trigger)
 
-    // MARK: AUDIO
+    // MARK: AUDIO FILES
     // raylib's mixer must be up before any sound loads. The fxTable maps each
     // AudioFXId (the shared client/server wire id) to a loaded sound; game
     // events arrive as ids (locally or over the network) and index into it.
     InitAudioDevice();
     SetMasterVolume(1.0f);
-    audioFX fxTable[FX_COUNT] = {
-        audioFX("assets/sounds/rocket_launch.wav",  1.0f), // FX_ROCKET_LAUNCH
-        audioFX("assets/sounds/explosion.wav",      1.0f), // FX_EXPLOSION
-        audioFX("assets/sounds/asteroid_break.wav", 1.0f, true, false), // FX_ASTEROID_BREAK (this is more of a bonus sound now)
+    audioFX fxTable[FX_COUNT] = { //            volume, localOnly, spacial
+        audioFX("assets/sounds/rocket_launch.wav",  1.0f, false, true), // FX_ROCKET_LAUNCH
+        audioFX("assets/sounds/explosion.wav",      1.0f, false, true), // FX_EXPLOSION
+        audioFX("assets/sounds/asteroid_bonus.wav", 1.0f, true, false), // FX_ASTEROID_BONUS
         audioFX("assets/sounds/player_hit.wav",     1.0f, true, false), // FX_PLAYER_HIT (local player only, not spatial)
         audioFX("assets/sounds/player_death.wav",   1.0f, true, false), // FX_PLAYER_DEATH (local player only, not spatial)
         audioFX("assets/sounds/no_ammo.wav",        0.5f, true, false),  // FX_NO_AMMO (local player only, not spatial)
+        audioFX("assets/sounds/no_fuel.wav",        0.5f, true, false),  // FX_NO_FUEL (local player only, not spatial)
         audioFX("assets/sounds/firerate_choke.wav", 0.5f, true, false), // FX_FIRERATE_CHOKE (local player only, not spatial)
         audioFX("assets/sounds/wall_bounce_player.wav", 1.0f, false, true), // FX_WALL_BOUNCE_PLAYER (all players, spatial)
         audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true), // FX_ROCKET_THROUGH_WALL (all players, spatial)
-        audioFX("assets/sounds/platform_passthrough.wav", 1.0f, false, true) // FX_PLATFORM_PASSTHROUGH (all players, spatial)
+        audioFX("assets/sounds/move_through_platform.wav", 1.0f, false, true), // FX_PLATFORM_PASSTHROUGH (all players, spatial)
+        audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false), // FX_MESSAGE_RECEIVED (local player only, not spatial)
+        audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false), // FX_PLAYER_ELIMINATION_SCORE (local player only, not spatial)
+        audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false) // FX_PLAYER_LOCAL_DAMAGE (local player only, not spatial)
     };
     for (audioFX& fx : fxTable) fx.load();
 
+    // MARK: RENDER TEXTURE 2D
     // The 3D scene is rendered into this off-screen target each frame so the
     // finished image can be sampled and distorted on the way to the screen -
     // that's what drives the damage glitch (a draw-on-top overlay can't
@@ -640,7 +645,7 @@ int main(int argc, char** argv) {
                     netHurt = 1.0f;
                     // Predict our own hit/death sound instantly (same filtering
                     // as the launch above keeps the server echo from doubling).
-                    audioQueue.push(fxTable[hp > 0 ? FX_PLAYER_HIT : FX_PLAYER_DEATH],
+                    audioQueue.push(fxTable[hp > 0 ? FX_PLAYER_LOCAL_DAMAGE : FX_PLAYER_DEATH],
                                     localPlayer->position, /*isLocal=*/true);
                 }
                 prevHealth = hp;
