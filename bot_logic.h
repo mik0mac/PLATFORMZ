@@ -13,8 +13,11 @@ const float BOT_ATTACK_DISTANCE = 80.0f;   // distance to which bots move when a
 const float BOT_ASTEROID_ATTACK_BUFFER = 20.0f; // don't fire at asteroids closer than this distance, to avoid self-damage.
 const float BOT_ASTEROID_AVOID_BUFFER = 20.0f;    // distance to which bots will avoid asteroids.
 const float BOT_ASTEROID_COLLISION_TIME_WINDOW = 3.0f; // worry about asteroids that will collide with bot within this window.
-const float BOT_RETREAT_DISTANCE = 120.0f; // distance to which bots will retreat.
+const float BOT_BEARING_DOWN_RANGE = 50.0f; // an opponent within this range AND closing counts as "bearing down" — gates the kite (MoveFromPlayer).
+const float BOT_AGGRO_SKIP_DEFENSE = 0.85f; // how strongly aggression suppresses the low-health retreat: p(defend) = 1 - this*aggression (aggro 1 -> 15% defend, aggro 0 -> always defend).
 const float BOT_WALL_AVOID_BUFFER = 6.0f;  // steer along a wall once within this distance of it (> bot radius, so it triggers on approach, before the clamp pins the bot).
+const float BOT_WALL_CLEAR_MARGIN = 6.0f;  // extra depth past the avoid buffer a bot must reach before it stops peeling off a wall (hysteresis, so it commits instead of jittering at the edge).
+const float BOT_WALL_WANDER_STRENGTH = 0.6f; // lateral blend into the off-wall departure direction (0 = straight inward, higher = more sideways drift, for varied exit paths).
 const float BOT_VERTICAL_THRESHOLD = 5.0f; // y-delta below which vertical corrections are ignored.
 const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will seek a platform to land and regen.
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
@@ -311,8 +314,11 @@ public:
 };
 
 //MARK: Move From Player
-// Steers away from any player within BOT_RETREAT_DISTANCE, weighted by
-// proximity. Writes out.moveAxis like MoveToTarget — same local-space rule.
+// Kites away from any player that is "bearing down" — within BOT_BEARING_DOWN_RANGE
+// AND closing (velocity pointed at the bot) — weighted by proximity. Ignores
+// opponents who are merely nearby but not advancing, so the bot doesn't flee a
+// retreating enemy. Movement is wall-aware via steerAlongWalls (slides along a
+// boundary rather than pressing into it).
 template <typename TargetT>
 class MoveFromPlayer : public Node<TargetT> {
 public:
@@ -322,45 +328,14 @@ public:
             if (opponent.id == bb.bot.id) continue; // don't avoid yourself
             Vector3 away = Vector3Subtract(bb.bot.position, opponent.position);
             float dist = Vector3Length(away);
-            if (dist < BOT_RETREAT_DISTANCE && dist > 0.0f) {
-                float weight = (BOT_RETREAT_DISTANCE - dist) / BOT_RETREAT_DISTANCE;
-                totalAvoidance = Vector3Add(totalAvoidance, Vector3Scale(Vector3Normalize(away), weight));
-            }
+            if (dist <= 0.0f || dist >= BOT_BEARING_DOWN_RANGE) continue;         // not near
+            Vector3 towardBot = Vector3Scale(away, -1.0f / dist);                 // opponent -> bot (unit)
+            if (Vector3DotProduct(opponent.velocity, towardBot) <= 0.0f) continue; // not closing
+            float weight = (BOT_BEARING_DOWN_RANGE - dist) / BOT_BEARING_DOWN_RANGE; // nearer = more urgent
+            totalAvoidance = Vector3Add(totalAvoidance, Vector3Scale(Vector3Scale(away, 1.0f / dist), weight));
         }
-        if (Vector3LengthSqr(totalAvoidance) <= 0.0f) return Status::Failure; // no threat — not applicable, let the Selector fall through to Attack etc..
-        // Don't steer into a boundary: if the escape direction points at a wall the
-        // bot is already near, drop that component and slide along the wall instead.
-        // The cube is symmetric (-halfSize..+halfSize on every axis). Trigger on
-        // approach (BOT_WALL_AVOID_BUFFER), not just at contact — the collision clamp
-        // otherwise pins the bot right at the wall before this could ever fire.
-        float bound = bb.walls.halfSize - BOT_WALL_AVOID_BUFFER;
-
-        Vector3 dir = Vector3Normalize(totalAvoidance);
-        bool blockedX = false;
-        bool blockedY = false;
-        bool blockedZ = false;
-        if (dir.x < 0.0f && bb.bot.position.x < -bound) blockedX = true;
-        if (dir.x > 0.0f && bb.bot.position.x >  bound) blockedX = true;
-        if (dir.y < 0.0f && bb.bot.position.y < -bound) blockedY = true;
-        if (dir.y > 0.0f && bb.bot.position.y >  bound) blockedY = true;
-        if (dir.z < 0.0f && bb.bot.position.z < -bound) blockedZ = true;
-        if (dir.z > 0.0f && bb.bot.position.z >  bound) blockedZ = true;
-        // Cornered on every axis: give up here so the Selector tries another branch.
-        if (blockedX && blockedY && blockedZ) return Status::Failure;
-        // Zero the into-wall components and renormalize so the bot slides along the wall.
-        if (blockedX) dir.x = 0.0f;
-        if (blockedY) dir.y = 0.0f;
-        if (blockedZ) dir.z = 0.0f;
-        dir = Vector3Normalize(dir);
-
-        Vector3 fwd = bb.bot.ForwardFlat();
-        Vector3 right = bb.bot.Right();
-        bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
-        bb.out.moveAxis.x = Vector3DotProduct(dir, right);
-        // Vertical intent uses the same escape magnitude, but zeroed when the ceiling
-        // /floor is the blocked side, so the bot won't thrust into a boundary.
-        float verticalAvoid = blockedY ? 0.0f : totalAvoidance.y;
-        applyVerticalIntent(bb.bot.position.y, bb.bot.position.y + verticalAvoid, bb.out);
+        if (Vector3LengthSqr(totalAvoidance) <= 0.0f) return Status::Failure; // nobody bearing down — let the Selector fall through (Attack, cover, etc.)
+        if (!steerAlongWalls(bb, Vector3Normalize(totalAvoidance))) return Status::Failure; // cornered on every escape axis
         return Status::Running;
     }
 };
@@ -443,6 +418,28 @@ inline void steerAimToward(Blackboard<TargetT>& bb, Vector3 aimDir) {
     // updateLook() does `pitch -= lookDelta.y * lookSensitivity`, so negate to
     // raise aim toward desiredPitch.
     bb.out.lookDelta.y = -pitchStep / bb.bot.lookSensitivity;
+}
+
+// Drives out.moveAxis (+ vertical intent) from a world-space escape direction,
+// first zeroing any component pointing into a boundary the bot is already near so
+// it slides along the wall instead of pressing into it. Returns false when every
+// escape component is blocked (cornered). Shared by AvoidAsteroid and AvoidWall.
+template <typename TargetT>
+inline bool steerAlongWalls(Blackboard<TargetT>& bb, Vector3 dir) {
+    float bound = bb.walls.halfSize - BOT_WALL_AVOID_BUFFER;
+    Vector3 p = bb.bot.position;
+    if ((dir.x < 0.0f && p.x < -bound) || (dir.x > 0.0f && p.x > bound)) dir.x = 0.0f;
+    if ((dir.y < 0.0f && p.y < -bound) || (dir.y > 0.0f && p.y > bound)) dir.y = 0.0f;
+    if ((dir.z < 0.0f && p.z < -bound) || (dir.z > 0.0f && p.z > bound)) dir.z = 0.0f;
+    if (Vector3LengthSqr(dir) <= 1e-6f) return false;            // cornered on every escape axis
+    dir = Vector3Normalize(dir);
+    bb.out.moveAxis.y = Vector3DotProduct(dir, bb.bot.ForwardFlat());
+    bb.out.moveAxis.x = Vector3DotProduct(dir, bb.bot.Right());
+    // Scale the vertical target by halfSize so a normalized dir.y clears the
+    // BOT_VERTICAL_THRESHOLD deadzone (|dir.y| > ~0.125 => thrust), reusing
+    // applyVerticalIntent rather than re-implementing the jetpack/gravity choice.
+    applyVerticalIntent(p.y, p.y + dir.y * bb.walls.halfSize, bb.out);
+    return true;
 }
 
 //MARK: Fire At Player
@@ -555,8 +552,62 @@ class AvoidAsteroid : public Node<TargetT> {
             threatDir = Vector3Negate(bb.bot.velocity);
             if (Vector3Length(threatDir) < 1e-4f) threatDir = {0.0f, 1.0f, 0.0f};
         }
+        // Drive the body away from the threat (aim stays owned by fireAtTarget, so
+        // the bot keeps shooting while it dodges), sliding along any wall rather
+        // than pressing into it. Cornered on every escape axis -> fall through so
+        // the attack selector reaches avoidWall, which peels the bot inward.
         Vector3 awayDir = Vector3Normalize(Vector3Negate(threatDir));
-        steerAimToward(bb, awayDir);
+        if (!steerAlongWalls(bb, awayDir)) return Status::Failure;
+        return Status::Running;
+    }
+};
+
+//MARK: Avoid Wall
+// Peels a bot off a boundary it has parked against. Timid bots that hold a
+// sniping spot (FindLineOfSight writes no movement) decelerate to a dead stop; if
+// that stop is at a wall, nothing pushes them back inward — this does. The
+// departure isn't a straight line to center: it blends the inward wall normal
+// with a latched lateral tangent so different bots/engagements leave at different
+// angles ("light wander"), then releases (Failure) once the bot is clear by a
+// hysteresis margin, handing control back to the attack path (find LOS / close in).
+template <typename TargetT>
+class AvoidWall : public Node<TargetT> {
+    int stateId;
+    // Inward directions from every wall the point is within `bound` of (a corner
+    // yields two/three components). Zero vector = not near any wall.
+    static Vector3 inwardNormal(Vector3 p, float bound) {
+        Vector3 n{0, 0, 0};
+        if (p.x >  bound) n.x = -1.0f; else if (p.x < -bound) n.x = 1.0f;
+        if (p.y >  bound) n.y = -1.0f; else if (p.y < -bound) n.y = 1.0f;
+        if (p.z >  bound) n.z = -1.0f; else if (p.z < -bound) n.z = 1.0f;
+        return n;
+    }
+public:
+    AvoidWall(int id) : stateId(id) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& s = bb.decisions[stateId]; // activeBranch: -1 idle / 1 engaged; interval: latched lateral bias
+        Vector3 pos = bb.bot.position;
+        float triggerBound = bb.walls.halfSize - BOT_WALL_AVOID_BUFFER;
+        float releaseBound = triggerBound - BOT_WALL_CLEAR_MARGIN; // deeper inside => hysteresis
+
+        if (s.activeBranch < 0) {                       // idle: engage only when near a wall
+            if (Vector3LengthSqr(inwardNormal(pos, triggerBound)) <= 0.0f) return Status::Failure;
+            s.activeBranch = 1;
+            s.interval = RandomFloat(-1.0f, 1.0f);      // latched lateral wander bias for this departure
+        } else if (Vector3LengthSqr(inwardNormal(pos, releaseBound)) <= 0.0f) {
+            s.activeBranch = -1;                         // cleared the wall by the margin: hand back to attack
+            return Status::Failure;
+        }
+
+        Vector3 n = Vector3Normalize(inwardNormal(pos, releaseBound));
+        Vector3 tan = Vector3CrossProduct(n, {0.0f, 1.0f, 0.0f});
+        if (Vector3LengthSqr(tan) < 1e-4f) tan = Vector3CrossProduct(n, {1.0f, 0.0f, 0.0f}); // n ~ up (floor/ceiling)
+        tan = Vector3Normalize(tan);
+        Vector3 dir = Vector3Normalize(Vector3Add(n, Vector3Scale(tan, BOT_WALL_WANDER_STRENGTH * s.interval)));
+
+        // The inward departure direction is never fully wall-blocked, so ignore the
+        // cornered return; this also gives correct floor/ceiling lift-off.
+        steerAlongWalls(bb, dir);
         return Status::Running;
     }
 };
@@ -747,15 +798,21 @@ public:
 template <typename TargetT>
 class Chance : public Node<TargetT> {
     int stateId; float probability; Node<TargetT>* child;
+    float (*probFn)(Blackboard<TargetT>&) = nullptr; // per-bot probability; overrides `probability` when set
 public:
     Chance(int id, float p, Node<TargetT>* c) : stateId(id), probability(p), child(c) {}
+    // Per-bot variant: the open probability is computed from the blackboard each
+    // roll (e.g. scaled by bb.profile), since the shared node can't bake it in.
+    Chance(int id, float (*p)(Blackboard<TargetT>&), Node<TargetT>* c)
+        : stateId(id), probability(0.0f), child(c), probFn(p) {}
     Status tick(Blackboard<TargetT>& bb) override {
         BotDecision& s = bb.decisions[stateId];
         s.timer += bb.dt;
         if (s.activeBranch < 0 || s.timer >= s.interval) {         // (re)roll open/closed
             s.timer = (s.activeBranch < 0) ? 0.0f : s.timer - s.interval;
             s.interval = BOT_TICK_TIME * RandomFloat(BOT_TICK_JITTER_MIN, BOT_TICK_JITTER_MAX);
-            s.activeBranch = (RandomFloat(0.0f, 1.0f) < probability) ? 1 : 0; // 1=open, 0=closed
+            float p = probFn ? probFn(bb) : probability;           // per-bot probability when a fn is supplied
+            s.activeBranch = (RandomFloat(0.0f, 1.0f) < p) ? 1 : 0; // 1=open, 0=closed
         }
         return s.activeBranch == 1 ? child->tick(bb) : Status::Failure;
     }
