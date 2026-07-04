@@ -77,14 +77,17 @@ inline std::string serializeName(const std::string& name) {
 }
 
 inline std::string serializeStart(float half, int platforms, int asteroids,
-                                  int nplayers, float diff) {
+                                  int nplayers, float diff,
+                                  bool rocketsExplode, bool egPassThrough) {
     nlohmann::json j = {
         {"type", "start"},
         {"half", half},
         {"plat", platforms},
         {"roid", asteroids},
-        {"nplayers", nplayers}, // requested match size (server clamps to connected)
-        {"diff", diff}          // bot difficulty center [0..BOT_DIFFICULTY]
+        {"nplayers", nplayers},        // requested match size (server clamps to connected)
+        {"diff", diff},                // bot difficulty center [0..BOT_DIFFICULTY]
+        {"rexpl", rocketsExplode},     // OPTIONS: rockets detonate on the boundary wall
+        {"egpt", egPassThrough}        // OPTIONS: fall through platforms under earth gravity
     };
     return j.dump();
 }

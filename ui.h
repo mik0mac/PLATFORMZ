@@ -61,6 +61,27 @@ inline bool UiButton(Rectangle r, const char* label, int fontSize = 20) {
     return hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 
+//MARK: Toggle
+// Compact ON/OFF toggle: same shaded-wire panel as UiButton, but its label and
+// tint reflect a bool the caller owns (passed by reference). Flips `value` on
+// click and returns true on the frame it changed. ON reads in the bright accent,
+// OFF dims to the idle fill so the state is legible at a glance.
+inline bool UiToggle(Rectangle r, bool& value, int fontSize = 20) {
+    bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
+    Color fill = value ? ui::FILL_HI : ui::FILL;
+    if (hovered) fill.a = (unsigned char)(fill.a + 40); // lift on hover, either state
+    UiPanel(r, ui::OUTLINE, fill);
+    const char* label = value ? "ON" : "OFF";
+    int tw = MeasureText(label, fontSize);
+    DrawText(label,
+             (int)(r.x + (r.width  - tw) / 2.0f),
+             (int)(r.y + (r.height - fontSize) / 2.0f),
+             fontSize, value ? ui::OUTLINE : ui::TEXT);
+    bool clicked = hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    if (clicked) value = !value;
+    return clicked;
+}
+
 //MARK: Text field
 // Click in to focus, click out (or click another field) to defocus. While
 // focused, typed printable chars append (up to maxLen) and Backspace deletes;
@@ -145,4 +166,23 @@ inline bool UiSlider(Rectangle r, float& value, float minV, float maxV,
 // Reusable centered label (centers within [0, areaWidth]).
 inline void UiTextCentered(const char* t, int areaWidth, int y, int fontSize, Color c) {
     DrawText(t, (areaWidth - MeasureText(t, fontSize)) / 2, y, fontSize, c);
+}
+
+//MARK: Modal chrome
+// The shared frame every title-screen popup (CONTROLS, OPTIONS) draws: a dim
+// full-screen backdrop + opaque modal panel + centered title. Call first, then
+// draw the modal body, then UiModalClose() for the bottom CLOSE button. Sizes
+// off the live window (GetScreenWidth/Height) so callers pass only the panel.
+inline void UiModalChrome(Rectangle r, const char* title) {
+    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.7f));
+    UiModalPanel(r);
+    UiTextCentered(title, GetScreenWidth(), (int)r.y + 20, 30, ui::OUTLINE);
+}
+
+// CLOSE button pinned bottom-center of modal panel `r`. `enabled` gates the click
+// (callers pass the previous frame's open flag so the click that opened the modal
+// can't immediately close it). Returns true on the frame it's clicked.
+inline bool UiModalClose(Rectangle r, bool enabled) {
+    Rectangle b = {GetScreenWidth() / 2.0f - 70.0f, r.y + r.height - 60.0f, 140.0f, 40.0f};
+    return enabled && UiButton(b, "CLOSE");
 }

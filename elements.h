@@ -162,6 +162,7 @@ public:
     float speedJetpack = PLAYER_SPEED_JETPACK; // units/sec, max speed when using jetpack
     float accelerationJetpack = PLAYER_ACCELERATION_JETPACK; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
     bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
+    bool earthGravityEnabled = false; // Last-applied gravity mode (mirrors this frame's input) so collision rules can read it after input is gone. Set in ApplyPlayerInput.
 
     // Full look-direction vector (includes pitch) - used for aiming/shooting.
     Vector3 Forward() const {

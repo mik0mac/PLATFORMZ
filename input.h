@@ -57,6 +57,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
                              float dt, float gravity, GameSpace& gameSpace) {
     player.updateLook(in.lookDelta);
     player.isUsingJetpack = in.jetpack;
+    player.earthGravityEnabled = in.earthGravity; // mirror gravity mode onto the player for collision rules (main.cpp:664 / bot_controller.h derive `gravity` from the same flag)
     player.updateVelocity(dt, in.moveAxis, gravity);
     player.updateFuel(dt, player.isUsingJetpack);
 
