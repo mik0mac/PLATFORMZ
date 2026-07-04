@@ -362,17 +362,12 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
     // Per-asteroid seed from its (stable) starting position.
     const Vector3 seed = asteroid.startingPosition;
 
-    // Cheap deterministic hash -> [0,1) (classic GLSL fract(sin*) trick).
-    auto hash01 = [](float a, float b, float c) {
-        float h = sinf(a * 12.9898f + b * 78.233f + c * 37.719f) * 43758.5453f;
-        return h - floorf(h);
-    };
-
     // Tumble: spin around a per-asteroid axis, advanced by wall-clock time.
+    // Hash01 (random.h) gives stable per-vertex "randomness" from the seed.
     Vector3 axis = Vector3{
-        hash01(seed.x, seed.y, 1.0f) - 0.5f,
-        hash01(seed.y, seed.z, 2.0f) - 0.5f,
-        hash01(seed.z, seed.x, 3.0f) - 0.5f
+        Hash01(seed.x, seed.y, 1.0f) - 0.5f,
+        Hash01(seed.y, seed.z, 2.0f) - 0.5f,
+        Hash01(seed.z, seed.x, 3.0f) - 0.5f
     };
     if (Vector3LengthSqr(axis) < 1e-6f) axis = Vector3{0, 1, 0}; // guard a near-zero axis
     axis = Vector3Normalize(axis);
@@ -382,7 +377,7 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
     Vector3 verts[12];
     for (int i = 0; i < 12; i++) {
         Vector3 dir = Vector3Normalize(ICOSA_VERTS[i]);                     // point on the unit sphere
-        float jitter = 0.72f + 0.28f * hash01(seed.x + i, seed.y, seed.z);  // 0.72..1.0, like the 2D version
+        float jitter = 0.72f + 0.28f * Hash01(seed.x + i, seed.y, seed.z);  // 0.72..1.0, like the 2D version
         Vector3 local = Vector3Scale(dir, asteroid.size * jitter);
         local = Vector3RotateByAxisAngle(local, axis, angle);
         verts[i] = Vector3Add(asteroid.position, local);

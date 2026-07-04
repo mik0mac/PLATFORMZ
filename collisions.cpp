@@ -211,10 +211,11 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
     auto& platforms = space.getPlatforms();
     auto& explosions = space.getExplosions();
 
+    std::vector<int> candidates; // reused across rockets; capacity persists between frames
     for (Rocket& rocket : rockets) {
         if (rocket.isDestroyed) continue;
 
-        std::vector<int> candidates;
+        candidates.clear();
         grid.GatherPlatformNeighbors(rocket.prevPosition, candidates);
         grid.GatherPlatformNeighbors(rocket.position, candidates);
 
@@ -376,10 +377,11 @@ void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid
     auto& asteroids = space.getAsteroids();
     auto& platforms = space.getPlatforms();
 
+    std::vector<int> candidates; // reused across asteroids; capacity persists between frames
     for (Asteroid& asteroid : asteroids) {
         if (asteroid.isDestroyed) continue;
 
-        std::vector<int> candidates;
+        candidates.clear();
         grid.GatherPlatformNeighbors(asteroid.position, candidates);
 
         for (int platformIndex : candidates) {
@@ -435,10 +437,11 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
     auto& platforms = space.getPlatforms();
     auto& players = space.getPlayers();
 
+    std::vector<int> candidates; // reused across players; capacity persists between frames
     for (Player& player : players) {
         if (!player.isAlive) continue;
 
-        std::vector<int> candidates;
+        candidates.clear();
         grid.GatherPlatformNeighbors(player.position, candidates);
 
         for (int platformIndex : candidates) {

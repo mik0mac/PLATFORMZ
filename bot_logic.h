@@ -853,7 +853,7 @@ public:
 
 //MARK: Entry point
 // Ticks the tree once and returns a PlayerInput ready for ApplyPlayerInput() —
-// same destination as a human's PollLocalInput() or the wander BotState path.
+// same destination as a human's PollLocalInput().
 template <typename TargetT>
 PlayerInput botInput(Player& bot,
                     const TargetT& target,
