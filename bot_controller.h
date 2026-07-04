@@ -30,7 +30,8 @@ struct BotController {
     enum LatchId { LATCH_MOVEMENT, LATCH_MOVE_TO_SAFETY,
                    LATCH_ATTACK_STYLE, LATCH_FIRE,
                    LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
-                   LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD, LATCH_COUNT };
+                   LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD,
+                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -44,6 +45,7 @@ struct BotController {
     FireAtPlayer<Player>   fireAtPlayer;
     AttackAsteroid<Player> attackAsteroid;
     AvoidAsteroid<Player>  avoidAsteroid;
+    AvoidWall<Player>      avoidWall{ LATCH_AVOID_WALL };
     Idle<Player>           idle;
 
     // --- Composed tree (declaration order matters: composites reference the
@@ -61,6 +63,11 @@ struct BotController {
     }
     Cooldown<Player>               rateLimitedFireAtPlayer{ LATCH_FIRE_PLAYER_CD, botFirePeriod, &fireAtPlayer };
     Cooldown<Player>               rateLimitedAttackAsteriod { LATCH_ATTACK_AST_CD, botFirePeriod, &attackAsteroid };
+    // A more aggressive bot has a high chance of ignoring the low-health retreat
+    // and fighting on. Per-bot because the tree nodes are shared across all bots.
+    static float defenseProbability(Blackboard<Player>& bb) {
+        return 1.0f - BOT_AGGRO_SKIP_DEFENSE * bb.profile.aggression; // aggressive bots rarely defend
+    }
     // needsBonus is a GUARD, so it gates attackAsteroid via a Sequence: only hunt
     // asteroids when a bonus is actually wanted.
     Sequence<Player>               attackAsteroidForBonus{ { &needsBonus, &rateLimitedAttackAsteriod } };
@@ -73,6 +80,9 @@ struct BotController {
     Chance<Player>                 maybeKite{ LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer };
     LatchedSelector<Player>        moveToSafety{ LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover } };
     Sequence<Player>               lowHealthResponse{ { &isLowHealth, &moveToSafety, &idle } };
+    // Gate the whole low-health retreat by an aggression-scaled roll: aggressive
+    // bots usually skip it (maybeDefend -> Failure) and fall through to attack.
+    Chance<Player>                 maybeDefend{ LATCH_DEFEND_CHANCE, defenseProbability, &lowHealthResponse };
     Sequence<Player>               lowFuelResponse{ { &isLowFuel, &moveToPlatform, &idle } };
     // Attack: personality-weighted random pick between sniping from range
     // (findLineOfSight) and closing in (moveToPlayer) — aggressive bots close,
@@ -81,8 +91,10 @@ struct BotController {
         { &findLineOfSight, [](Blackboard<Player>& bb){ return 1.0f - bb.profile.aggression; } },
         { &moveToPlayer,    [](Blackboard<Player>& bb){ return bb.profile.aggression; } },
     } };
-    Selector<Player>               attack{ { &avoidAsteroid, &attackStyle } };
-    LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &lowHealthResponse, &lowFuelResponse, &attack } };
+    // avoidWall is a hard priority ahead of the hold/close logic so a bot parked
+    // on a boundary peels off (then releases back to attackStyle once clear).
+    Selector<Player>               attack{ { &avoidAsteroid, &avoidWall, &attackStyle } };
+    LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &maybeDefend, &lowFuelResponse, &attack } };
     Parallel<Player>               botTree{ { &movement, &fireAtTarget } };
 
     // --- Per-slot state, indexed BY PLAYER INDEX (slot 0's entry is simply
