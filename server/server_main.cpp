@@ -44,11 +44,13 @@ namespace websocket = boost::beast::websocket;
 namespace net       = boost::asio;
 using tcp           = boost::asio::ip::tcp;
 
+//MARK: Config
 const unsigned short PORT      = 9000;
 const float          TICK_RATE = 60.0f;
 const float          TICK_DT   = 1.0f / TICK_RATE;
 // const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
 
+//MARK: JSON out
 // -------------------------------------------------------------------------
 // Minimal JSON helpers - hand-rolled to avoid a heavy dependency.
 // Only covers what the state packet needs: floats, ints, bools, arrays.
@@ -74,6 +76,7 @@ static std::string js(const std::string& v) {
     return out;
 }
 
+//MARK: Client record
 // -------------------------------------------------------------------------
 // ConnectedClient - server-side record per WebSocket connection.
 // -------------------------------------------------------------------------
@@ -94,6 +97,7 @@ struct ConnectedClient {
     bool nameDirty      = false;
 };
 
+//MARK: Globals
 // -------------------------------------------------------------------------
 // Shared game state + client registry
 // -------------------------------------------------------------------------
@@ -149,6 +153,7 @@ static const char* phaseString(Phase p) {
 std::map<void*, ConnectedClient> clients;
 std::mutex clientMutex;
 
+//MARK: Bot slots
 // "Fill empty slots": every player slot NOT owned by a connected client becomes
 // a bot; claimed slots are humans. Flipping isBot on/off is all that's needed to
 // enable/disable the tree drive for that slot (personalities are seeded once at
@@ -180,6 +185,7 @@ static std::set<int> gatherClaimedSlots() {
     return claimed;
 }
 
+//MARK: Input parse
 // -------------------------------------------------------------------------
 // Packet parsing - JSON input from client into PlayerInput.
 // Minimal hand-rolled parser: finds keys by string search.
@@ -238,6 +244,7 @@ static PlayerInput parseInput(const std::string& json) {
     return in;
 }
 
+//MARK: Welcome packet
 // Static-world snapshot - sent once in the welcome packet (platforms never move
 // or change after generate(), so there's no reason to put them in every tick).
 static std::string buildPlatformsArray() {
@@ -268,6 +275,7 @@ static std::string buildWelcome(int playerId) {
          + ",\"platforms\":" + buildPlatformsArray() + "}";
 }
 
+//MARK: State packet
 // -------------------------------------------------------------------------
 // State serialization - build the JSON state packet sent to all clients.
 // Each client gets the same world state but with their own lastSeq injected.
@@ -388,6 +396,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     return s;
 }
 
+//MARK: Session
 // -------------------------------------------------------------------------
 // Session - one WebSocket connection, one player slot.
 // -------------------------------------------------------------------------
@@ -467,6 +476,7 @@ private:
                 std::string msg = beast::buffers_to_string(self->buffer_.data());
                 self->buffer_.consume(self->buffer_.size());
 
+                //MARK: Msg: start
                 // Control message: a client asking to start/restart a match. Any
                 // client may send it. Flagged here and performed by the sim loop
                 // so all gameSpace mutation stays on a single thread.
@@ -484,6 +494,7 @@ private:
                     return;
                 }
 
+                //MARK: Msg: name
                 // Control message: a client setting its display name. Store it on
                 // the client record; the sim loop copies it onto the player slot
                 // (keeping gameSpace mutation single-threaded) and it then rides
@@ -499,6 +510,7 @@ private:
                     return;
                 }
 
+                //MARK: Msg: input
                 // Parse input packet and store as this client's latest input.
                 // The sim loop reads lastInput each tick; if packets arrive
                 // faster than tick rate, only the newest is used (last-write-wins).
@@ -526,6 +538,7 @@ private:
     }
 };
 
+//MARK: Broadcast
 // -------------------------------------------------------------------------
 // Broadcast state to all connected clients.
 // Each client gets the same world state but with their own lastSeq.
@@ -550,6 +563,7 @@ void BroadcastState(uint32_t tick) {
     }
 }
 
+//MARK: Apply input
 // -------------------------------------------------------------------------
 // Apply a client's input to their player.
 // lookDelta from the network carries absolute yaw/pitch (not a delta), so
@@ -572,6 +586,7 @@ static void ApplyInputToPlayer(Player& player, const PlayerInput& in,
     ApplyPlayerInput(player, adjusted, dt, gravity, gameSpace);
 }
 
+//MARK: Sim loop
 // -------------------------------------------------------------------------
 // Simulation loop - fixed 60Hz timestep.
 // -------------------------------------------------------------------------
@@ -597,6 +612,7 @@ void SimulationLoop() {
         {
             std::lock_guard<std::mutex> gg(gameMutex);
 
+            //MARK: Start match
             // Consume a pending start/restart request: build a fresh world and
             // reset the existing player slots (ids stay stable so connected
             // clients keep their slot mapping across a restart), then begin.
@@ -642,6 +658,7 @@ void SimulationLoop() {
                 std::cout << "Match countdown started (" << matchStartConnected << " connected)\n";
             }
 
+            //MARK: Countdown
             // Pre-match countdown: publish the remaining seconds each tick, and flip
             // to PLAYING (unfreezing the world) once the deadline passes. Nothing is
             // simulated while COUNTDOWN (the sim body gates on PLAYING/GAMEOVER).
@@ -661,6 +678,7 @@ void SimulationLoop() {
             // and sends them after this lock releases.
             gameSpace.getAudioEvents().clear();
 
+            //MARK: Name sync
             // Apply any pending display-name changes onto their player slots. Runs
             // every tick in every phase (lock order gameMutex->clientMutex), so
             // lobby names update live as each client types - and the name persists
@@ -676,6 +694,7 @@ void SimulationLoop() {
                 }
             }
 
+            //MARK: Bot reconcile
             // Reconcile bot ownership every tick in EVERY phase: any slot without a
             // connected client is a bot (named + colored). Running it in the lobby
             // too means the title-screen player list previews the bots that will
@@ -685,6 +704,7 @@ void SimulationLoop() {
             // DRIVEN in PLAYING/GAMEOVER (below); in the lobby they just hold a slot.
             { std::lock_guard<std::mutex> gc(clientMutex); refreshBotSlots(gatherClaimedSlots()); }
 
+            //MARK: Tick sim
             // Keep simulating through PLAYING *and* GAMEOVER; only LOBBY (no world
             // yet) is idle. The GAMEOVER sim keeps the world moving during the
             // client's game-over countdown so networked play matches local, where
@@ -721,6 +741,7 @@ void SimulationLoop() {
                 RunCollisionChecks(gameSpace, collisionGrid);
                 gameSpace.updateActiveObjects();
 
+                //MARK: Match end
                 // Last-player-standing: end the match when <= threshold connected
                 // players remain alive. threshold is 1 for a multi-player match and
                 // 0 for a solo start, so a lone player's match ends only when they
@@ -747,6 +768,7 @@ void SimulationLoop() {
             asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
         }
 
+        //MARK: Send tick
         // On (re)start, hand every client the fresh world (their slot + the new
         // platform layout) so they rebuild it. Done off gameMutex like BroadcastState.
         if (justStarted) {
@@ -773,13 +795,14 @@ void SimulationLoop() {
     }
 }
 
+//MARK: Listener
 // -------------------------------------------------------------------------
 // Listener
 // -------------------------------------------------------------------------
 class Listener : public std::enable_shared_from_this<Listener> {
 public:
     Listener(net::io_context& ioc, tcp::endpoint endpoint)
-        : ioc_(ioc), acceptor_(ioc) {
+        : acceptor_(ioc) {
         beast::error_code ec;
         acceptor_.open(endpoint.protocol(), ec);
         acceptor_.set_option(net::socket_base::reuse_address(true), ec);
@@ -789,7 +812,6 @@ public:
     }
     void Run() { Accept(); }
 private:
-    net::io_context& ioc_;
     tcp::acceptor acceptor_;
     void Accept() {
         acceptor_.async_accept(
@@ -801,6 +823,7 @@ private:
     }
 };
 
+//MARK: main
 // -------------------------------------------------------------------------
 // main
 // -------------------------------------------------------------------------
