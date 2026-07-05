@@ -29,11 +29,6 @@ struct NetAudioEvent {
     uint32_t owner;
 };
 
-// struct NetMessageEvent {
-//     MessageType msgType;
-//     std::string playerA_Name;
-//     std::string playerB_Name;
-// };
 
 //MARK: GameSpace
 class GameSpace {
@@ -91,6 +86,7 @@ public:
             placed.push_back(platform.position);
             platforms.push_back(platform);
         }
+        
         rockets.clear();    // Rockets will be generated when the player shoots.
         explosions.clear(); // Explosions will be generated when rockets detonate.
         sparks.clear();     // VFX particles, spawned by jetpack exhaust / asteroid bursts.
@@ -180,18 +176,33 @@ public:
             player.id = nextPlayerID++;
             //MARK: Player Color (round-robin human colors; bots recolored by the caller)
             assignPlayerColor(player, i);
+            // Unique default name per slot so un-named humans read distinctly
+            // ("PLAYER 1", "PLAYER 2", ...). Custom names + bot names overwrite this.
+            player.name = "PLAYER " + std::to_string(i + 1);
 
             players.push_back(player);
         }
         placePlayersSpread(); // spread all slots across the platform tops (issue #5)
     }
 
+    // MARK: GENERATE WORLD
     // Local sim: build the whole world in the issue-#5 order - platforms first,
     // then players spread across them, then asteroids scattered away from players.
     void generate() {
         generatePlatforms();
         spawnPlayers();     // creates slots + spreads them across the platforms
         generateAsteroids(); // buffered away from the now-placed players
+
+        // for a single player game, the platform elasticity for asteroids should be set to 1.0f
+        // so that asteroids don't slow down.  Wall elasticity is set > 1.0 so that asteroids
+        // speed up gradually over time, making the game more challenging.
+        // MARK: Single Player Elasticity
+        if (players.size() == 1) {
+            for (Platform& platform : platforms) {
+                platform.elasticityAsteroid = 1.0f;
+            }
+        }
+        if (players.size() == 1) walls.elasticityAsteroid = 1.033f; else walls.elasticityAsteroid = WALL_ELASTICITY_ASTEROID;  // for a single player game, the walls elasticity for asteroids should be set to 1.0f so that asteroids don't slow down.
     };
 
     // Reset the EXISTING player slots for a fresh match without changing their
@@ -402,6 +413,7 @@ public:
             Player player;
             player.id = nextPlayerID++;
             assignPlayerColor(player, (int)players.size());
+            player.name = "PLAYER " + std::to_string(players.size() + 1); // unique default (see spawnPlayers)
             players.push_back(player);
         }
     }

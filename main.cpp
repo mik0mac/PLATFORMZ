@@ -256,6 +256,16 @@ int main(int argc, char** argv) {
         TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
     }
 
+    // Our own display name for the roster/scoreboard. Once the user types a name
+    // it wins; until then (namePristine) fall back to the slot-numbered default
+    // "PLAYER {slot+1}" so two un-named humans don't both read "PLAYER". Networked
+    // uses our server slot (myIndex); local mode is always slot 0 ("PLAYER 1").
+    auto myDisplayName = [&]() -> std::string {
+        if (!namePristine && !playerName.empty()) return playerName;
+        int slot = networked ? (myIndex >= 0 ? myIndex : 0) : 0;
+        return "PLAYER " + std::to_string(slot + 1);
+    };
+
     // START from the title. Local: stand up a fresh run with the chosen map preset
     // (small/medium/large). Networked: ask the server to start/restart a match -
     // the screen flips to PLAYING when the server's phase says so (see the loop).
@@ -278,7 +288,7 @@ int main(int argc, char** argv) {
         std::vector<Player>& ps = gameSpace.getPlayers();
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
-        ps[0].name = playerName.empty() ? "PLAYER" : playerName;
+        ps[0].name = myDisplayName();
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
@@ -322,7 +332,10 @@ int main(int argc, char** argv) {
             ServerMessage m = applyMessage(frame, gameSpace);
             if (m.type == ServerMessage::Type::Welcome) {
                 myIndex = m.playerId;
-                net.send(serializeName(playerName)); // attach our display name to the slot
+                // Only override the server's slot-numbered default ("PLAYER N")
+                // when the user has actually set a custom name; otherwise leave
+                // the default so two un-named humans stay distinct.
+                if (!namePristine) net.send(serializeName(playerName));
             }
             else if (m.type == ServerMessage::Type::State) { phase = m.phase; netCountdown = m.countdown; }
         }
@@ -428,14 +441,14 @@ int main(int argc, char** argv) {
                         if (!titlePlayers[i].isConnected) continue;
                         int ry = (int)(playersBox.y + headerH + row * rowH);
                         bool you = (i == myIndex);
-                        // Local row shows the live-typed name; other rows show the
-                        // server-synced name (updates live as they type), falling
-                        // back to a slot label until they've set one.
-                        const char* shown = you
-                            ? (playerName.empty() ? "PLAYER" : playerName.c_str())
+                        // Local row shows the live-typed name (or our slot-numbered
+                        // default while untouched); other rows show the server-synced
+                        // name, falling back to a slot label until they've set one.
+                        std::string shown = you
+                            ? myDisplayName()
                             : (titlePlayers[i].name.empty() ? TextFormat("PLAYER %d", i + 1)
-                                                            : titlePlayers[i].name.c_str());
-                        DrawText(TextFormat("%d. %s%s", i + 1, shown, you ? " (YOU)" : ""),
+                                                            : titlePlayers[i].name);
+                        DrawText(TextFormat("%d. %s%s", i + 1, shown.c_str(), you ? " (YOU)" : ""),
                                  (int)playersBox.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
                         row++;
                     }
@@ -446,7 +459,7 @@ int main(int argc, char** argv) {
                     for (int i = 0; i < rowsShown; ++i) {
                         int ry = (int)(playersBox.y + headerH + i * rowH);
                         if (i == 0)
-                            DrawText(TextFormat("1. %s (YOU)", playerName.empty() ? "PLAYER" : playerName.c_str()),
+                            DrawText(TextFormat("1. %s (YOU)", myDisplayName().c_str()),
                                      (int)playersBox.x + 10, ry, 18, RAYWHITE);
                         else
                             DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[botNameOrder[(i - 1) % BOT_NAME_COUNT]]),
@@ -579,6 +592,11 @@ int main(int argc, char** argv) {
                 { "Destroy asteroids to replenish ammo, fuel, and health.", COUNTDOWN_SECONDS * 0.34f },
                 { "Good luck!",                                          COUNTDOWN_SECONDS * 0.68f },
             };
+            // Adjust the info for a single player game:
+            if (gameSpace.getPlayers().size() == 1) {
+                infoLines[0].text = "Destroy every asteroid to win.";
+                infoLines[1].text = "Each elimination replenishes ammo, fuel, and health.";
+            }
             int countNum = (int)ceilf(remaining);
             if (countNum < 1) countNum = 1; // never flash "0" before the flip to PLAYING
 
@@ -590,7 +608,7 @@ int main(int argc, char** argv) {
                 int ly = 480;
                 for (const auto& L : infoLines) {
                     float a = Clamp((elapsed - L.start) / 0.6f, 0.0f, 1.0f); // 0.6s fade-in per line
-                    DrawCentered(L.text, ly, 24, Fade(RAYWHITE, a));
+                    DrawCentered(L.text, ly, 24, Fade({0, 255, 200, 255}, a));  // platform color.
                     ly += 40;
                 }
             EndDrawing();
@@ -958,11 +976,13 @@ int main(int argc, char** argv) {
                 
                 std::string pa;
                 std::string pb;
-                // replace the local player's name with "YOU" for clarity in the message queue.
-                if (msg.playerA_Name == localPlayer->name) pa = "YOU"; else pa = msg.playerA_Name;
-                if (msg.playerB_Name == localPlayer->name) pb = "YOU"; else pb = msg.playerB_Name;
+                // replace the local player's name with "YOU" for clarity in the
+                // message queue. Match by id, not name - names can collide (two
+                // un-named "PLAYER"s), ids are authoritative.
+                if (msg.playerA_id == localPlayer->id) pa = "YOU"; else pa = msg.playerA_Name;
+                if (msg.playerB_id == localPlayer->id) pb = "YOU"; else pb = msg.playerB_Name;
                 msg.generate(pa, pb);
-                bool visible = msg.visible(localPlayer->name);
+                bool visible = msg.visible(localPlayer->id);
                 if (!visible) messageQueue.remove(msg_index); else msg_index++;
             }
             DrawMessageQueue(messageQueue, screenWidth, screenHeight);

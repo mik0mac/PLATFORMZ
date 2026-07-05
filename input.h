@@ -91,15 +91,15 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
         bool lowFuel   = player.fuel   <= WARN_FUEL_THRESHOLD;
         bool lowAmmo   = player.ammo   <= WARN_AMMO_THRESHOLD;
         if (lowHealth && !player.lowHealthWarned) {
-            Message m(MSG_TYPE_LOW_HEALTH, player.name, "");
+            Message m(MSG_TYPE_LOW_HEALTH, player.name, "", player.id, 0);
             gameSpace.emitMessage(m);
         }
         if (lowFuel && !player.lowFuelWarned) {
-            Message m(MSG_TYPE_LOW_FUEL, player.name, "");
+            Message m(MSG_TYPE_LOW_FUEL, player.name, "", player.id, 0);
             gameSpace.emitMessage(m);
         }
         if (lowAmmo && !player.lowAmmoWarned) {
-            Message m(MSG_TYPE_LOW_AMMO, player.name, "");
+            Message m(MSG_TYPE_LOW_AMMO, player.name, "", player.id, 0);
             gameSpace.emitMessage(m);
         }
         player.lowHealthWarned = lowHealth;
