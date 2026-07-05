@@ -347,13 +347,13 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                     player.takeDamage(asteroid.damage);
                     if (player.isAlive) {
                         space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
-                        Message msg(MSG_TYPE_ASTEROID_COLLISION, player.name, "");
+                        Message msg(MSG_TYPE_ASTEROID_COLLISION, player.name, "", player.id, 0);
                         space.emitMessage(msg);
                     }
                     asteroid.takeDamage(player.damage);
                     if (asteroid.isDestroyed) {
                         space.emitAudio(FX_ASTEROID_BONUS, player.position, player.id);
-                        Message msg(MSG_TYPE_ASTEROID_BONUS, player.name, "");
+                        Message msg(MSG_TYPE_ASTEROID_BONUS, player.name, "", player.id, 0);
                         space.emitMessage(msg);
                     }
 
@@ -459,7 +459,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 // OPTIONS: under earth gravity, optionally fall straight through
                 // platforms - skip all collision response for this platform so the
                 // player passes through instead of landing. (Toggle default: on.)
-                if (space.earthGravityPassThroughPlatforms && player.earthGravityEnabled) continue;
+                
                 // Only resolve when the player is moving down into the platform.
                 // This lets the player pass up through it from below, and -
                 // critically - stops the check from re-firing every frame while
@@ -471,9 +471,17 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // doesn't re-detect the overlap and cancel the response.
                     // player.position.y = platformTop + player.radius;
 
+                    if (space.earthGravityPassThroughPlatforms && player.earthGravityEnabled) {
+                        // Earth Grav is on so player passes through.  Play sound, no vel change.
+                        space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
+                        continue; // skip the rest of the collision response for this platform
+                    }
+                    
                     if (platform.isBouncy) {
+                        // player bounces off the platform.
                         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
                     } else {
+                        // platform is solid, no bounce.
                         player.velocity.y = 0.0f; // land and stop
                     }
                 } else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
@@ -580,15 +588,15 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                 // Messages: an elimination line for whoever died (killer -> victim),
                 // otherwise a plain collision line when both survive.
                 if (!playerA.isAlive) {
-                    Message msg(MSG_TYPE_ELIMINATION, playerB.name, playerA.name);
+                    Message msg(MSG_TYPE_ELIMINATION, playerB.name, playerA.name, playerB.id, playerA.id);
                     space.emitMessage(msg);
                 }
                 if (!playerB.isAlive) {
-                    Message msg(MSG_TYPE_ELIMINATION, playerA.name, playerB.name);
+                    Message msg(MSG_TYPE_ELIMINATION, playerA.name, playerB.name, playerA.id, playerB.id);
                     space.emitMessage(msg);
                 }
                 if (playerA.isAlive && playerB.isAlive) {
-                    Message msg(MSG_TYPE_PLAYER_COLLISION, playerA.name, playerB.name);
+                    Message msg(MSG_TYPE_PLAYER_COLLISION, playerA.name, playerB.name, playerA.id, playerB.id);
                     space.emitMessage(msg);
                 }
 
@@ -696,7 +704,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 
                 space.emitAudio(FX_ASTEROID_BONUS, explosion.position, explosion.owner ? explosion.owner->id : 0);
                 if (explosion.owner) {
-                    Message msg(MSG_TYPE_ASTEROID_BONUS, explosion.owner->name, "");
+                    Message msg(MSG_TYPE_ASTEROID_BONUS, explosion.owner->name, "", explosion.owner->id, 0);
                     space.emitMessage(msg);
                 }
                 // spawn debris from the destroyed asteroid and add it to the game space.  FUTURE.
@@ -718,10 +726,13 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             player.takeDamage(splashDamage);
             if (player.isAlive) {
                 space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
-                space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                if (explosion.owner != &player) {
+                    // don't play the sound if the player hit themself.
+                    space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                }
 
                 if (explosion.owner) {
-                    Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name);
+                    Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name, explosion.owner->id, player.id);
                     space.emitMessage(msg);
                 }
             }
@@ -730,7 +741,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
                 awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
                 space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.owner ? explosion.owner->id : 0);
                 if (explosion.owner) {
-                    Message msg(MSG_TYPE_ELIMINATION, explosion.owner->name, player.name);
+                    Message msg(MSG_TYPE_ELIMINATION, explosion.owner->name, player.name, explosion.owner->id, player.id);
                     space.emitMessage(msg);
                 }
                 // could add fuel/ammo/health awards for eliminating a player, if desired.

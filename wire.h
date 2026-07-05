@@ -57,6 +57,16 @@ struct ServerMessage {
     uint32_t tick     = 0;  // State/Welcome
     Phase    phase    = Phase::Unknown; // State only
     float    countdown = 0.0f; // State only: seconds left in the pre-match countdown (0 unless Countdown)
+
+    // Lobby options (match-wide config: match size, bot difficulty, gameplay
+    // toggles). The server echoes these in every state packet so a change by any
+    // client shows live on all - the client applies them to its OPTIONS modal.
+    // hasOptions is false unless the packet carried an "opt" object.
+    bool  hasOptions  = false;
+    int   optNPlayers = 0;      // match size
+    float optDiff     = 0.0f;   // bot difficulty
+    bool  optRexpl    = false;  // rockets detonate on boundary wall
+    bool  optEgpt     = false;  // fall through platforms under earth gravity
 };
 
 //MARK: Outbound - start request
@@ -74,6 +84,23 @@ inline std::string serializeName(const std::string& name) {
     nlohmann::json j = {
         {"type", "name"},
         {"name", name}
+    };
+    return j.dump();
+}
+
+// Live lobby-option change (match size, bot difficulty, gameplay toggles). Any
+// client may send it whenever a control in the OPTIONS modal changes; the server
+// stores it as the pending match config (WITHOUT starting) and echoes it back to
+// everyone in the next state packet, so all clients' OPTIONS modals stay in sync.
+// Map size isn't here - it's chosen at the START button press (serializeStart).
+inline std::string serializeOptions(int nplayers, float diff,
+                                    bool rocketsExplode, bool egPassThrough) {
+    nlohmann::json j = {
+        {"type", "options"},
+        {"nplayers", nplayers},
+        {"diff", diff},
+        {"rexpl", rocketsExplode},
+        {"egpt", egPassThrough}
     };
     return j.dump();
 }
@@ -181,6 +208,17 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                                      : ServerMessage::Phase::Unknown;
     msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
 
+    // Lobby options snapshot (match-wide). Present every state packet; the client
+    // applies these to its OPTIONS modal so any client's change shows live.
+    if (j.contains("opt")) {
+        const auto& o = j["opt"];
+        msg.hasOptions  = true;
+        msg.optNPlayers = o.value("nplayers", 0);
+        msg.optDiff     = o.value("diff", 0.0f);
+        msg.optRexpl    = o.value("rexpl", false);
+        msg.optEgpt     = o.value("egpt", false);
+    }
+
     // Players - a fixed, persistent set of slots; never erased (also Player
     // isn't move-assignable, so erase(remove_if) wouldn't compile).
     if (j.contains("players")) {
@@ -267,6 +305,20 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
             ev.owner = jo.value("own", 0u);
             ev.pos   = vec3(jo, "px", "py", "pz");
             gs.getAudioEvents().push_back(ev);
+        }
+    }
+
+    // Messages emitted by the server this tick (kill-feed / warnings). Rebuilt
+    // from type + names; generate()/visibility run client-side in main.cpp's
+    // draw. Appended (drained + cleared each frame like audio events).
+    if (j.contains("messages")) {
+        for (const auto& jo : j["messages"]) {
+            Message m((MessageType)jo.value("mt", 0),
+                      jo.value("pa", std::string()),
+                      jo.value("pb", std::string()),
+                      jo.value("pai", 0u),
+                      jo.value("pbi", 0u));
+            gs.getMessages().push_back(m);
         }
     }
 

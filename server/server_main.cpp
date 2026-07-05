@@ -392,6 +392,29 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     }
     s += "]";
 
+    // Messages (kill-feed / warnings). Only type + the two player names cross the
+    // wire; the client's Message::generate() rebuilds text/color/visibility.
+    s += ",\"messages\":[";
+    auto& msgs = gameSpace.getMessages();
+    for (int i = 0; i < (int)msgs.size(); i++) {
+        if (i > 0) s += ",";
+        s += "{\"mt\":" + ji((int)msgs[i].type);
+        s += ",\"pa\":" + js(msgs[i].playerA_Name);
+        s += ",\"pb\":" + js(msgs[i].playerB_Name);
+        s += ",\"pai\":" + ju(msgs[i].playerA_id);
+        s += ",\"pbi\":" + ju(msgs[i].playerB_id);
+        s += "}";
+    }
+    s += "]";
+
+    // Lobby options (match-wide config), echoed every tick so a change by any
+    // client shows live on every client's OPTIONS modal + roster preview.
+    s += ",\"opt\":{\"nplayers\":" + ji(pendingPlayers.load());
+    s += ",\"diff\":"   + jf(pendingDiff.load());
+    s += ",\"rexpl\":"  + jb(pendingRocketsExplode.load());
+    s += ",\"egpt\":"   + jb(pendingEgPassThrough.load());
+    s += "}";
+
     s += "}";
     return s;
 }
@@ -506,6 +529,21 @@ private:
                         it->second.name = parseString(msg, "name");
                         it->second.nameDirty = true;
                     }
+                    self->Read();
+                    return;
+                }
+
+                //MARK: Msg: options
+                // Control message: a client changing a lobby option (match size,
+                // bot difficulty, gameplay toggles). Options are match-wide, so we
+                // just update the pending config (no per-client state) WITHOUT
+                // starting a match; the next "start" uses these, and buildStatePacket
+                // echoes them every tick so every client's OPTIONS modal stays live.
+                if (msg.find("\"type\":\"options\"") != std::string::npos) {
+                    pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
+                    pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
+                    pendingRocketsExplode = parseBool(msg, "rexpl", pendingRocketsExplode.load());
+                    pendingEgPassThrough = parseBool(msg, "egpt", pendingEgPassThrough.load());
                     self->Read();
                     return;
                 }
@@ -677,6 +715,9 @@ void SimulationLoop() {
             // below during input apply + collisions, then BroadcastState() reads
             // and sends them after this lock releases.
             gameSpace.getAudioEvents().clear();
+            // Same for messages: drop last tick's already-broadcast kill-feed /
+            // warning messages so they don't re-send or accumulate.
+            gameSpace.getMessages().clear();
 
             //MARK: Name sync
             // Apply any pending display-name changes onto their player slots. Runs
