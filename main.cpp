@@ -247,6 +247,14 @@ int main(int argc, char** argv) {
     // the GameSpace at match start - locally in startGame, remotely via serializeStart.
     bool  optRocketsExplodeOnWalls         = WALLS_STOP_ROCKETS;                    // ON => rockets detonate on the boundary wall
     bool  optPassThroughPlatformsEarthGrav = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // ON => fall through platforms under earth gravity
+    // Networked options sync (lobby): the server echoes the match-wide options in
+    // every state packet so any client's change shows live. The two sliders are
+    // guarded from server echoes while being dragged (their active latches); the
+    // toggles have no such latch, so we remember the value we last sent and only
+    // accept a server toggle that differs from it - that keeps our own click from
+    // being flipped back before the server's echo of it arrives.
+    bool  optSentRexpl = optRocketsExplodeOnWalls;
+    bool  optSentEgpt  = optPassThroughPlatformsEarthGrav;
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -337,7 +345,20 @@ int main(int argc, char** argv) {
                 // the default so two un-named humans stay distinct.
                 if (!namePristine) net.send(serializeName(playerName));
             }
-            else if (m.type == ServerMessage::Type::State) { phase = m.phase; netCountdown = m.countdown; }
+            else if (m.type == ServerMessage::Type::State) {
+                phase = m.phase; netCountdown = m.countdown;
+                // Apply the server's live options to our OPTIONS modal. Don't
+                // stomp a control the local user is actively driving: skip a
+                // slider while it's being dragged, and for the toggles only take
+                // a server value that differs from the one we last sent (so our
+                // own click isn't flipped back before its echo returns).
+                if (m.hasOptions) {
+                    if (!sliderPlayersActive) optNumPlayers    = (float)m.optNPlayers;
+                    if (!sliderDiffActive)    optBotDifficulty = m.optDiff;
+                    if (m.optRexpl != optSentRexpl) { optRocketsExplodeOnWalls = m.optRexpl; optSentRexpl = m.optRexpl; }
+                    if (m.optEgpt  != optSentEgpt)  { optPassThroughPlatformsEarthGrav = m.optEgpt; optSentEgpt = m.optEgpt; }
+                }
+            }
         }
         return phase;
     };
@@ -527,31 +548,45 @@ int main(int argc, char** argv) {
                         DrawText(v, (int)(m.x + m.width - 40 - vw), y, 18, ui::OUTLINE);
                     };
 
+                    // Each control returns true the frame it changes; in networked
+                    // play we push the new option set to the server so every client's
+                    // modal updates live (mirrors the name-field sync above).
+                    bool optChanged = false;
+
                     // NUMBER OF PLAYERS (integer, 1..GAMESPACE_NUMBER_OF_PLAYERS).
                     int y1 = (int)m.y + 80;
                     DrawText("NUMBER OF PLAYERS", (int)lx, y1, 18, RAYWHITE);
                     valueRight(TextFormat("%d", (int)optNumPlayers), y1);
-                    UiSlider({lx, (float)(y1 + 26), sw, 22}, optNumPlayers,
+                    if (UiSlider({lx, (float)(y1 + 26), sw, 22}, optNumPlayers,
                              1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
-                             sliderPlayersActive, 1.0f);
+                             sliderPlayersActive, 1.0f)) optChanged = true;
 
                     // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
                     int y2 = y1 + 90;
                     DrawText("BOT DIFFICULTY", (int)lx, y2, 18, RAYWHITE);
                     valueRight(TextFormat("%.2f", optBotDifficulty), y2);
-                    UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
-                             0.0f, BOT_DIFFICULTY, sliderDiffActive);
+                    if (UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
+                             0.0f, BOT_DIFFICULTY, sliderDiffActive)) optChanged = true;
 
                     // Toggles: label on its own line, a compact ON/OFF control below
                     // (labels are long, so keep them off the control's line). Both
                     // default to their constants.h value; applied at match start.
                     int y3 = y2 + 90;
                     DrawText("ROCKETS EXPLODE ON BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
-                    UiToggle({lx, (float)(y3 + 26), 100, 24}, optRocketsExplodeOnWalls);
+                    if (UiToggle({lx, (float)(y3 + 26), 100, 24}, optRocketsExplodeOnWalls)) {
+                        optChanged = true; optSentRexpl = optRocketsExplodeOnWalls;
+                    }
 
                     int y4 = y3 + 90;
                     DrawText("PASS THROUGH PLATFORMS UNDER EARTH GRAVITY", (int)lx, y4, 18, RAYWHITE);
-                    UiToggle({lx, (float)(y4 + 26), 100, 24}, optPassThroughPlatformsEarthGrav);
+                    if (UiToggle({lx, (float)(y4 + 26), 100, 24}, optPassThroughPlatformsEarthGrav)) {
+                        optChanged = true; optSentEgpt = optPassThroughPlatformsEarthGrav;
+                    }
+
+                    // Push the change to the server (it re-broadcasts to all clients).
+                    if (optChanged && networked && net.isOpen())
+                        net.send(serializeOptions((int)optNumPlayers, optBotDifficulty,
+                                                  optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav));
 
                     if (UiModalClose(m, optionsWasOpen)) showOptions = false;
                 }
