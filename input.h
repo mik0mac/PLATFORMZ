@@ -61,6 +61,61 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     player.updateVelocity(dt, in.moveAxis, gravity);
     player.updateFuel(dt, player.isUsingJetpack);
 
+    // "Empty tank" cue: holding jetpack with no usable fuel (updateVelocity gates
+    // thrust on canJetpack()). Mirrors the FX_NO_AMMO cue for firing on empty;
+    // throttled by NO_FUEL_SFX_INTERVAL (noFuelSfxCooldown ticks down in
+    // updatePos) so a held Space doesn't machine-gun the sound every frame.
+    if (in.jetpack && !player.canJetpack() && player.noFuelSfxCooldown <= 0.0f) {
+        gameSpace.emitAudio(FX_NO_FUEL, player.position, player.id);
+        player.noFuelSfxCooldown = NO_FUEL_SFX_INTERVAL;
+    }
+
+    // Low-resource alarm: any of health/fuel/ammo at or below its warning
+    // threshold pulses one shared cue (FX_WARNING), throttled by
+    // WARNING_SFX_INTERVAL so a sustained low state beeps rather than spamming
+    // every frame. Guarded on isAlive since death zeroes these resources.
+    if (player.isAlive) {
+        bool lowResource = player.health <= WARN_HEALTH_THRESHOLD ||
+                           player.fuel   <= WARN_FUEL_THRESHOLD   ||
+                           player.ammo   <= WARN_AMMO_THRESHOLD;
+        if (lowResource && player.warningSfxCooldown <= 0.0f) {
+            gameSpace.emitAudio(FX_WARNING, player.position, player.id);
+            player.warningSfxCooldown = WARNING_SFX_INTERVAL;
+        }
+
+        // Low-resource MESSAGES: fire once on the edge into a low state, re-armed
+        // when the resource recovers. Unlike the throttled FX_WARNING beep, a
+        // repeating identical kill-feed line would just stack, so these are
+        // one-shot per dip. Visible only to the affected player.
+        bool lowHealth = player.health <= WARN_HEALTH_THRESHOLD;
+        bool lowFuel   = player.fuel   <= WARN_FUEL_THRESHOLD;
+        bool lowAmmo   = player.ammo   <= WARN_AMMO_THRESHOLD;
+        if (lowHealth && !player.lowHealthWarned) {
+            Message m(MSG_TYPE_LOW_HEALTH, player.name, "");
+            gameSpace.emitMessage(m);
+        }
+        if (lowFuel && !player.lowFuelWarned) {
+            Message m(MSG_TYPE_LOW_FUEL, player.name, "");
+            gameSpace.emitMessage(m);
+        }
+        if (lowAmmo && !player.lowAmmoWarned) {
+            Message m(MSG_TYPE_LOW_AMMO, player.name, "");
+            gameSpace.emitMessage(m);
+        }
+        player.lowHealthWarned = lowHealth;
+        player.lowFuelWarned   = lowFuel;
+        player.lowAmmoWarned   = lowAmmo;
+    }
+
+    // "Earth gravity engaged" cue: fire once on the rising edge of the gravity
+    // key, not every frame it's held. The cooldown guards against rapid tap
+    // re-triggers; earthGravWasEngaged tracks the previous frame's state.
+    if (in.earthGravity && !player.earthGravWasEngaged && player.earthGravSfxCooldown <= 0.0f) {
+        gameSpace.emitAudio(FX_ENGAGE_EARTH_GRAVITY, player.position, player.id);
+        player.earthGravSfxCooldown = EARTH_GRAV_SFX_INTERVAL;
+    }
+    player.earthGravWasEngaged = in.earthGravity;
+
     // IsMouseButtonPressed already fires once per click, so this stays
     // naturally single-shot - no cooldown needed.
     if (in.fire) {

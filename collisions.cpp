@@ -1,6 +1,7 @@
 #include <vector>
 #include <algorithm>
 #include "collisions.h"
+#include "messages.h"
 
 
 //MARK: CollisionGrid::Rebuild
@@ -344,9 +345,17 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                 if (SphereIntersectsSphere(asteroid.position, asteroid.size, player.position, player.radius)) {
                     // damage and audio FX.
                     player.takeDamage(asteroid.damage);
-                    if (player.isAlive) space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
+                    if (player.isAlive) {
+                        space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
+                        Message msg(MSG_TYPE_ASTEROID_COLLISION, player.name, "");
+                        space.emitMessage(msg);
+                    }
                     asteroid.takeDamage(player.damage);
-                    if (asteroid.isDestroyed) space.emitAudio(FX_ASTEROID_BONUS, player.position, player.id);
+                    if (asteroid.isDestroyed) {
+                        space.emitAudio(FX_ASTEROID_BONUS, player.position, player.id);
+                        Message msg(MSG_TYPE_ASTEROID_BONUS, player.name, "");
+                        space.emitMessage(msg);
+                    }
 
                     // velocity bounce: asteroid bounces off the player, player bounces off the asteroid.
                     // The objects need to be pushed clear of each other so they don't re-collide next frame.
@@ -568,6 +577,21 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                 space.emitAudio(playerAsound, playerA.position, playerA.id);
                 space.emitAudio(playerBsound, playerB.position, playerB.id);
 
+                // Messages: an elimination line for whoever died (killer -> victim),
+                // otherwise a plain collision line when both survive.
+                if (!playerA.isAlive) {
+                    Message msg(MSG_TYPE_ELIMINATION, playerB.name, playerA.name);
+                    space.emitMessage(msg);
+                }
+                if (!playerB.isAlive) {
+                    Message msg(MSG_TYPE_ELIMINATION, playerA.name, playerB.name);
+                    space.emitMessage(msg);
+                }
+                if (playerA.isAlive && playerB.isAlive) {
+                    Message msg(MSG_TYPE_PLAYER_COLLISION, playerA.name, playerB.name);
+                    space.emitMessage(msg);
+                }
+
                 // Separate the two so they don't stay overlapped and re-damage
                 // every frame (mirrors the asteroid-vs-player response). Push
                 // each clear by half the overlap along the contact normal, then
@@ -671,6 +695,10 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
                 awardHealth(explosion.owner, asteroid.healthAward); // award health to the player who caused the explosion.
 
                 space.emitAudio(FX_ASTEROID_BONUS, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                if (explosion.owner) {
+                    Message msg(MSG_TYPE_ASTEROID_BONUS, explosion.owner->name, "");
+                    space.emitMessage(msg);
+                }
                 // spawn debris from the destroyed asteroid and add it to the game space.  FUTURE.
                 // DebrisEffect debris = spawnDebris(asteroid.position, asteroid.velocity); // spawn debris from the destroyed asteroid
                 // debrisEffects.push_back(debris); // add the debris to the game space
@@ -691,12 +719,20 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             if (player.isAlive) {
                 space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
                 space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+
+                if (explosion.owner) {
+                    Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name);
+                    space.emitMessage(msg);
+                }
             }
             // check if player has been eliminated.
             if (!player.isAlive) {
                 awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
                 space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.owner ? explosion.owner->id : 0);
-                // could later add a "player eliminated" event here for UI feedback, etc.
+                if (explosion.owner) {
+                    Message msg(MSG_TYPE_ELIMINATION, explosion.owner->name, player.name);
+                    space.emitMessage(msg);
+                }
                 // could add fuel/ammo/health awards for eliminating a player, if desired.
             }
 

@@ -13,6 +13,7 @@
 #include "wire.h"       // multiplayer: input serialize / state apply
 #include "bot_logic.h"   // bot AI decision tree
 #include "bot_controller.h" // shared bot orchestration (tree + per-slot state + drive)
+#include "messages.h"    // transient on-screen message queue (kill-feed HUD)
 
 #include <string>
 #include <unordered_map>
@@ -86,7 +87,9 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/move_through_platform.wav", 1.0f, false, true), // FX_PLATFORM_PASSTHROUGH (all players, spatial)
         audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false), // FX_MESSAGE_RECEIVED (local player only, not spatial)
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false), // FX_PLAYER_ELIMINATION_SCORE (local player only, not spatial)
-        audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false) // FX_PLAYER_LOCAL_DAMAGE (local player only, not spatial)
+        audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false), // FX_PLAYER_LOCAL_DAMAGE (local player only, not spatial)
+        audioFX("assets/sounds/warning.wav",             0.6f, true, false), // FX_WARNING (local player only, not spatial)
+        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false)  // FX_ENGAGE_EARTH_GRAVITY (local player only, not spatial)
     };
     for (audioFX& fx : fxTable) fx.load();
 
@@ -147,6 +150,8 @@ int main(int argc, char** argv) {
 
     AudioQueue audioQueue; // queue of sound events to play after all state updates.
 
+    MessageQueue messageQueue; // queue of messages to display after all state updates.
+
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
@@ -197,6 +202,10 @@ int main(int argc, char** argv) {
     // can drive them; cast where an int is needed. Defaults match the constants.
     float optNumPlayers    = (float)GAMESPACE_NUMBER_OF_PLAYERS; // 1..GAMESPACE_NUMBER_OF_PLAYERS
     float optBotDifficulty = BOT_DIFFICULTY;                     // 0.0..BOT_DIFFICULTY
+    // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
+    // Seeded now so the first title screen is already randomized; re-rolled on
+    // every return to the title screen so each match gets a fresh set of names.
+    std::vector<int> botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
     bool  sliderPlayersActive = false; // drag latch for the players slider
     bool  sliderDiffActive    = false; // drag latch for the difficulty slider
     // OPTIONS toggles (bool gameplay rules; defaults from constants.h). Applied to
@@ -239,8 +248,9 @@ int main(int argc, char** argv) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
             ps[i].color_fill    = BOT_FILL_COLOR;
-            // Same NATO label the title-screen lobby shows for this bot slot.
-            ps[i].name = BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT];
+            // This slot's shuffled name pick — same order the title-screen lobby
+            // previews, so the roster shown before START matches the one in-game.
+            ps[i].name = BOT_NAME_STRINGS[botNameOrder[(i - 1) % BOT_NAME_COUNT]];
         }
         // Size per-slot bot state and seed personalities (deterministic from each
         // slot's id, so the same map replays the same bots).
@@ -288,6 +298,7 @@ int main(int argc, char** argv) {
     // server owns the world and resyncs it. The NetClient dtor closes on exit.
     auto returnToTitle = [&]() {
         if (!networked) gameSpace.clear();
+        botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
         EnableCursor(); // free the cursor for the title menu
         showControls = false; showOptions = false; // no stale modal flag leaking back onto the lobby
         nameFocused = true; // re-focus the name field so the player can type without a click
@@ -398,7 +409,7 @@ int main(int argc, char** argv) {
                             DrawText(TextFormat("1. %s (YOU)", playerName.empty() ? "PLAYER" : playerName.c_str()),
                                      (int)playersBox.x + 10, ry, 18, RAYWHITE);
                         else
-                            DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[(i - 1) % BOT_NAME_COUNT]),
+                            DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[botNameOrder[(i - 1) % BOT_NAME_COUNT]]),
                                      (int)playersBox.x + 10, ry, 18, ui::OUTLINE);
                     }
                 }
@@ -729,11 +740,22 @@ int main(int argc, char** argv) {
         if (localPlayer != nullptr)
             audioQueue.flush(localPlayer ? *localPlayer : gameSpace.getPlayers()[0]);
 
+        // MARK: MESSAGE CUE DRAIN
+        // messages from the gameSpace are pushed into the local player queue.
+        for (Message& msg : gameSpace.getMessages()) {
+            messageQueue.push(msg);
+        }
+        // messages removed from gameSpace.
+        gameSpace.getMessages().clear();
+
+
+        // MARK: ESCAPE KEY / CURSOR TOGGLE
         if (IsKeyPressed(KEY_ESCAPE)) {
             // toggle cursor capture so you can alt-tab / quit comfortably
             if (IsCursorHidden()) EnableCursor(); else DisableCursor();
         }
 
+        // MARK: DRAW
         // Networked mode before the server's welcome/first state arrives: there's
         // no local player yet, so show a connecting screen and skip the world draw.
         if (localPlayer == nullptr) {
@@ -750,7 +772,6 @@ int main(int argc, char** argv) {
         // From here the local player exists; alias it so the draw code below is
         // identical for both modes (local mode set localPlayer = players[0]).
         Player& player = *localPlayer;
-//MARK:DRAW
         // 3. DRAW
         // Two passes: first render the 3D world into sceneTarget (capture),
         // then composite that texture to the screen - cleanly, or scrambled
@@ -821,7 +842,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (!player.isAlive && grayscaleOK) EndShaderMode();
-// MARK: HUD
+            // MARK: HUD
             // text size, x, y, color.
             // draw onscreen text HUD. (Death transitions to the GAME_OVER screen
             // below, which owns all death text, so the dead frame renders only its
@@ -836,6 +857,22 @@ int main(int argc, char** argv) {
                     DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
                 }
             }
+
+            // MARK: Message Queue Draw
+            int msg_index = 0;
+            for (Message& msg : messageQueue.getMessages()) {
+                
+                std::string pa;
+                std::string pb;
+                // replace the local player's name with "YOU" for clarity in the message queue.
+                if (msg.playerA_Name == localPlayer->name) pa = "YOU"; else pa = msg.playerA_Name;
+                if (msg.playerB_Name == localPlayer->name) pb = "YOU"; else pb = msg.playerB_Name;
+                msg.generate(pa, pb);
+                bool visible = msg.visible(localPlayer->name);
+                if (!visible) messageQueue.remove(msg_index); else msg_index++;
+            }
+            messageQueue.draw(screenWidth, screenHeight);
+            messageQueue.update(dt);
 
 
         EndDrawing();
