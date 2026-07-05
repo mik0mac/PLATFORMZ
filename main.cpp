@@ -981,6 +981,7 @@ int main(int argc, char** argv) {
                 // un-named "PLAYER"s), ids are authoritative.
                 if (msg.playerA_id == localPlayer->id) pa = "YOU"; else pa = msg.playerA_Name;
                 if (msg.playerB_id == localPlayer->id) pb = "YOU"; else pb = msg.playerB_Name;
+                if (pa == pb) pb = "YOURSELF"; // self-elimination (rocket hit own body) is possible
                 msg.generate(pa, pb);
                 bool visible = msg.visible(localPlayer->id);
                 if (!visible) messageQueue.remove(msg_index); else msg_index++;
