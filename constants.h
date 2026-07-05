@@ -68,6 +68,7 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
+const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.
 
 //MARK: Wall Constants
 const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
