@@ -471,11 +471,15 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // doesn't re-detect the overlap and cancel the response.
                     // player.position.y = platformTop + player.radius;
 
-                    if (platform.isBouncy) {
-                        player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
-                    } else if (space.earthGravityPassThroughPlatforms && player.earthGravityEnabled) {
+                    if (space.earthGravityPassThroughPlatforms && player.earthGravityEnabled) {
                         // Earth Grav is on so player passes through.  Play sound, no vel change.
                         space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
+                        continue; // skip the rest of the collision response for this platform
+                    }
+                    
+                    if (platform.isBouncy) {
+                        // player bounces off the platform.
+                        player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
                     } else {
                         // platform is solid, no bounce.
                         player.velocity.y = 0.0f; // land and stop
@@ -722,7 +726,10 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             player.takeDamage(splashDamage);
             if (player.isAlive) {
                 space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
-                space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                if (explosion.owner != &player) {
+                    // don't play the sound if the player hit themself.
+                    space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                }
 
                 if (explosion.owner) {
                     Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name, explosion.owner->id, player.id);
