@@ -15,6 +15,7 @@
 #endif
 #include "random.h"
 #include "constants.h"
+#include "messages.h"
 
 
 //MARK: NetAudioEvent
@@ -27,6 +28,12 @@ struct NetAudioEvent {
     Vector3  pos;
     uint32_t owner;
 };
+
+// struct NetMessageEvent {
+//     MessageType msgType;
+//     std::string playerA_Name;
+//     std::string playerB_Name;
+// };
 
 //MARK: GameSpace
 class GameSpace {
@@ -407,13 +414,19 @@ public:
     std::vector<Explosion>& getExplosions() { return explosions; }
     std::vector<Spark>& getSparks() { return sparks; }
     std::vector<NetAudioEvent>& getAudioEvents() { return audioEvents; }
+    std::vector<Message>& getMessages() { return messages; }
 
+    // MARK: Audio/Message Events
     // Queue a sound event at the source of some game action. Filled by the sim
     // (server, or local host); the server serializes these in the state packet
     // and clears them each tick, the local host drains them straight into the
     // client's AudioQueue. owner = the attributed player's id (0 = world/none).
     void emitAudio(int fx, Vector3 at, uint32_t owner = 0) {
         audioEvents.push_back({fx, at, owner});
+    }
+
+    void emitMessage(Message msg) {
+        messages.push_back(msg);
     }
 
 private:
@@ -485,4 +498,5 @@ private:
     std::vector<Explosion> explosions;
     std::vector<Spark> sparks; // VFX particles (jetpack exhaust, asteroid bursts); visual only.
     std::vector<NetAudioEvent> audioEvents; // sound events this tick; serialized + cleared by the server, drained by the client.
+    std::vector<Message> messages;
 };

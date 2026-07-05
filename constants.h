@@ -21,12 +21,26 @@ enum AudioFXId {
     FX_MESSAGE_RECEIVED,
     FX_PLAYER_ELIMINATION_SCORE,
     FX_PLAYER_LOCAL_DAMAGE,
+    FX_WARNING,
+    FX_ENGAGE_EARTH_GRAVITY,
     FX_COUNT
 };
 
-
 const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  The distance at which the sound is the softest.
 const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
+
+//MARK: Message events
+enum MessageType {
+    MSG_TYPE_LOW_FUEL,
+    MSG_TYPE_LOW_AMMO,
+    MSG_TYPE_LOW_HEALTH,
+    MSG_TYPE_EXPLOSION_HIT,
+    MSG_TYPE_PLAYER_COLLISION,
+    MSG_TYPE_ASTEROID_COLLISION,
+    MSG_TYPE_ELIMINATION,
+    MSG_TYPE_ASTEROID_BONUS,
+    COUNT
+};
 
 //MARK: Physics Constants
 const float MOON_GRAVITY = 3.25f; //1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
@@ -120,6 +134,15 @@ const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec.
 const float FUEL_REGEN_RATE = 0.5f; // Per sec.
+const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
+const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
+
+// Low-resource warning cue (FX_WARNING): alarm pulses while any of these is at/below threshold.
+const int   WARN_HEALTH_THRESHOLD   = 25;    // health at/below this pulses the warning alarm
+const float WARN_FUEL_THRESHOLD     = 20.0f; // fuel at/below this pulses the warning alarm
+const int   WARN_AMMO_THRESHOLD     = 10;    // ammo at/below this pulses the warning alarm
+const float WARNING_SFX_INTERVAL    = 1.5f;  // min seconds between warning pulses while a resource stays low
+const float EARTH_GRAV_SFX_INTERVAL = 0.5f;  // min seconds between earth-gravity engage cues (guards rapid taps)
 const float PLAYER_FIRE_RATE = 3.0f; // shots per second.
 
 const int PLAYER_ELIMINATION_SCORE_AWARD = 100; // Points awarded to player for eliminating another player
@@ -157,9 +180,7 @@ const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bot
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
 const char* const BOT_NAME_STRINGS[] = {
-    "BOTlet","BOTtholomew","RoyBOT Overlord","DELTA","ECHO","FOXTROT","GOLF","HOTEL","INDIA",
-    "JULIETT","KILO","LIMA","MIKE","NOVEMBER","OSCAR","PAPA","QUEBEC","ROMEO",
-    "SIERRA","TANGO","UNIFORM","VICTOR","WHISKEY","XRAY","YANKEE","ZULU"
+    "RoyBOT OVERLORD","Jeff","BOTtholomew","Geoff","Qeff","Djeff","Jeffrey","Jefferson","Jeffery","Geoffrey","Geofferson","Geff","Jef","Jeferson","Jefrey","Jeferson","Jefri","Jefrierson","Jefriani","Jefrianius","Jefrianius Maximus"
 };
 const int BOT_NAME_COUNT = sizeof(BOT_NAME_STRINGS) / sizeof(BOT_NAME_STRINGS[0]);
 

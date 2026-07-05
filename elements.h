@@ -238,7 +238,7 @@ public:
         // instant override would erase a wall-bounce's reflected velocity.y
         // on the very next frame if jetpack input is still held. Accelerating
         // instead means a bounce gets a moment to actually take effect.
-        if (isUsingJetpack && fuel > 0.1f) { // must compare against a small threshold.
+        if (isUsingJetpack && canJetpack()) {
             float targetVerticalSpeed = speedJetpack;
             float verticalChange = targetVerticalSpeed - velocity.y;
             float maxStep = accelerationJetpack * dt;
@@ -261,6 +261,9 @@ public:
         //MARK: Update Timers
         if (flashTimer > 0.0f) flashTimer -= dt;
         if (coolDownTime > 0.0f) coolDownTime -= dt;
+        if (noFuelSfxCooldown > 0.0f) noFuelSfxCooldown -= dt;
+        if (warningSfxCooldown > 0.0f) warningSfxCooldown -= dt;
+        if (earthGravSfxCooldown > 0.0f) earthGravSfxCooldown -= dt;
     }
 
     // MARK: Player Size and Collision
@@ -298,12 +301,22 @@ public:
     int maxAmmo = PLAYER_MAX_AMMO; // Player's maximum ammo, can be increased by pickups
     float fireRate = PLAYER_FIRE_RATE; // Shots per second, can be increased by pickups
     float coolDownTime = 0.0f; // Time remaining until the player can shoot again, based on fire rate
+    float noFuelSfxCooldown = 0.0f; // Throttle for the "empty tank" cue while jetpack is held on empty (ticked in updatePos)
+    float warningSfxCooldown = 0.0f; // Throttle for the low-resource warning alarm (ticked in updatePos)
+    float earthGravSfxCooldown = 0.0f; // Guard against rapid re-triggers of the earth-gravity engage cue (ticked in updatePos)
+    bool  earthGravWasEngaged = false; // Prev-frame earth-gravity state, for rising-edge detection of the engage cue
+    bool  lowHealthWarned = false; // Was-low latch so the low-health message fires once per dip, not every frame (re-armed on recovery)
+    bool  lowFuelWarned = false;   // Was-low latch for the low-fuel message
+    bool  lowAmmoWarned = false;   // Was-low latch for the low-ammo message
     // bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
     float fuel = PLAYER_STARTING_FUEL; // Player starts with this much fuel, can be increased by pickups
     float maxFuel = PLAYER_MAX_FUEL; // Player's maximum fuel, can be increased by pickups
     // float fuelConsumptionRate = FUEL_CONSUMPTION_RATE; // Per sec.
     // float fuelRegenRate = FUEL_REGEN_RATE; // Per sec.  Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
+    // Enough fuel for the jetpack to produce thrust (updateVelocity's gate).
+    // Below JETPACK_MIN_FUEL the tank reads empty even though hasFuel() may be true.
+    bool canJetpack() const { return fuel > JETPACK_MIN_FUEL; }
 
     bool shoot() {
         bool shotFired = false;
