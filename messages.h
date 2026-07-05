@@ -222,37 +222,10 @@ public:
         clearExpiredMessages();
     }
 
-    // MARK: Draw
-    // Kill-feed HUD: draw the live messages centered at the bottom of the
-    // window, newest lowest, older ones stacked upward; each fades out over its
-    // final fadeTime seconds. 2D HUD call - run it in the screen pass (after
-    // EndMode3D), alongside the rest of the HUD in main.cpp. Draws nothing when
-    // the queue is empty.
-    void draw(int screenW, int screenH) const {
-        const int   fontSize  = 20;
-        const int   lineStep  = fontSize + 8;
-        const int   bottomPad = 40;    // gap above the window's bottom edge
-        const float fadeTime  = 2.5f;  // seconds of fade at the tail of timeRemaining
-        const int   outline   = 1;     // dark outline thickness in px
-
-        int y = screenH - bottomPad;   // newest sits lowest; older stack upward
-        for (auto it = queue.rbegin(); it != queue.rend(); ++it) {
-            const Message& msg = *it;
-            float a = (msg.timeRemaining < fadeTime) ? msg.timeRemaining / fadeTime : 1.0f;
-            if (a < 0.0f) a = 0.0f;
-            const char* t = msg.text.c_str();
-            int x = (screenW - MeasureText(t, fontSize)) / 2;
-            // Dark outline behind the text so it stays legible over the 3D scene;
-            // fades with the fill via the same alpha. 8 offsets = full surround,
-            // not a one-sided drop shadow (reads better over arbitrary backgrounds).
-            Color shadow = Fade(BLACK, a);
-            for (int dx = -outline; dx <= outline; dx += outline)
-                for (int dy = -outline; dy <= outline; dy += outline)
-                    if (dx || dy) DrawText(t, x + dx, y + dy, fontSize, shadow);
-            DrawText(t, x, y, fontSize, Fade(msg.color, a));
-            y -= lineStep;
-        }
-    }
+    // Rendering (the kill-feed HUD) lives in main.cpp as DrawMessageQueue(), not
+    // here: this header is compiled into the headless server (via gamespace.h),
+    // which has no raylib draw primitives. Keeping draw code out means no
+    // PLATFORMZ_SERVER guard is needed. Iterate via getMessages() above.
 
 private:
     std::vector<Message> queue;

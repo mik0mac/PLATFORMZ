@@ -28,6 +28,39 @@ EM_JS(void, PlatformzSetModalOpen, (int open), { if (window.Module) Module.modal
 inline void PlatformzSetModalOpen(int) {} // no-op on native builds
 #endif
 
+// Kill-feed HUD: draw the live messages centered at the bottom of the window,
+// newest lowest, older ones stacked upward; each fades out over its final fadeTime
+// seconds. 2D HUD call - run it in the screen pass (after EndMode3D), alongside the
+// rest of the HUD. Draws nothing when the queue is empty. Lives here (the rendering
+// TU) rather than on MessageQueue so messages.h stays free of raylib draw primitives
+// and compiles into the headless server build.
+static void DrawMessageQueue(MessageQueue& mq, int screenW, int screenH) {
+    const int   fontSize  = 20;
+    const int   lineStep  = fontSize + 8;
+    const int   bottomPad = 40;    // gap above the window's bottom edge
+    const float fadeTime  = 2.5f;  // seconds of fade at the tail of timeRemaining
+    const int   outline   = 1;     // dark outline thickness in px
+
+    std::vector<Message>& msgs = mq.getMessages();
+    int y = screenH - bottomPad;   // newest sits lowest; older stack upward
+    for (auto it = msgs.rbegin(); it != msgs.rend(); ++it) {
+        const Message& msg = *it;
+        float a = (msg.timeRemaining < fadeTime) ? msg.timeRemaining / fadeTime : 1.0f;
+        if (a < 0.0f) a = 0.0f;
+        const char* t = msg.text.c_str();
+        int x = (screenW - MeasureText(t, fontSize)) / 2;
+        // Dark outline behind the text so it stays legible over the 3D scene;
+        // fades with the fill via the same alpha. 8 offsets = full surround,
+        // not a one-sided drop shadow (reads better over arbitrary backgrounds).
+        Color shadow = Fade(BLACK, a);
+        for (int dx = -outline; dx <= outline; dx += outline)
+            for (int dy = -outline; dy <= outline; dy += outline)
+                if (dx || dy) DrawText(t, x + dx, y + dy, fontSize, shadow);
+        DrawText(t, x, y, fontSize, Fade(msg.color, a));
+        y -= lineStep;
+    }
+}
+
 
 // PLATFORMZ runs in one of two modes:
 //   ./platformz                      -> local single-player (host the sim here)
@@ -185,9 +218,11 @@ int main(int argc, char** argv) {
     // original game body (update -> draw). Play is gated by TITLE and ends back
     // there via GAME_OVER, so the world is set up on each PLAYING entry (not
     // before the loop) and torn down on the way back to the title.
-    enum class GameScreen { TITLE, PLAYING, GAME_OVER };
+    enum class GameScreen { TITLE, COUNTDOWN, PLAYING, GAME_OVER };
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
+    float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
+    float netCountdown       = 0.0f; // networked: latest countdown-seconds-left the server sent (drives the same screen)
     bool  netMatchOver  = false; // networked: latched once the server reports the match ended, so the gameOverTimer countdown survives packet-less frames
 
     // Title-screen menu state (widgets live in ui.h). The name is local-only for
@@ -256,10 +291,11 @@ int main(int argc, char** argv) {
         // slot's id, so the same map replays the same bots).
         botController.init(ps, optBotDifficulty);
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
-        DisableCursor(); // capture the mouse for free-look while playing
-        consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
-        consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
-        screen = GameScreen::PLAYING;
+        // World is built but stays frozen: enter the pre-match countdown instead of
+        // PLAYING. The COUNTDOWN block below ticks the timer and flips to PLAYING at
+        // zero (capturing the cursor then). Cursor stays free during the count.
+        countdownRemaining = COUNTDOWN_SECONDS;
+        screen = GameScreen::COUNTDOWN;
     };
 
     // Networked: the server's phase just went PLAYING (we started, a peer started,
@@ -288,7 +324,7 @@ int main(int argc, char** argv) {
                 myIndex = m.playerId;
                 net.send(serializeName(playerName)); // attach our display name to the slot
             }
-            else if (m.type == ServerMessage::Type::State) phase = m.phase;
+            else if (m.type == ServerMessage::Type::State) { phase = m.phase; netCountdown = m.countdown; }
         }
         return phase;
     };
@@ -336,10 +372,14 @@ int main(int argc, char** argv) {
         if (screen == GameScreen::TITLE) {
             // Networked: the title screen is the lobby - pump the server so the
             // player list stays live and we follow the server into a match (we
-            // started it, a peer did, or we joined one already running).
-            if (networked && pumpNet() == ServerMessage::Phase::Playing) {
-                enterNetworkedMatch();
-                continue;
+            // started it, a peer did, or we joined one already running). The server
+            // opens a match with the shared pre-match countdown; follow it there so
+            // every client counts down together. If we joined mid-match we skip
+            // straight to PLAYING.
+            if (networked) {
+                ServerMessage::Phase p = pumpNet();
+                if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+                if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
             // Esc closes an open popup (no cursor toggle on the menu).
             if (showControls && IsKeyPressed(KEY_ESCAPE)) showControls = false;
@@ -505,13 +545,67 @@ int main(int argc, char** argv) {
             EndDrawing();
             continue;
         }
+        // MARK: COUNTDOWN SCREEN
+        // Pre-match "GAME STARTING IN..." hold. The world is already built but
+        // frozen (this block continues before the PLAYING sim body). Local mode
+        // owns the timer; networked mode follows the server's countdown so every
+        // client counts down together and enters on the same tick.
+        if (screen == GameScreen::COUNTDOWN) {
+            float remaining;
+            if (networked) {
+                ServerMessage::Phase p = pumpNet();
+                if (p == ServerMessage::Phase::Playing) { enterNetworkedMatch(); continue; }
+                // Match ended/canceled before it began -> back to the lobby.
+                if (p == ServerMessage::Phase::Lobby || p == ServerMessage::Phase::GameOver) { returnToTitle(); continue; }
+                remaining = netCountdown;
+            } else {
+                countdownRemaining -= dt;
+                if (countdownRemaining <= 0.0f) { // count reached zero: unfreeze into the match
+                    DisableCursor(); // capture the mouse for free-look while playing
+                    consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
+                    consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
+                    screen = GameScreen::PLAYING;
+                    continue;
+                }
+                remaining = countdownRemaining;
+            }
+
+            // Helper lines fade in one after another across the count. elapsed is the
+            // same 0..COUNTDOWN_SECONDS ramp whether driven by the local or server
+            // clock, so the staggered reveal is identical in both modes.
+            float elapsed = COUNTDOWN_SECONDS - remaining;
+            struct { const char* text; float start; } infoLines[] = {
+                { "Eliminate other players to win.",                      0.0f },
+                { "Destroy asteroids to replenish ammo, fuel, and health.", COUNTDOWN_SECONDS * 0.34f },
+                { "Good luck!",                                          COUNTDOWN_SECONDS * 0.68f },
+            };
+            int countNum = (int)ceilf(remaining);
+            if (countNum < 1) countNum = 1; // never flash "0" before the flip to PLAYING
+
+            BeginDrawing();
+                ClearBackground(BLACK);
+                UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE); // keep the title
+                UiTextCentered("GAME STARTING IN...", screenWidth, 260, 30, ui::OUTLINE);
+                UiTextCentered(TextFormat("%d", countNum), screenWidth, 300, 90, RAYWHITE);
+                int ly = 480;
+                for (const auto& L : infoLines) {
+                    float a = Clamp((elapsed - L.start) / 0.6f, 0.0f, 1.0f); // 0.6s fade-in per line
+                    DrawCentered(L.text, ly, 24, Fade(RAYWHITE, a));
+                    ly += 40;
+                }
+            EndDrawing();
+            continue;
+        }
         // MARK: GAME_OVER SCREEN
         if (screen == GameScreen::GAME_OVER) {
             // Networked: keep pumping the server. If a match (re)starts (a peer
-            // pressed START, or we did after returning to the lobby), follow it in.
-            if (networked && pumpNet() == ServerMessage::Phase::Playing) {
-                enterNetworkedMatch();
-                continue;
+            // pressed START, or we did after returning to the lobby), follow it in -
+            // into the shared countdown first, or straight to PLAYING if we caught it
+            // already running.
+            if (networked) {
+                ServerMessage::Phase p = pumpNet();
+                if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+                if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
             if (startPressed()) returnToTitle();
             BeginDrawing();
@@ -871,7 +965,7 @@ int main(int argc, char** argv) {
                 bool visible = msg.visible(localPlayer->name);
                 if (!visible) messageQueue.remove(msg_index); else msg_index++;
             }
-            messageQueue.draw(screenWidth, screenHeight);
+            DrawMessageQueue(messageQueue, screenWidth, screenHeight);
             messageQueue.update(dt);
 
 

@@ -112,9 +112,13 @@ BotController botController;
 // are idle (still broadcast, so clients see the phase + connected slots). All
 // gameSpace mutation stays on the sim thread: a client "start" message just sets
 // startRequested, which the sim loop consumes.
-enum class Phase { LOBBY, PLAYING, GAMEOVER };
+enum class Phase { LOBBY, COUNTDOWN, PLAYING, GAMEOVER };
 std::atomic<Phase> gamePhase{Phase::LOBBY};
 std::atomic<bool>  startRequested{false};
+// Seconds left in the pre-match countdown, published in every state packet so all
+// clients show the same number and drive their fade-ins in lockstep. Written by the
+// sim thread each COUNTDOWN tick, read by the io thread in buildStatePacket.
+std::atomic<float> countdownRemaining{0.0f};
 int matchStartConnected = 0; // connected count at match start (sim thread only); sets the last-man-standing threshold
 
 // Map preset carried by a start request (boundary half-size + object counts).
@@ -133,9 +137,10 @@ std::atomic<bool>  pendingEgPassThrough{EARTH_GRAVITY_PASS_THROUGH_PLATFORMS};
 
 static const char* phaseString(Phase p) {
     switch (p) {
-        case Phase::PLAYING:  return "playing";
-        case Phase::GAMEOVER: return "gameover";
-        default:              return "lobby";
+        case Phase::COUNTDOWN: return "countdown";
+        case Phase::PLAYING:   return "playing";
+        case Phase::GAMEOVER:  return "gameover";
+        default:               return "lobby";
     }
 }
 
@@ -277,6 +282,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     s += ",\"tick\":"  + ju(tick);
     s += ",\"seq\":"   + ju(lastSeq);
     s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
+    s += ",\"countdown\":" + jf(countdownRemaining.load()); // seconds left in the pre-match countdown (0 unless COUNTDOWN)
 
     // Players
     s += ",\"players\":[";
@@ -573,6 +579,7 @@ void SimulationLoop() {
     using Clock    = std::chrono::steady_clock;
     using Duration = std::chrono::duration<double>;
     auto lastTick  = Clock::now();
+    Clock::time_point countdownEnd; // when the pre-match COUNTDOWN flips to PLAYING (valid only while COUNTDOWN)
 
     while (true) {
         auto now     = Clock::now();
@@ -622,9 +629,31 @@ void SimulationLoop() {
                 // slot id) at the requested difficulty. Which slots are bots is set
                 // by the per-tick reconcile above; drive() reads the profiles here.
                 botController.init(gameSpace.getPlayers(), pendingDiff.load());
-                gamePhase = Phase::PLAYING;
+                // Open the match with a pre-match countdown instead of going live
+                // immediately. The world is built but stays FROZEN (the sim body
+                // below only ticks in PLAYING/GAMEOVER), so it doesn't move until the
+                // count hits zero. justStarted resends the map/welcome now so clients
+                // can render the frozen world during the count.
+                gamePhase = Phase::COUNTDOWN;
+                countdownEnd = now + std::chrono::duration_cast<Clock::duration>(
+                                         std::chrono::duration<double>(COUNTDOWN_SECONDS));
+                countdownRemaining = COUNTDOWN_SECONDS;
                 justStarted = true;
-                std::cout << "Match started (" << matchStartConnected << " connected)\n";
+                std::cout << "Match countdown started (" << matchStartConnected << " connected)\n";
+            }
+
+            // Pre-match countdown: publish the remaining seconds each tick, and flip
+            // to PLAYING (unfreezing the world) once the deadline passes. Nothing is
+            // simulated while COUNTDOWN (the sim body gates on PLAYING/GAMEOVER).
+            if (gamePhase.load() == Phase::COUNTDOWN) {
+                double left = Duration(countdownEnd - now).count();
+                if (left <= 0.0) {
+                    countdownRemaining = 0.0f;
+                    gamePhase = Phase::PLAYING;
+                    std::cout << "Match started (" << matchStartConnected << " connected)\n";
+                } else {
+                    countdownRemaining = (float)left;
+                }
             }
 
             // Drop last tick's audio events (already broadcast). They re-accumulate

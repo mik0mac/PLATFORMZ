@@ -49,12 +49,14 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 struct ServerMessage {
     enum class Type { None, Welcome, State, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
-    // client's screen: Lobby -> TITLE, Playing -> PLAYING, GameOver -> GAME_OVER.
-    enum class Phase { Unknown, Lobby, Playing, GameOver };
+    // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
+    // GameOver -> GAME_OVER.
+    enum class Phase { Unknown, Lobby, Countdown, Playing, GameOver };
     Type     type     = Type::None;
     int      playerId = -1; // Welcome: our assigned slot (index into players[])
     uint32_t tick     = 0;  // State/Welcome
     Phase    phase    = Phase::Unknown; // State only
+    float    countdown = 0.0f; // State only: seconds left in the pre-match countdown (0 unless Countdown)
 };
 
 //MARK: Outbound - start request
@@ -172,10 +174,12 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     msg.tick = j.value("tick", 0u);
     // Match phase (server-authoritative) - drives the networked client's screen.
     const std::string phase = j.value("phase", "");
-    msg.phase = phase == "playing"  ? ServerMessage::Phase::Playing
-              : phase == "gameover" ? ServerMessage::Phase::GameOver
-              : phase == "lobby"    ? ServerMessage::Phase::Lobby
-                                    : ServerMessage::Phase::Unknown;
+    msg.phase = phase == "playing"   ? ServerMessage::Phase::Playing
+              : phase == "countdown" ? ServerMessage::Phase::Countdown
+              : phase == "gameover"  ? ServerMessage::Phase::GameOver
+              : phase == "lobby"     ? ServerMessage::Phase::Lobby
+                                     : ServerMessage::Phase::Unknown;
+    msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
 
     // Players - a fixed, persistent set of slots; never erased (also Player
     // isn't move-assignable, so erase(remove_if) wouldn't compile).
