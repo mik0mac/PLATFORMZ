@@ -270,5 +270,19 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         }
     }
 
+    // Messages emitted by the server this tick (kill-feed / warnings). Rebuilt
+    // from type + names; generate()/visibility run client-side in main.cpp's
+    // draw. Appended (drained + cleared each frame like audio events).
+    if (j.contains("messages")) {
+        for (const auto& jo : j["messages"]) {
+            Message m((MessageType)jo.value("mt", 0),
+                      jo.value("pa", std::string()),
+                      jo.value("pb", std::string()),
+                      jo.value("pai", 0u),
+                      jo.value("pbi", 0u));
+            gs.getMessages().push_back(m);
+        }
+    }
+
     return msg;
 }

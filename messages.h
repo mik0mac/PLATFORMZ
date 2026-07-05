@@ -85,8 +85,10 @@ class Visibility {
 // MARK: Message Class
 class Message {
     public:
-    Message(MessageType type, const std::string& playerA_Name, const std::string& playerB_Name) :
-        type(type), playerA_Name(playerA_Name), playerB_Name(playerB_Name) {}
+    Message(MessageType type, const std::string& playerA_Name, const std::string& playerB_Name,
+            uint32_t playerA_id = 0, uint32_t playerB_id = 0) :
+        type(type), playerA_Name(playerA_Name), playerB_Name(playerB_Name),
+        playerA_id(playerA_id), playerB_id(playerB_id) {}
     // int msg_id = 0; // unique identifier for the message
 
     MessageType type;
@@ -94,12 +96,19 @@ class Message {
     std::string playerA_Name; // Name of the player who triggered the message (e.g., low fuel warning)
     std::string playerB_Name; // Name of the player who is the target of the message (e.g., hit by an explosion)
 
+    // Stable identity for visibility/"YOU" matching. Names are for display only
+    // (they can collide - two "PLAYER"s); ids are authoritative. id 0 == "no
+    // player" (real player ids start at PLAYER_ID_BASE = 1), used for the empty
+    // player B on single-player messages (low fuel/ammo/health).
+    uint32_t playerA_id = 0;
+    uint32_t playerB_id = 0;
+
     // visibility.
     Visibility visibility = Visibility(VIS_ALL); // default to visible to all players
 
-    bool visible(const std::string& localPlayerName) const {
-        if (localPlayerName == playerA_Name) return visibility.check("A");
-        if (localPlayerName == playerB_Name) return visibility.check("B");
+    bool visible(uint32_t localPlayerId) const {
+        if (localPlayerId == playerA_id) return visibility.check("A");
+        if (localPlayerId == playerB_id) return visibility.check("B");
         return visibility.check("C"); // for any other player, check if the message is visible to all
     }
     
@@ -137,7 +146,11 @@ class Message {
                 std::string victim = (!pb.empty()) ? pb : "SOMEONE";
                 text = pa + " HIT " + victim + ".";
                 color = DEFAULT_MSG_COLOR;
-                if (pa == pb) {
+                // Self-hit test is by id, not name: names can collide (two
+                // un-named "PLAYER"s), which would wrongly suppress a real hit
+                // between two distinct players. id 0 == no player B (shouldn't
+                // happen for a hit), so require a real, equal owner/victim.
+                if (playerA_id != 0 && playerA_id == playerB_id) {
                     visibility.set(VIS_NONE); // suppress self-hit messages.
                 } else {
                     visibility.set(VIS_PLAYER_A_PLUS_B); // both the player who hit and the player who was hit see this message
