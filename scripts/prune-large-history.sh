@@ -47,6 +47,13 @@ if ! command -v bfg >/dev/null 2>&1; then
     exit 1
 fi
 
+# Capture the true remote main SHA BEFORE rewriting. BFG rewrites ALL refs,
+# including refs/remotes/origin/main, which would make a default
+# --force-with-lease compare against a rewritten (wrong) value and fail with
+# "stale info". We pin the lease to the real remote SHA instead, so the push
+# still refuses if someone else moved origin/main in the meantime.
+lease_sha=$(git ls-remote origin refs/heads/main 2>/dev/null | cut -f1)
+
 # --- backup (all refs, so the pre-rewrite state is fully recoverable) --------
 stamp=$(date +%Y%m%d-%H%M%S)
 backup="../platformz-backup-$stamp.bundle"
@@ -72,13 +79,19 @@ for f in platformz.data platformz.wasm platformz.js platformz.html; do
 done
 
 # --- publish ----------------------------------------------------------------
+if [ -n "$lease_sha" ]; then
+    push_cmd="git push --force-with-lease=main:$lease_sha origin main"
+else
+    push_cmd="git push --force origin main" # no remote main yet; nothing to lease against
+fi
+
 if [ "$PUSH" -eq 1 ]; then
     echo
     echo "Force-pushing rewritten history to origin/main..."
-    git push --force-with-lease origin main
+    eval "$push_cmd"
 else
     echo
     echo "Local history rewritten. Review, then publish with:"
-    echo "  git push --force-with-lease origin main"
+    echo "  $push_cmd"
     echo "(or re-run this script with --push)"
 fi
