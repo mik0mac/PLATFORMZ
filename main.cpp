@@ -106,24 +106,31 @@ int main(int argc, char** argv) {
     // events arrive as ids (locally or over the network) and index into it.
     InitAudioDevice();
     SetMasterVolume(1.0f);
-    audioFX fxTable[FX_COUNT] = { //            volume, localOnly, spacial
-        audioFX("assets/sounds/rocket_launch.wav",  1.0f, false, true), // FX_ROCKET_LAUNCH
-        audioFX("assets/sounds/explosion.wav",      1.0f, false, true), // FX_EXPLOSION
-        audioFX("assets/sounds/asteroid_bonus.wav", 1.0f, true, false), // FX_ASTEROID_BONUS
-        audioFX("assets/sounds/player_hit.wav",     1.0f, true, false), // FX_PLAYER_HIT (local player only, not spatial)
-        audioFX("assets/sounds/player_death.wav",   1.0f, true, false), // FX_PLAYER_DEATH (local player only, not spatial)
-        audioFX("assets/sounds/no_ammo.wav",        1.0f, true, false),  // FX_NO_AMMO (local player only, not spatial)
-        audioFX("assets/sounds/no_fuel.wav",        1.0f, true, false),  // FX_NO_FUEL (local player only, not spatial)
-        audioFX("assets/sounds/firerate_choke.wav", 1.0f, true, false), // FX_FIRERATE_CHOKE (local player only, not spatial)
-        audioFX("assets/sounds/wall_bounce_player.wav", 0.6f, false, true), // FX_WALL_BOUNCE_PLAYER (all players, spatial)
-        audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true), // FX_ROCKET_THROUGH_WALL (all players, spatial)
-        audioFX("assets/sounds/move_through_platform.wav", 0.3f, true, false), // FX_PLATFORM_PASSTHROUGH (all players, spatial)
-        audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false), // FX_MESSAGE_RECEIVED (local player only, not spatial)
-        audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false), // FX_PLAYER_ELIMINATION_SCORE (local player only, not spatial)
-        audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false), // FX_PLAYER_LOCAL_DAMAGE (local player only, not spatial)
-        audioFX("assets/sounds/warning.wav",             0.25f, true, false), // FX_WARNING (local player only, not spatial)
-        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false)  // FX_ENGAGE_EARTH_GRAVITY (local player only, not spatial)
+
+    // Per-FX voice pools live inside audioFX. Columns:
+    //   volume, localOnly, spacial, poolSize, pitchJitter
+    audioFX fxTable[FX_COUNT] = {
+        audioFX("assets/sounds/rocket_launch.wav",  0.5f, false, true,  8, 0.08f),     // FX_ROCKET_LAUNCH
+        audioFX("assets/sounds/explosion.wav",      1.0f, false, true,  8, 0.08f),     // FX_EXPLOSION
+        audioFX("assets/sounds/asteroid_bonus.wav", 1.0f, true,  false, 2),            // FX_ASTEROID_BONUS
+        audioFX("assets/sounds/player_hit.wav",     1.0f, true,  false, 2),            // FX_PLAYER_HIT (local only)
+        audioFX("assets/sounds/player_death.wav",   1.0f, true,  false, 1),            // FX_PLAYER_DEATH (local only)
+        audioFX("assets/sounds/no_ammo.wav",        1.0f, true,  false, 1),            // FX_NO_AMMO
+        audioFX("assets/sounds/no_fuel.wav",        0.25f, true,  false, 1),            // FX_NO_FUEL
+        audioFX("assets/sounds/firerate_choke.wav", 1.0f, true,  false, 1),            // FX_FIRERATE_CHOKE
+        audioFX("assets/sounds/wall_bounce_player.wav", 0.6f, false, true, 2),         // FX_WALL_BOUNCE_PLAYER (spatial)
+        audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true, 4),        // FX_ROCKET_THROUGH_WALL (spatial)
+        audioFX("assets/sounds/move_through_platform.wav", 0.3f, true, false, 4, 0.08f), // FX_PLATFORM_PASSTHROUGH (4-voice round robin, gated below)
+        audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false, 1),           // FX_MESSAGE_RECEIVED (local only)
+        audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
+        audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
+        audioFX("assets/sounds/warning.wav",             0.25f, true, false, 2),       // FX_WARNING (local only)
+        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)         // FX_ENGAGE_EARTH_GRAVITY
     };
+    // Platform passthrough is suppressed while earth-gravity engage is ringing
+    // (one-directional: engage is never blocked, and passthrough's own 4 voices
+    // still round-robin freely).
+    fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
 
     // MARK: RENDER TEXTURE 2D
