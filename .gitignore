@@ -5,3 +5,4 @@ net_smoke
 server/gameserver
  audio_WIP
  old
+.DS_Store

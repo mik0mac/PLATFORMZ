@@ -72,6 +72,7 @@ WEB_LDFLAGS  := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY \
                 -sEXPORTED_RUNTIME_METHODS=HEAPF32 \
                 -lwebsocket.js \
                 --preload-file assets \
+                --exclude-file "*audio_WIP*" \
                 --shell-file shell.html
 
 web: $(SRCS) $(HDRS) shell.html | webdir
