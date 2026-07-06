@@ -112,16 +112,16 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/asteroid_bonus.wav", 1.0f, true, false), // FX_ASTEROID_BONUS
         audioFX("assets/sounds/player_hit.wav",     1.0f, true, false), // FX_PLAYER_HIT (local player only, not spatial)
         audioFX("assets/sounds/player_death.wav",   1.0f, true, false), // FX_PLAYER_DEATH (local player only, not spatial)
-        audioFX("assets/sounds/no_ammo.wav",        0.5f, true, false),  // FX_NO_AMMO (local player only, not spatial)
-        audioFX("assets/sounds/no_fuel.wav",        0.5f, true, false),  // FX_NO_FUEL (local player only, not spatial)
-        audioFX("assets/sounds/firerate_choke.wav", 0.5f, true, false), // FX_FIRERATE_CHOKE (local player only, not spatial)
-        audioFX("assets/sounds/wall_bounce_player.wav", 1.0f, false, true), // FX_WALL_BOUNCE_PLAYER (all players, spatial)
+        audioFX("assets/sounds/no_ammo.wav",        1.0f, true, false),  // FX_NO_AMMO (local player only, not spatial)
+        audioFX("assets/sounds/no_fuel.wav",        1.0f, true, false),  // FX_NO_FUEL (local player only, not spatial)
+        audioFX("assets/sounds/firerate_choke.wav", 1.0f, true, false), // FX_FIRERATE_CHOKE (local player only, not spatial)
+        audioFX("assets/sounds/wall_bounce_player.wav", 0.6f, false, true), // FX_WALL_BOUNCE_PLAYER (all players, spatial)
         audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true), // FX_ROCKET_THROUGH_WALL (all players, spatial)
-        audioFX("assets/sounds/move_through_platform.wav", 1.0f, false, true), // FX_PLATFORM_PASSTHROUGH (all players, spatial)
+        audioFX("assets/sounds/move_through_platform.wav", 0.3f, true, false), // FX_PLATFORM_PASSTHROUGH (all players, spatial)
         audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false), // FX_MESSAGE_RECEIVED (local player only, not spatial)
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false), // FX_PLAYER_ELIMINATION_SCORE (local player only, not spatial)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false), // FX_PLAYER_LOCAL_DAMAGE (local player only, not spatial)
-        audioFX("assets/sounds/warning.wav",             0.6f, true, false), // FX_WARNING (local player only, not spatial)
+        audioFX("assets/sounds/warning.wav",             0.25f, true, false), // FX_WARNING (local player only, not spatial)
         audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false)  // FX_ENGAGE_EARTH_GRAVITY (local player only, not spatial)
     };
     for (audioFX& fx : fxTable) fx.load();

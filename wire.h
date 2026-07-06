@@ -244,6 +244,16 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.name     = jo.value("name", std::string("Player")); // server-owned display name
                 p.score    = jo.value("score", p.score); // server-owned score (kept stable if absent)
             });
+        // Slots the server stopped sending (roster shrank between matches, e.g.
+        // lobby bots popped when the match starts) are orphaned locally at their
+        // last-known position - which for lobby-only slots is the origin,
+        // rendering an inert "phantom" body at world center. We can't erase them
+        // (Player has const members, hence syncByIdNoErase), so hide them via the
+        // existing isConnected draw gate.
+        std::unordered_set<uint32_t> presentIds;
+        for (const auto& jo : j["players"]) presentIds.insert(jo.value("id", 0u));
+        for (Player& p : gs.getPlayers())
+            if (presentIds.find(p.id) == presentIds.end()) p.isConnected = false;
     }
 
     // Asteroids - startingPosition seeds the wireframe shape, so set it once.

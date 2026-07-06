@@ -465,18 +465,13 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 // critically - stops the check from re-firing every frame while
                 // overlapping, which previously flipped velocity.y back and
                 // forth and killed the bounce.
-                if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))) {
+                bool earthGravityPassThrough = space.earthGravityPassThroughPlatforms && player.earthGravityEnabled;
+                if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))
+                                                && !earthGravityPassThrough) {
                     // float platformTop = platform.position.y + (platform.size.y / 2.0f);
                     // Pop the player out onto the surface first, so next frame
                     // doesn't re-detect the overlap and cancel the response.
                     // player.position.y = platformTop + player.radius;
-
-                    if (space.earthGravityPassThroughPlatforms && player.earthGravityEnabled) {
-                        // Earth Grav is on so player passes through.  Play sound, no vel change.
-                        space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
-                        continue; // skip the rest of the collision response for this platform
-                    }
-                    
                     if (platform.isBouncy) {
                         // player bounces off the platform.
                         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
@@ -484,11 +479,16 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                         // platform is solid, no bounce.
                         player.velocity.y = 0.0f; // land and stop
                     }
-                } else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
-                    // If the player is moving up through the platform.
-                    // play SFX
-                    space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
                 }
+                
+                // play the pass-through sound if the player is midway through the platform, and moving fast enough to be considered a "pass-through" (not just a landing).
+                if (abs(player.velocity.y) > 2.0f && (abs(player.position.y - platform.position.y)) < 1.0f) {
+                    space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
+                    }
+                }
+
+
+
                 // un-comment to work on bouncing off the underside of a platform.
                 // else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
                 //     // If the player is moving up into the platform, the should cancel out y velocity.
@@ -505,7 +505,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
             }
         }
     }
-}
+
 
 //MARK: Player vs Walls
 // The boundary cube spans -halfSize to +halfSize on each axis. Reflect
