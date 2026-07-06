@@ -27,6 +27,7 @@ struct NetAudioEvent {
     int      fx;
     Vector3  pos;
     uint32_t owner;
+    float    volumeScale;
 };
 
 
@@ -305,7 +306,6 @@ public:
         for (const Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) {
                 spawnEliminationBurst(asteroid.position);
-                // emitAudio(FX_ASTEROID_BONUS, asteroid.position); // owner 0 = world
             }
         }
 
@@ -433,8 +433,8 @@ public:
     // (server, or local host); the server serializes these in the state packet
     // and clears them each tick, the local host drains them straight into the
     // client's AudioQueue. owner = the attributed player's id (0 = world/none).
-    void emitAudio(int fx, Vector3 at, uint32_t owner = 0) {
-        audioEvents.push_back({fx, at, owner});
+    void emitAudio(int fx, Vector3 at, uint32_t owner = 0, float volumeScale = 1.0f) {
+        audioEvents.push_back({fx, at, owner, volumeScale});
     }
 
     void emitMessage(Message msg) {

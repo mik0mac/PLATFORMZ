@@ -881,7 +881,7 @@ int main(int argc, char** argv) {
                 // and local-mode hit/death). Events owned by other players keep
                 // isLocal=false and their localPlayerOnly sounds stay filtered.
                 bool isLocal = ev.owner == myId && myId != 0u;
-                audioQueue.push(fxTable[ev.fx], ev.pos, isLocal);
+                audioQueue.push(fxTable[ev.fx], ev.pos, isLocal, ev.volumeScale);
             }
             gameSpace.getAudioEvents().clear();
         }

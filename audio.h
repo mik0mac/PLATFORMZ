@@ -55,7 +55,7 @@ public:
         pool.clear();
     }
 
-    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection) {
+    void trigger(Vector3 sourcePos, Vector3 listenerPos, Vector3 listenerDirection, float volumeScale = 1.0f) {
         // Directional gate: suppressed while the blocker FX is still audible.
         if (blockedBy && blockedBy->isPlaying()) return;
 
@@ -80,7 +80,7 @@ public:
             volume *= baseVolume;
         }
 
-        SetSoundVolume(s, volume);
+        SetSoundVolume(s, volume * volumeScale);
         SetSoundPan(s, pan);
         SetSoundPitch(s, pitchJitter > 0.0f ? 1.0f + RandomFloat(-pitchJitter, pitchJitter) : 1.0f);
         PlaySound(s);
@@ -109,19 +109,20 @@ private:
 struct AudioEvent {
     audioFX* fx;
     Vector3  sourcePos;
+    float    volumeScale;
 };
 
 // MARK: Audio Queue
 class AudioQueue {
 public:
-    void push(audioFX& fx, Vector3 sourcePos, bool isLocal = false) {
+    void push(audioFX& fx, Vector3 sourcePos, bool isLocal = false, float volumeScale = 1.0f) {
         if (fx.localPlayerOnly && !isLocal) return;
-        queue.push_back({ &fx, sourcePos });
+        queue.push_back({ &fx, sourcePos, volumeScale });
     }
 
     void flush(Player& player) {
         for (auto& event : queue) {
-            event.fx->trigger(event.sourcePos, player.position, player.ForwardFlat());
+            event.fx->trigger(event.sourcePos, player.position, player.ForwardFlat(), event.volumeScale);
         }
         queue.clear();
     }

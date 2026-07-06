@@ -388,6 +388,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"px\":"  + jf(audio[i].pos.x);
         s += ",\"py\":"  + jf(audio[i].pos.y);
         s += ",\"pz\":"  + jf(audio[i].pos.z);
+        s += ",\"vol\":" + jf(audio[i].volumeScale);
         s += "}";
     }
     s += "]";

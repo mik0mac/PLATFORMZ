@@ -196,10 +196,11 @@ const float ASTEROID_FUEL_AWARD = 20.0f;
 const int ASTEROID_HEALTH_AWARD = 20;
 const int ASTEROID_AMMO_AWARD = 20;
 
-const float ASTEROID_MIN_SIZE = 4.0f; // Minimum radius of the asteroid
-const float ASTEROID_MAX_SIZE = 8.0f; // GAMESPACE_HALF_SIZE / 5.0f; // Maximum radius of the asteroid
-const float ASTEROID_MIN_SPEED = 6.0f; // Minimum speed of the asteroid
-const float ASTEROID_MAX_SPEED = 12.0f; // GAMESPACE_HALF_SIZE / 3.0f; // Maximum speed of the asteroid
+const float ASTEROID_MIN_SIZE = 6.0f; // Minimum radius of the asteroid
+const float ASTEROID_MAX_SIZE = 6.0f; // GAMESPACE_HALF_SIZE / 5.0f; // Maximum radius of the asteroid
+const float ASTEROID_MIN_SPEED = 6.0f; // Minimum starting speed of the asteroid
+const float ASTEROID_MAX_SPEED = 12.0f; // Maximum starting speed of the asteroid
+const float ASTEROID_SPEED_LIMIT = 36.0f; // when bouncing off walls, this speed limit is enforced to avoid runaway velocity with elasticity > 1.0.
 // Min center-to-center distance to keep a freshly-scattered asteroid away from any
 // player's spawn (issue #5). ~= max asteroid radius (8) + player radius (2) + margin.
 const float ASTEROID_PLAYER_SPAWN_BUFFER = 15.0f;

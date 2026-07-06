@@ -314,6 +314,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
             ev.fx    = jo.value("fx", 0);
             ev.owner = jo.value("own", 0u);
             ev.pos   = vec3(jo, "px", "py", "pz");
+            ev.volumeScale = jo.value("vol", 1.0f);
             gs.getAudioEvents().push_back(ev);
         }
     }

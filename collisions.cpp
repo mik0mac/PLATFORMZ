@@ -520,6 +520,7 @@ void CheckPlayerWallCollisions(GameSpace& space) {
         if (!player.isAlive) continue;
 
         bool hitWall = false;
+        float volumeScale = 1.0f;
 
         // Inset each bound by the player's sphere radius so the whole body stays
         // inside the cube, not just its center. The eye is at the sphere center,
@@ -534,21 +535,27 @@ void CheckPlayerWallCollisions(GameSpace& space) {
             player.position.x = Clamp(player.position.x, xMin, xMax);
             player.velocity.x = -player.velocity.x * walls.elasticityPlayer;
             hitWall = true;
+            volumeScale = std::abs(player.velocity.x) / PLAYER_SPEED_JETPACK; // as a ref for "going fast."
         }
         if (player.position.y < yMin || player.position.y > yMax) {
             player.position.y = Clamp(player.position.y, yMin, yMax);
             player.velocity.y = -player.velocity.y * walls.elasticityPlayer;
             hitWall = true;
+            volumeScale = std::abs(player.velocity.y) / PLAYER_SPEED_JETPACK; // as a ref for "going fast."
         }
         if (player.position.z < zMin || player.position.z > zMax) {
             player.position.z = Clamp(player.position.z, zMin, zMax);
             player.velocity.z = -player.velocity.z * walls.elasticityPlayer;
             hitWall = true;
+            volumeScale = std::abs(player.velocity.z) / PLAYER_SPEED_JETPACK; // as a ref for "going fast."
         }
 
         if (hitWall) {
             if (walls.damage > 0.0f) player.takeDamage(walls.damage);
-            space.emitAudio(FX_WALL_BOUNCE_PLAYER, player.position, player.id);
+            // if (player.velocity.x > 0.5f || player.velocity.y > 0.5f || player.velocity.z > 0.5f) {
+            volumeScale = Clamp(volumeScale, 0.0f, 1.0f);
+            space.emitAudio(FX_WALL_BOUNCE_PLAYER, player.position, player.id, volumeScale);
+            // }
         }
     }
 }
@@ -655,6 +662,12 @@ void CheckAsteroidWallCollisions(GameSpace& space) {
         if (asteroid.position.z < minBound || asteroid.position.z > maxBound) {
             asteroid.position.z = Clamp(asteroid.position.z, minBound, maxBound);
             asteroid.velocity.z = -asteroid.velocity.z * walls.elasticityAsteroid;
+        }
+        // clamp the asteroid's velocity so the speed doesn't exceed ASTEROID_SPEED_LIMIT
+        float asteroidSpeed = abs(Vector3Length(asteroid.velocity));
+        if (asteroidSpeed > ASTEROID_SPEED_LIMIT) {
+            float scale = ASTEROID_SPEED_LIMIT / asteroidSpeed;
+            asteroid.velocity = Vector3Scale(asteroid.velocity, scale);
         }
     }
 }
