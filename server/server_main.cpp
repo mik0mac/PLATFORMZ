@@ -329,17 +329,29 @@ static std::string buildPlatformsArray() {
 // closes a data race: welcomes are built on network threads (connect/hello), and
 // reading the live platform vector there could tear against the sim thread
 // wiping+rebuilding it at match start.
-std::string welcomeStatic;          // e.g.  "half":40.00,"platforms":[...]
+std::string welcomeStatic;          // JSON:   "half":40.00,"platforms":[...]
+std::string welcomeStaticBin;       // binary: f32 half, u16 count, count*(6 f32)
 std::mutex  welcomeStaticMutex;
 
-// Rebuild the cached welcome fragment from the current world. Caller MUST hold
-// gameMutex (reads walls + platforms); runs on the sim thread at startup and
-// after each world (re)generation.
+// Rebuild the cached welcome fragment(s) from the current world, in both JSON (for
+// WebSocket) and binary (for UDP). Caller MUST hold gameMutex (reads walls +
+// platforms); runs on the sim thread at startup and after each world (re)gen.
 static void rebuildWelcomeStatic() {
     std::string s = "\"half\":" + jf(gameSpace.getWalls().halfSize)
                   + ",\"platforms\":" + buildPlatformsArray();
+
+    std::string bin;
+    nb::putF32(bin, gameSpace.getWalls().halfSize);
+    auto& platforms = gameSpace.getPlatforms();
+    nb::putU16(bin, (uint16_t)platforms.size());
+    for (const Platform& p : platforms) {
+        nb::putF32(bin, p.position.x); nb::putF32(bin, p.position.y); nb::putF32(bin, p.position.z);
+        nb::putF32(bin, p.size.x);     nb::putF32(bin, p.size.y);     nb::putF32(bin, p.size.z);
+    }
+
     std::lock_guard<std::mutex> lk(welcomeStaticMutex);
-    welcomeStatic = std::move(s);
+    welcomeStatic    = std::move(s);
+    welcomeStaticBin = std::move(bin);
 }
 
 // Welcome packet: the client's assigned slot + the cached static world fragment.
@@ -351,6 +363,26 @@ static std::string buildWelcome(int playerId) {
     return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
          + ",\"tick\":" + std::to_string(serverTick.load())
          + "," + statik + "}";
+}
+
+// Binary welcome for UDP clients: the platform list can exceed the MTU as JSON,
+// so pack it (netbin.h). Field order matches the client's applyBinaryWelcome.
+static std::string buildWelcomeBinary(int playerId) {
+    std::string statik;
+    { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStaticBin; }
+    std::string b;
+    nb::putU8(b, nb::WELCOME_BIN_VERSION);
+    nb::putI32(b, playerId);
+    nb::putU32(b, serverTick.load());
+    b += statik;   // f32 half, u16 platformCount, platforms
+    return b;
+}
+
+// Pick the welcome format for a client's transport (binary over UDP, JSON over
+// WebSocket) - used at every welcome-send site except the WS-only connect path.
+static std::string welcomeFor(const ConnectedClient& c) {
+    return c.transport == Transport::UDP ? buildWelcomeBinary(c.playerId)
+                                         : buildWelcome(c.playerId);
 }
 
 //MARK: State packet
@@ -721,7 +753,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         if (it != clients.end()) {
             std::string nm = parseString(msg, "name");
             if (!nm.empty()) { it->second.name = nm; it->second.nameDirty = true; }
-            SendToClient(it->second, buildWelcome(it->second.playerId));
+            SendToClient(it->second, welcomeFor(it->second));
         }
         return;
     }
@@ -1076,7 +1108,7 @@ void SimulationLoop() {
         if (justStarted) {
             std::lock_guard<std::mutex> gc(clientMutex);
             for (auto& [cid, client] : clients)
-                SendToClient(client, buildWelcome(client.playerId));
+                SendToClient(client, welcomeFor(client));
         }
 
         // Broadcast authoritative state to all clients every tick.
@@ -1201,7 +1233,7 @@ private:
         }
         // Welcome after releasing locks (mirrors Session::Start): buildWelcome
         // reads gameSpace unlocked exactly as the WS connect-welcome does.
-        if (ok) SendToClient(sink, buildWelcome(playerId));
+        if (ok) SendToClient(sink, welcomeFor(sink));
     }
 };
 

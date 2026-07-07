@@ -373,10 +373,11 @@ int main(int argc, char** argv) {
             ServerMessage m = applyMessage(frame, gameSpace);
             if (m.type == ServerMessage::Type::Welcome) {
                 myIndex = m.playerId;
-                // Only override the server's slot-numbered default ("PLAYER N")
-                // when the user has actually set a custom name; otherwise leave
-                // the default so two un-named humans stay distinct.
-                if (!namePristine) net.send(serializeName(playerName));
+                // Now that we know our real slot, assert our name: send our display
+                // name (custom, or the correct "PLAYER {slot+1}" default). The
+                // server slot may carry a leftover lobby bot name, and pre-welcome
+                // (myIndex == -1) every client's default would have been "PLAYER 1".
+                net.send(serializeName(myDisplayName()));
             }
             else if (m.type == ServerMessage::Type::State) {
                 phase = m.phase; netCountdown = m.countdown;
@@ -437,7 +438,12 @@ int main(int argc, char** argv) {
         if (networked) {
             double nowT = GetTime();
             if (net.isOpen() && myIndex < 0 && nowT - lastHelloTime > 0.5) {
-                net.send(serializeHello(myDisplayName()));
+                // Only carry a name if the user actually set one (same gate as
+                // serializeName). Before welcome myIndex is -1, so myDisplayName()
+                // would send the slot-0 default "PLAYER 1" for EVERY client and
+                // clobber the server's correct per-slot default ("PLAYER 2", ...);
+                // an empty name leaves the server's default in place.
+                net.send(serializeHello(namePristine ? std::string() : playerName));
                 lastHelloTime = nowT;
             }
             // UDP keepalive: the client only streams input during PLAYING, so on
@@ -809,6 +815,7 @@ int main(int argc, char** argv) {
                 ServerMessage m = applyMessage(frame, gameSpace);
                 if (m.type == ServerMessage::Type::Welcome) {
                     myIndex = m.playerId;
+                    net.send(serializeName(myDisplayName())); // assert our name (see the pumpNet welcome)
                     TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
                 } else if (m.type == ServerMessage::Type::State) {
                     netPhase = m.phase; // track phase so we can detect the match ending

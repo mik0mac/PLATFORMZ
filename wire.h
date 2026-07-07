@@ -188,6 +188,33 @@ inline Vector3 vec3(const json& jo, const char* x, const char* y, const char* z)
 
 } // namespace wire_detail
 
+//MARK: Inbound - binary welcome (UDP)
+// Decode a binary welcome (server buildWelcomeBinary): assigned slot + the static
+// world (boundary size + platform layout). Mirror of the JSON "welcome" branch.
+inline ServerMessage applyBinaryWelcome(const std::string& buf, GameSpace& gs) {
+    ServerMessage msg;
+    msg.type = ServerMessage::Type::Welcome;
+
+    nb::Reader r(buf);
+    r.u8();                    // tag (already checked by caller)
+    msg.playerId = r.i32();
+    msg.tick     = r.u32();
+    gs.getWalls().halfSize = r.f32();
+
+    // Platforms arrive once, here. Rebuild from scratch so a reconnect that
+    // re-sends welcome doesn't duplicate.
+    uint16_t count = r.u16();
+    auto& platforms = gs.getPlatforms();
+    platforms.clear();
+    for (int k = 0; k < count; ++k) {
+        Platform p;
+        p.position = p.startingPosition = { r.f32(), r.f32(), r.f32() };
+        p.size     = { r.f32(), r.f32(), r.f32() };
+        platforms.push_back(p);
+    }
+    return msg;
+}
+
 //MARK: Inbound - binary state (UDP)
 // Decode a binary state packet (server buildStateBinary) into the GameSpace, the
 // mirror of the "state" branch of applyMessage below - same sync-by-id semantics,
@@ -368,10 +395,13 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     using nlohmann::json;
     using namespace wire_detail;
 
-    // Binary state packet (UDP): byte 0 is the version tag, never '{'. Everything
-    // else (welcome, and the JSON state sent to WebSocket clients) is JSON.
-    if (!text.empty() && (uint8_t)text[0] == nb::STATE_BIN_VERSION)
-        return applyBinaryState(text, gs);
+    // Binary packet (UDP): byte 0 is a tag, never '{'. Everything the WebSocket
+    // path sends (welcome + state) stays JSON and falls through below.
+    if (!text.empty()) {
+        uint8_t tag = (uint8_t)text[0];
+        if (tag == nb::STATE_BIN_VERSION)   return applyBinaryState(text, gs);
+        if (tag == nb::WELCOME_BIN_VERSION) return applyBinaryWelcome(text, gs);
+    }
 
     ServerMessage msg;
     json j = json::parse(text, nullptr, /*allow_exceptions=*/false);

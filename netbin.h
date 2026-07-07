@@ -23,9 +23,11 @@
 
 namespace nb {
 
-// Byte 0 of every binary state packet. Not '{', so it can't collide with a JSON
-// message; bump it if the layout ever changes incompatibly.
-static const uint8_t STATE_BIN_VERSION = 0x01;
+// Byte 0 tags each binary packet, and (being != '{') keeps it from colliding
+// with a JSON message. One value per binary message type; bump a value if its
+// layout ever changes incompatibly.
+static const uint8_t STATE_BIN_VERSION   = 0x01; // per-tick state packet
+static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 
 // ---- writers: append to a std::string byte buffer ----
 inline void putU8 (std::string& b, uint8_t  v) { b.push_back((char)v); }
