@@ -1069,12 +1069,15 @@ int main(int argc, char** argv) {
                     DrawTexturePro(tex, src, dst, {0, 0}, 0.0f, WHITE);
                 }
                 // (b) RGB split: additive red/blue copies nudged left/right for
-                //     a chromatic-aberration fringe.
+                //     a chromatic-aberration fringe. Alpha scales with hurt too (not
+                //     just the offset) so the tint fades out smoothly instead of
+                //     staying full-strength until it snaps off at hurt == 0.
                 float ca = 6.0f * hurt;
+                unsigned char caA = (unsigned char)(160.0f * hurt);
                 Rectangle fullSrc{0, 0, (float)tex.width, -(float)tex.height};
                 BeginBlendMode(BLEND_ADDITIVE);
-                    DrawTexturePro(tex, fullSrc, {-ca, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, {255, 0, 0, 160});
-                    DrawTexturePro(tex, fullSrc, { ca, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, {0, 80, 255, 160});
+                    DrawTexturePro(tex, fullSrc, {-ca, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, {255, 0, 0, caA});
+                    DrawTexturePro(tex, fullSrc, { ca, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, {0, 80, 255, caA});
                 EndBlendMode();
                 // (c) Static: a few random bright scanline streaks.
                 int streaks = (int)(8 * hurt);
@@ -1086,6 +1089,13 @@ int main(int argc, char** argv) {
                 }
             }
             if (!player.isAlive && grayscaleOK) EndShaderMode();
+            // TEMP diagnostic: watch the spectate fade values on death. Remove.
+            if (!player.isAlive) {
+                DrawText(TextFormat("stmr=%.2f  cd=%.2f  spec=%d  hurt=%.2f",
+                                    player.SpectatingTimer, player.countdownToSpectating,
+                                    (int)player.isSpectating, hurt),
+                         10, 30, 20, YELLOW);
+            }
             // MARK: HUD
             // text size, x, y, color.
             // draw onscreen text HUD. (Death transitions to the GAME_OVER screen
