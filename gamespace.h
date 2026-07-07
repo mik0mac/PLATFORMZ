@@ -361,44 +361,45 @@ public:
     // GameSpace itself doesn't own or know about the camera, that's an
     // orchestration concern that belongs at the main.cpp level.
 #ifndef PLATFORMZ_SERVER
-    void draw(int localPlayerIndex = -1) {
-        DrawWalls(walls);
-
-        for (Platform& platform : platforms) {
-            DrawPlatform(platform);
-        }
-        // Draw every player EXCEPT the local one. In first-person the local
-        // player's own collision box would render directly around the camera
-        // (you'd see your own "body" as a box at your feet), so the caller
-        // passes its index to skip it; other players (e.g. test bots, or
-        // remote players in multiplayer) are drawn normally.
+    // Player bodies + reticles for one draw pass. Skips the local player's own
+    // body (first-person: it would render around the camera) but still draws its
+    // reticle; skips unoccupied and dead slots. Shared by both passes so the
+    // skip rules can't drift apart.
+    void drawPlayersPass(int localPlayerIndex, DrawPass pass) {
         for (int i = 0; i < (int)players.size(); ++i) {
-            // Multiplayer: skip unoccupied slots entirely (no body, no reticle).
-            // Always true in local mode, so bots and the local human still draw.
-            if (!players[i].isConnected) continue;
-            if (!players[i].isAlive) continue; // Dead players don't draw (no body, no reticle).
+            if (!players[i].isConnected) continue; // unoccupied slot: no body, no reticle
+            if (!players[i].isAlive) continue;     // dead players don't draw
             if (i == localPlayerIndex) {
-                // First-person: own body is skipped, but the reticle still draws
-                // as the player's crosshair, floating out along their aim.
-                if (players[i].reticle.isVisibleToOwner) DrawReticle(players[i]);
-                continue;
+                if (players[i].reticle.isVisibleToOwner) DrawReticle(players[i], pass);
+                continue; // own body skipped in first-person
             }
-            DrawPlayer(players[i]);
-            // Reticle shows others where this player is looking.
-            if (players[i].reticle.isVisibleToEnemies) DrawReticle(players[i]);
+            DrawPlayer(players[i], pass);
+            if (players[i].reticle.isVisibleToEnemies) DrawReticle(players[i], pass);
         }
-        for (Asteroid& asteroid : asteroids) {
-            DrawAsteroid(asteroid);
-        }
-        for (Rocket& rocket : rockets) {
-            DrawRocket(rocket);
-        }
-        for (Explosion& explosion : explosions) {
-            DrawExplosion(explosion);
-        }
-        for (Spark& spark : sparks) {
-            DrawSpark(spark);
-        }
+    }
+
+    // Two-pass draw (see shapes.h DrawPass): all OPAQUE wireframes first - which
+    // builds the depth buffer - then all TRANSLUCENT fills in a single depth-mask-
+    // off block. This collapses the per-object batch flushes (~56/frame, the main
+    // framerate cost) down to the one flush pair around the fill pass.
+    void draw(int localPlayerIndex = -1) {
+        // ---- Pass 1: opaque wireframes (write depth) ----
+        DrawWalls(walls);
+        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
+        drawPlayersPass(localPlayerIndex, PASS_WIRE);
+        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE);
+        for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE);
+        for (Spark& spark : sparks)            DrawSpark(spark); // wire-only lines
+
+        // ---- Pass 2: translucent fills (no depth write), one flush pair ----
+        BeginTranslucentFill();
+        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL);
+        drawPlayersPass(localPlayerIndex, PASS_FILL);
+        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL);
+        for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL);
+        EndTranslucentFill();
     }
 #endif // PLATFORMZ_SERVER
 

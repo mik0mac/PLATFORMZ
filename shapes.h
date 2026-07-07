@@ -20,6 +20,15 @@
 // behind it later, which is exactly the "can't see through it" bug. Flush the
 // batch around each toggle so the mask change only affects the fill vertices,
 // not the opaque wireframes queued before/after.
+// Two-pass draw: every shaded element is drawn twice by GameSpace::draw() - once
+// for its opaque wireframe (PASS_WIRE, writes depth) and once for its translucent
+// fill (PASS_FILL, no depth write). Batching ALL wires then ALL fills means the
+// depth-mask toggle + batch flush happens ONCE per frame (below) instead of twice
+// per object, which was ~56 forced GPU flushes/frame and the main framerate cost.
+enum DrawPass { PASS_WIRE, PASS_FILL };
+
+// Bracket the single per-frame fill pass. Flush so the mask change only affects
+// the fill vertices, not the opaque wireframes drawn before them.
 inline void BeginTranslucentFill() {
     rlDrawRenderBatchActive();
     rlDisableDepthMask();
@@ -32,26 +41,22 @@ inline void EndTranslucentFill() {
 // Draws a wireframe box with a translucent, slightly-glowing fill pass underneath.
 // Render solid first (low alpha), then draw the wireframe on top at full opacity
 // so edges stay crisp - the core "vector + shading" look used throughout.
-inline void DrawShadedWireBox(Vector3 position, float width, float height, float depth, float rotY, Color wireColor, Color fillColor) {
+inline void DrawShadedWireBox(Vector3 position, float width, float height, float depth, float rotY, Color wireColor, Color fillColor, DrawPass pass) {
     rlPushMatrix();
     rlTranslatef(position.x, position.y, position.z);
     rlRotatef(rotY * RAD2DEG, 0, 1, 0);
 
-    BeginTranslucentFill();
-    DrawCube(Vector3Zero(), width, height, depth, fillColor);
-    EndTranslucentFill();
-    DrawCubeWires(Vector3Zero(), width, height, depth, wireColor);
+    if (pass == PASS_FILL) DrawCube(Vector3Zero(), width, height, depth, fillColor);
+    else                   DrawCubeWires(Vector3Zero(), width, height, depth, wireColor);
 
     rlPopMatrix();
 }
 
 // Same fill+wireframe layering as DrawShadedWireBox, but for a sphere.
 // Used for asteroids and the explosion effect.
-inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Color fillColor) {
-    BeginTranslucentFill();
-    DrawSphere(position, radius, fillColor);
-    EndTranslucentFill();
-    DrawSphereWires(position, radius, 16, 16, wireColor);
+inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Color fillColor, DrawPass pass) {
+    if (pass == PASS_FILL) DrawSphere(position, radius, fillColor);
+    else                   DrawSphereWires(position, radius, 16, 16, wireColor);
 }
 
 // A wireframe pyramid (ship/rocket-like silhouette), built manually with line
@@ -117,8 +122,8 @@ inline void DrawWalls(const Walls& walls) {
     DrawGridRoom(walls.halfSize, walls.gridSpacing, walls.color_outline);
 }
 
-inline void DrawPlatform(const Platform& platform) {
-    DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, platform.color_outline, platform.color_fill);
+inline void DrawPlatform(const Platform& platform, DrawPass pass) {
+    DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, platform.color_outline, platform.color_fill, pass);
 }
 
 // A VFX spark: a short streak drawn behind its direction of travel, fading out
@@ -193,39 +198,40 @@ static const int DODECA_FACES[12][5] = {
 // Verts are scaled to `radius` and offset by `center`; each pentagon fills as a
 // triangle fan (both windings) under de-duplicated wire edges.
 inline void DrawShadedPolyhedron(Vector3 center, float radius, const Vector3 verts[], int vcount,
-                                 const int faces[][5], int fcount, Color wireColor, Color fillColor) {
+                                 const int faces[][5], int fcount, Color wireColor, Color fillColor,
+                                 DrawPass pass) {
     // World-space vertices.
     Vector3 w[20]; // dodecahedron has 20; bump if a larger solid ever reuses this
     for (int i = 0; i < vcount; i++) {
         w[i] = Vector3Add(center, Vector3Scale(Vector3Normalize(verts[i]), radius));
     }
 
-    // Fill: triangle-fan each pentagon, both windings.
-    BeginTranslucentFill();
-    for (int f = 0; f < fcount; f++) {
-        for (int t = 1; t < 4; t++) {
-            Vector3 a = w[faces[f][0]];
-            Vector3 b = w[faces[f][t]];
-            Vector3 d = w[faces[f][t + 1]];
-            DrawTriangle3D(a, b, d, fillColor);
-            DrawTriangle3D(a, d, b, fillColor);
+    if (pass == PASS_FILL) {
+        // Fill: triangle-fan each pentagon, both windings.
+        for (int f = 0; f < fcount; f++) {
+            for (int t = 1; t < 4; t++) {
+                Vector3 a = w[faces[f][0]];
+                Vector3 b = w[faces[f][t]];
+                Vector3 d = w[faces[f][t + 1]];
+                DrawTriangle3D(a, b, d, fillColor);
+                DrawTriangle3D(a, d, b, fillColor);
+            }
         }
-    }
-    EndTranslucentFill();
-
-    // Wire: each face's 5 edges, de-duplicated across faces via the i<j test.
-    for (int f = 0; f < fcount; f++) {
-        for (int e = 0; e < 5; e++) {
-            int i = faces[f][e];
-            int j = faces[f][(e + 1) % 5];
-            if (i < j) DrawLine3D(w[i], w[j], wireColor);
+    } else {
+        // Wire: each face's 5 edges, de-duplicated across faces via the i<j test.
+        for (int f = 0; f < fcount; f++) {
+            for (int e = 0; e < 5; e++) {
+                int i = faces[f][e];
+                int j = faces[f][(e + 1) % 5];
+                if (i < j) DrawLine3D(w[i], w[j], wireColor);
+            }
         }
     }
 }
 
 // Regular dodecahedron body, upright. (The jetpack exhaust plume was deprecated
 // and archived in docs/exhaust-plume-archive.md.)
-inline void DrawPlayerDodeca(const Player& player) {
+inline void DrawPlayerDodeca(const Player& player, DrawPass pass) {
     Color outline, fill;
     PlayerFlashColors(player, outline, fill);
 
@@ -235,13 +241,13 @@ inline void DrawPlayerDodeca(const Player& player) {
     // spans position +/- radius and matches the collider.
     const float r = player.radius / DODECA_Y_EXTENT;
 
-    DrawShadedPolyhedron(c, r, DODECA_VERTS, 20, DODECA_FACES, 12, outline, fill);
+    DrawShadedPolyhedron(c, r, DODECA_VERTS, 20, DODECA_FACES, 12, outline, fill, pass);
 }
 
 // The player renders as a regular dodecahedron. Earlier prototype silhouettes
 // (DART, DELTA, LANDER, POD) are archived in docs/player-shapes-archive.md.
-inline void DrawPlayer(const Player& player) {
-    DrawPlayerDodeca(player);
+inline void DrawPlayer(const Player& player, DrawPass pass) {
+    DrawPlayerDodeca(player, pass);
 }
 
 //MARK: Reticle
@@ -252,13 +258,13 @@ inline void DrawPlayer(const Player& player) {
 
 // Crosshair: a ring (with a faint translucent fill disc) + a center cross with a
 // gap + a short prong poking forward along the aim so the facing reads in 3D.
-inline void DrawReticleCrosshair(const Reticle& ret, Vector3 fwd, Vector3 right, Vector3 up) {
+inline void DrawReticleCrosshair(const Reticle& ret, Vector3 fwd, Vector3 right, Vector3 up, DrawPass pass) {
     const Vector3 c = ret.position;
     const float s = ret.size;
     const Color wire = ret.color;
     const Color fill = ColorAlpha(ret.color, 0.22f);
 
-    // Ring vertices in the right/up plane.
+    // Ring vertices in the right/up plane (needed by both the fill disc and ring wire).
     const int N = RETICLE_RING_SEGMENTS;
     Vector3 ring[64]; // RETICLE_RING_SEGMENTS is well under this
     for (int i = 0; i < N; i++) {
@@ -268,14 +274,15 @@ inline void DrawReticleCrosshair(const Reticle& ret, Vector3 fwd, Vector3 right,
         ring[i] = Vector3Add(c, off);
     }
 
-    // Faint fill disc (both windings so it reads from either side).
-    BeginTranslucentFill();
-    for (int i = 0; i < N; i++) {
-        int j = (i + 1) % N;
-        DrawTriangle3D(c, ring[i], ring[j], fill);
-        DrawTriangle3D(c, ring[j], ring[i], fill);
+    if (pass == PASS_FILL) {
+        // Faint fill disc (both windings so it reads from either side).
+        for (int i = 0; i < N; i++) {
+            int j = (i + 1) % N;
+            DrawTriangle3D(c, ring[i], ring[j], fill);
+            DrawTriangle3D(c, ring[j], ring[i], fill);
+        }
+        return;
     }
-    EndTranslucentFill();
 
     // Ring wire.
     for (int i = 0; i < N; i++) {
@@ -298,8 +305,9 @@ inline void DrawReticleCrosshair(const Reticle& ret, Vector3 fwd, Vector3 right,
 
 // Corner brackets: four L-shaped brackets at the corners of a size-half-extent
 // square in the right/up plane, plus a small center tick. Open look, no fill.
-inline void DrawReticleBrackets(const Reticle& ret, Vector3 fwd, Vector3 right, Vector3 up) {
+inline void DrawReticleBrackets(const Reticle& ret, Vector3 fwd, Vector3 right, Vector3 up, DrawPass pass) {
     (void)fwd;
+    if (pass == PASS_FILL) return; // brackets are wire-only (no fill)
     const Vector3 c = ret.position;
     const float s = ret.size;
     const float arm = RETICLE_BRACKET_LENGTH * s; // length of each bracket leg
@@ -328,7 +336,7 @@ inline void DrawReticleBrackets(const Reticle& ret, Vector3 fwd, Vector3 right, 
     DrawLine3D(Vector3Subtract(c, Vector3Scale(up, dot)),    Vector3Add(c, Vector3Scale(up, dot)),    wire);
 }
 
-inline void DrawReticle(const Player& player) {
+inline void DrawReticle(const Player& player, DrawPass pass) {
     const Reticle& ret = player.reticle;
 
     // Orthonormal aim basis, built from world-up so it matches the camera's own
@@ -346,8 +354,8 @@ inline void DrawReticle(const Player& player) {
         up    = Vector3Normalize(Vector3RotateByAxisAngle(up,    fwd, ret.rotation));
     }
 
-    if (RETICLE_SHAPE == RETICLE_SHAPE_BRACKETS) DrawReticleBrackets(ret, fwd, right, up);
-    else                                         DrawReticleCrosshair(ret, fwd, right, up);
+    if (RETICLE_SHAPE == RETICLE_SHAPE_BRACKETS) DrawReticleBrackets(ret, fwd, right, up, pass);
+    else                                         DrawReticleCrosshair(ret, fwd, right, up, pass);
 }
 
 // Builds an irregular, low-poly "vector rock" - the 3D analog of main2d.cpp's
@@ -358,7 +366,7 @@ inline void DrawReticle(const Player& player) {
 // - so it stays consistent frame to frame without storing any mesh on the
 // Asteroid class. Drawn shaded-wire to match the other elements: translucent
 // double-sided fill faces with bright edges on top.
-inline void DrawAsteroidShape(const Asteroid& asteroid) {
+inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass) {
     // Per-asteroid seed from its (stable) starting position.
     const Vector3 seed = asteroid.startingPosition;
 
@@ -390,32 +398,32 @@ inline void DrawAsteroidShape(const Asteroid& asteroid) {
     Color fill    = ColorBrightness(asteroid.color_fill,    ASTEROID_FLASH_INTENSITY * flash);
     Color outline = ColorBrightness(asteroid.color_outline, ASTEROID_FLASH_INTENSITY * flash);
 
-    // Fill faces - drawn both windings so the translucent glow reads from any
-    // angle (backface culling leaves exactly one of each pair visible).
-    BeginTranslucentFill();
-    for (int f = 0; f < 20; f++) {
-        Vector3 a = verts[ICOSA_FACES[f][0]];
-        Vector3 b = verts[ICOSA_FACES[f][1]];
-        Vector3 c = verts[ICOSA_FACES[f][2]];
-        DrawTriangle3D(a, b, c, fill);
-        DrawTriangle3D(a, c, b, fill);
-    }
-    EndTranslucentFill();
-
-    // Wireframe edges on top. Each undirected edge appears in two faces with
-    // opposite winding, so the i<j test draws it exactly once (30 edges total).
-    for (int f = 0; f < 20; f++) {
-        for (int e = 0; e < 3; e++) {
-            int i = ICOSA_FACES[f][e];
-            int j = ICOSA_FACES[f][(e + 1) % 3];
-            if (i < j) DrawLine3D(verts[i], verts[j], outline);
+    if (pass == PASS_FILL) {
+        // Fill faces - drawn both windings so the translucent glow reads from any
+        // angle (backface culling leaves exactly one of each pair visible).
+        for (int f = 0; f < 20; f++) {
+            Vector3 a = verts[ICOSA_FACES[f][0]];
+            Vector3 b = verts[ICOSA_FACES[f][1]];
+            Vector3 c = verts[ICOSA_FACES[f][2]];
+            DrawTriangle3D(a, b, c, fill);
+            DrawTriangle3D(a, c, b, fill);
+        }
+    } else {
+        // Wireframe edges. Each undirected edge appears in two faces with opposite
+        // winding, so the i<j test draws it exactly once (30 edges total).
+        for (int f = 0; f < 20; f++) {
+            for (int e = 0; e < 3; e++) {
+                int i = ICOSA_FACES[f][e];
+                int j = ICOSA_FACES[f][(e + 1) % 3];
+                if (i < j) DrawLine3D(verts[i], verts[j], outline);
+            }
         }
     }
 }
 
 //MARK: Wrappers
-inline void DrawAsteroid(const Asteroid& asteroid) {
-    DrawAsteroidShape(asteroid);
+inline void DrawAsteroid(const Asteroid& asteroid, DrawPass pass) {
+    DrawAsteroidShape(asteroid, pass);
 }
 
 // Stella octangula (stellated octahedron): two interpenetrating regular
@@ -436,7 +444,7 @@ static const int STAR_FACES[8][3] = {
 // axis. Collision is unchanged - it still treats the rocket as a sphere of
 // `size` (collisions.cpp); this is purely visual. Circumradius == rocket.size,
 // so the star's points sit on the collision sphere.
-inline void DrawRocket(const Rocket& rocket) {
+inline void DrawRocket(const Rocket& rocket, DrawPass pass) {
     // Spin axis = direction of travel (current velocity, falling back to the
     // fired direction), so the spin follows the path even as gravity curves it.
     Vector3 travel = rocket.velocity;
@@ -465,28 +473,28 @@ inline void DrawRocket(const Rocket& rocket) {
         v[i] = Vector3Add(rocket.position, p);
     }
 
-    // Translucent fill (both windings) under the bright wireframe - house style.
-    BeginTranslucentFill();
-    for (int f = 0; f < 8; f++) {
-        Vector3 a = v[STAR_FACES[f][0]];
-        Vector3 b = v[STAR_FACES[f][1]];
-        Vector3 c = v[STAR_FACES[f][2]];
-        DrawTriangle3D(a, b, c, rocket.color_fill);
-        DrawTriangle3D(a, c, b, rocket.color_fill); // reverse winding
-    }
-    EndTranslucentFill();
-
-    // Wire: each tetrahedron's 6 edges (all vertex pairs).
-    for (int t = 0; t < 2; t++) {
-        for (int i = 0; i < 4; i++) {
-            for (int j = i + 1; j < 4; j++) {
-                DrawLine3D(v[STAR_TETRA[t][i]], v[STAR_TETRA[t][j]], rocket.color_outline);
+    if (pass == PASS_FILL) {
+        // Translucent fill (both windings) under the bright wireframe - house style.
+        for (int f = 0; f < 8; f++) {
+            Vector3 a = v[STAR_FACES[f][0]];
+            Vector3 b = v[STAR_FACES[f][1]];
+            Vector3 c = v[STAR_FACES[f][2]];
+            DrawTriangle3D(a, b, c, rocket.color_fill);
+            DrawTriangle3D(a, c, b, rocket.color_fill); // reverse winding
+        }
+    } else {
+        // Wire: each tetrahedron's 6 edges (all vertex pairs).
+        for (int t = 0; t < 2; t++) {
+            for (int i = 0; i < 4; i++) {
+                for (int j = i + 1; j < 4; j++) {
+                    DrawLine3D(v[STAR_TETRA[t][i]], v[STAR_TETRA[t][j]], rocket.color_outline);
+                }
             }
         }
     }
 }
 
-inline void DrawExplosion(const Explosion& explosion) {
+inline void DrawExplosion(const Explosion& explosion, DrawPass pass) {
     // Two-layer vector explosion, all driven by Explosion::update(dt) (called
     // each frame in gamespace.h), which grows radius 0 -> maxRadius:
     //   - a bright near-white outer shockwave shell (wire only) that flashes
@@ -496,9 +504,12 @@ inline void DrawExplosion(const Explosion& explosion) {
     t = Clamp(t, 0.0f, 1.0f);
 
     // Outer shockwave: full current radius, near-white flash fading to nothing.
-    unsigned char shockAlpha = (unsigned char)(255 * (1.0f - t));
-    Color shockColor = {255, 230, 180, shockAlpha};
-    DrawSphereWires(explosion.position, explosion.radius, 16, 16, shockColor);
+    // Wire-only, so it only draws in the wire pass.
+    if (pass == PASS_WIRE) {
+        unsigned char shockAlpha = (unsigned char)(255 * (1.0f - t));
+        Color shockColor = {255, 230, 180, shockAlpha};
+        DrawSphereWires(explosion.position, explosion.radius, 16, 16, shockColor);
+    }
 
     // Core: smaller orange sphere lagging the shockwave. Fill alpha is already
     // faded by Explosion::update; fade the wire outline over the lifetime too.
@@ -506,5 +517,5 @@ inline void DrawExplosion(const Explosion& explosion) {
     unsigned char coreOutlineAlpha = (unsigned char)(255 * (1.0f - t));
     Color coreOutline = {explosion.color_outline.r, explosion.color_outline.g,
                          explosion.color_outline.b, coreOutlineAlpha};
-    DrawShadedSphere(explosion.position, coreRadius, coreOutline, explosion.color_fill);
+    DrawShadedSphere(explosion.position, coreRadius, coreOutline, explosion.color_fill, pass);
 }

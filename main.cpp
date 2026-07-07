@@ -1083,7 +1083,7 @@ int main(int argc, char** argv) {
             // below, which owns all death text, so the dead frame renders only its
             // glitched/greyscale frozen world here - no live HUD, no death text.)
             if (player.isAlive) {
-                DrawFPS(10, 10); // TEMP diagnostic: current FPS, top-left. Remove after checking networked perf.
+                // DrawFPS(10, 10); // uncomment to show FPS in the top-left corner
                 // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
                 DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
                 DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
