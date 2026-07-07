@@ -1094,12 +1094,12 @@ int main(int argc, char** argv) {
             }
             if (!player.isAlive && grayscaleOK) EndShaderMode();
             // TEMP diagnostic: watch the spectate fade values on death. Remove.
-            if (!player.isAlive) {
-                DrawText(TextFormat("stmr=%.2f  cd=%.2f  spec=%d  hurt=%.2f",
-                                    player.SpectatingTimer, player.countdownToSpectating,
-                                    (int)player.isSpectating, hurt),
-                         10, 30, 20, YELLOW);
-            }
+            // if (!player.isAlive) {
+            //     DrawText(TextFormat("stmr=%.2f  cd=%.2f  spec=%d  hurt=%.2f",
+            //                         player.SpectatingTimer, player.countdownToSpectating,
+            //                         (int)player.isSpectating, hurt),
+            //              10, 30, 20, YELLOW);
+            // }
             // MARK: HUD
             // text size, x, y, color.
             // draw onscreen text HUD. (Death transitions to the GAME_OVER screen
