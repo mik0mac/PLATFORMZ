@@ -4,6 +4,8 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include <vector>
+#include <string>
+#include <initializer_list>
 #include <cmath>
 
 #include "random.h"
@@ -23,7 +25,17 @@ public:
             bool spacial = true, int poolSize = 1, float pitchJitter = 0.0f)
         : baseVolume(volume), localPlayerOnly(localOnly), spacial(spacial),
           poolSize(poolSize < 1 ? 1 : poolSize), pitchJitter(pitchJitter),
-          filename(file) {}
+          filenames{ file } {}
+
+    // Variation form: pass N distinct files instead of one. Each file becomes
+    // its own real voice (LoadSound, no aliasing), and the pool size is the file
+    // count - so nextSlot() round-robins across the *variations*, giving a
+    // different clip per trigger plus the same overlap a voice pool provides.
+    audioFX(std::initializer_list<std::string> files, float volume = 1.0f,
+            bool localOnly = false, bool spacial = true, float pitchJitter = 0.0f)
+        : baseVolume(volume), localPlayerOnly(localOnly), spacial(spacial),
+          poolSize((int)files.size() < 1 ? 1 : (int)files.size()),
+          pitchJitter(pitchJitter), filenames(files), distinctFiles(true) {}
 
     float baseVolume;
     bool  localPlayerOnly;
@@ -34,7 +46,15 @@ public:
 
     void load() {
         pool.resize(poolSize);
-        pool[0] = LoadSound(filename.c_str());
+        if (distinctFiles) {
+            // Each slot is its own real sound (a variation). A failed load
+            // yields an empty Sound; playback on it is a silent no-op, so just
+            // leave the slot as-is - nothing to alias.
+            for (int i = 0; i < poolSize; i++)
+                pool[i] = LoadSound(filenames[i].c_str());
+            return;
+        }
+        pool[0] = LoadSound(filenames[0].c_str());
         // A failed load yields an empty Sound (null buffer); aliasing it would
         // dereference null and crash. Skip aliasing - playback on the empty
         // base is a silent no-op.
@@ -50,8 +70,13 @@ public:
     }
 
     void unload() {
-        for (int i = 1; i < (int)pool.size(); i++) UnloadSoundAlias(pool[i]);
-        if (!pool.empty()) UnloadSound(pool[0]);
+        if (distinctFiles) {
+            // Every slot is a real sound, not an alias.
+            for (Sound& s : pool) UnloadSound(s);
+        } else {
+            for (int i = 1; i < (int)pool.size(); i++) UnloadSoundAlias(pool[i]);
+            if (!pool.empty()) UnloadSound(pool[0]);
+        }
         pool.clear();
     }
 
@@ -98,7 +123,8 @@ private:
 
     std::vector<Sound> pool;
     int cursor = 0;
-    std::string filename;
+    std::vector<std::string> filenames;
+    bool distinctFiles = false; // true: N real files (variations); false: N aliases of one
 };
 
 // ---------------------------------------------------------------------------

@@ -156,6 +156,13 @@ public:
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
     Vector3 velocity = {0.0f, 0.0f, 0.0f}; // Player velocity, updated by movement input and gravity
 
+    // Height at the previous frame's platform check. Used to edge-trigger the
+    // pass-through sound exactly once per traversal: fire on the frame the player
+    // crosses a platform's center plane, not every frame it overlaps the box.
+    // prevYValid gates the first frame (and stays false until one is recorded).
+    float prevY = 0.0f;
+    bool  prevYValid = false;
+
     // Look direction, stored as yaw/pitch rather than a raw Vector3 - this is
     // the authoritative state for both camera orientation and player facing
     // (shooting direction). A Vector3 can't cleanly accumulate frame-over-frame

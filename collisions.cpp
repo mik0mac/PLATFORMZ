@@ -481,10 +481,21 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                     }
                 }
                 
-                // play the pass-through sound if the player is midway through the platform, and moving fast enough to be considered a "pass-through" (not just a landing).
-                if (abs(player.velocity.y) > 2.0f && (abs(player.position.y - platform.position.y)) < 1.0f) {
-                    space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
+                // Play the pass-through sound once per traversal, edge-triggered
+                // on the frame the player crosses this platform's center plane
+                // while moving fast enough to count as a pass-through (not a
+                // landing). A level test (|pos.y - center| < 1) would re-fire
+                // every frame the player overlaps the box - a dozen-odd triggers
+                // per pass - which stacked audibly once the voices became four
+                // distinct clips. prevRel*curRel < 0 means the player's height
+                // straddled the center between last frame and this one.
+                if (player.prevYValid && fabsf(player.velocity.y) > 2.0f) {
+                    float prevRel = player.prevY        - platform.position.y;
+                    float curRel  = player.position.y   - platform.position.y;
+                    if (prevRel * curRel < 0.0f) {
+                        space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
                     }
+                }
                 }
 
 
@@ -503,8 +514,14 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 // }
             }
-        }
+
+        // Record this frame's height so next frame's crossing test has a
+        // reference. Runs once per alive player, after all its platforms are
+        // checked, so prevY is stable for every platform in the loop above.
+        player.prevY = player.position.y;
+        player.prevYValid = true;
     }
+}
 
 
 //MARK: Player vs Walls

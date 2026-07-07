@@ -124,7 +124,11 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/firerate_choke.wav", 1.0f, true,  false, 1),            // FX_FIRERATE_CHOKE
         audioFX("assets/sounds/wall_bounce_player.wav", 0.6f, false, true, 2),         // FX_WALL_BOUNCE_PLAYER (spatial)
         audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true, 4),        // FX_ROCKET_THROUGH_WALL (spatial)
-        audioFX("assets/sounds/move_through_platform.wav", 0.3f, true, false, 4, 0.08f), // FX_PLATFORM_PASSTHROUGH (4-voice round robin, gated below)
+        audioFX({ "assets/sounds/move_through_platform_0.wav",
+                  "assets/sounds/move_through_platform_1.wav",
+                  "assets/sounds/move_through_platform_2.wav",
+                  "assets/sounds/move_through_platform_3.wav" },
+                0.3f, true, false, 0.08f),                                             // FX_PLATFORM_PASSTHROUGH (4 round-robin variation files, gated below)
         audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false, 1),           // FX_MESSAGE_RECEIVED (local only)
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
@@ -132,8 +136,8 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)         // FX_ENGAGE_EARTH_GRAVITY
     };
     // Platform passthrough is suppressed while earth-gravity engage is ringing
-    // (one-directional: engage is never blocked, and passthrough's own 4 voices
-    // still round-robin freely).
+    // (one-directional: engage is never blocked, and passthrough's own 4
+    // variation files still round-robin freely).
     fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
 
