@@ -388,6 +388,8 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"fuel\":"   + jf(p.fuel);
         s += ",\"ammo\":"   + ji(p.ammo);
         s += ",\"alive\":"  + jb(p.isAlive);
+        s += ",\"spec\":"   + jb(p.isSpectating);    // server-owned: dead player has become a free-fly spectator
+        s += ",\"stmr\":"   + jf(p.SpectatingTimer); // post-death spectate countdown (drives the client's greyscale ramp)
         s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (set for unoccupied slots during a match)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
         // A slot renders if a client occupies it OR a bot drives it; genuinely
@@ -933,24 +935,31 @@ void SimulationLoop() {
                 gameSpace.updateActiveObjects();
 
                 //MARK: Match end
-                // Last-player-standing: end the match when <= threshold connected
-                // players remain alive. threshold is 1 for a multi-player match and
-                // 0 for a solo start, so a lone player's match ends only when they
-                // die (not instantly). Only connected slots count - empty slots are
-                // inert and never "win". PLAYING-only: once GAMEOVER we keep the
-                // world simulating (above) but never re-evaluate the end condition.
+                // End the match when EITHER every human is dead OR only one player
+                // (human or bot) is left standing - so a 2-human match keeps going
+                // past the first human's death, and both humans reach GAME OVER on
+                // the same phase flip. The single-survivor clause is gated to
+                // multi-slot rosters so a solo start (1 slot) doesn't end instantly;
+                // it then ends only when the lone human dies (aliveHumans == 0),
+                // preserving today's solo behavior. A dead human keeps spectating
+                // (client-side greyscale) until the match actually ends here.
+                // PLAYING-only: once GAMEOVER we keep simulating (above) but never
+                // re-evaluate the end condition.
                 if (phase == Phase::PLAYING) {
                     std::lock_guard<std::mutex> gc(clientMutex);
                     auto& players = gameSpace.getPlayers();
-                    int aliveConnected = 0;
+                    int aliveHumans = 0;
                     for (auto& [cid, client] : clients) {
                         if (client.playerId >= 0 && client.playerId < (int)players.size()
-                            && players[client.playerId].isAlive) aliveConnected++;
+                            && players[client.playerId].isAlive) aliveHumans++;
                     }
-                    int threshold = matchStartConnected >= 2 ? 1 : 0;
-                    if (aliveConnected <= threshold) {
+                    int aliveTotal = 0;
+                    for (const auto& p : players) if (p.isAlive) aliveTotal++;
+                    bool multi = players.size() >= 2;
+                    if (aliveHumans == 0 || (multi && aliveTotal <= 1)) {
                         gamePhase = Phase::GAMEOVER;
-                        std::cout << "Match over (alive " << aliveConnected << ")\n";
+                        std::cout << "Match over (humans alive " << aliveHumans
+                                  << ", total alive " << aliveTotal << ")\n";
                     }
                 }
             }

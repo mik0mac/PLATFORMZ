@@ -134,8 +134,18 @@ public:
     // ID
     uint32_t id = 0; // Unique identifier for the player
     std::string name = "Player"; // Player's display name
+    // Multiplayer: is this slot occupied by a connected client? Defaults true so
+    // local single-player and test bots always render; the server sets it per
+    // slot in the broadcast (see buildStatePacket), and the client skips drawing
+    // unoccupied slots (gamespace.h draw()). Not used by the local sim.
+    bool isConnected = true;
 
     bool isBot = false; // Whether the player is a bot or a human player.
+
+    bool isSpectating = false; // Whether the player is currently spectating (not actively playing).  Set in gameSpace.
+    float countdownToSpectating = 5.0f; // Countdown length for the player to enter spectating mode after death.
+    float SpectatingTimer = countdownToSpectating; // Timer for the player to enter spectating mode after death.
+
     uint32_t rocketCounter = 0; // Counter for rockets fired by this player, used to generate unique rocket IDs
 
     // Reticle
@@ -264,6 +274,17 @@ public:
         if (noFuelSfxCooldown > 0.0f) noFuelSfxCooldown -= dt;
         if (warningSfxCooldown > 0.0f) warningSfxCooldown -= dt;
         if (earthGravSfxCooldown > 0.0f) earthGravSfxCooldown -= dt;
+
+        // Spectate delay: a dead (non-bot) player becomes a free-flying spectator
+        // after a short countdown. updateFuel then refills fuel (isSpectating) so
+        // updateVelocity lets them fly and the no-fuel cue stops. This runs in BOTH
+        // modes via updatePositions -> updatePos: on the server for networked play
+        // (authoritative; the flag/timer are synced to clients), on the client for
+        // local play. Bots are excluded so a dead AI slot doesn't fly around.
+        if (!isAlive && !isBot && !isSpectating) {
+            SpectatingTimer -= dt;
+            if (SpectatingTimer < 0.0f) isSpectating = true;
+        }
     }
 
     // MARK: Player Size and Collision
@@ -292,11 +313,7 @@ public:
     bool isAlive = true; // Player is alive if health > 0.
     bool deathBurstSpawned = false; // VFX guard: the one-time elimination spark burst fires once (players aren't erased).
     int damage = PLAYER_DAMAGE; // Damage dealt to other players or asteroids when colliding.
-    // Multiplayer: is this slot occupied by a connected client? Defaults true so
-    // local single-player and test bots always render; the server sets it per
-    // slot in the broadcast (see buildStatePacket), and the client skips drawing
-    // unoccupied slots (gamespace.h draw()). Not used by the local sim.
-    bool isConnected = true;
+    
     int ammo = PLAYER_STARTING_AMMO;
     int maxAmmo = PLAYER_MAX_AMMO; // Player's maximum ammo, can be increased by pickups
     float fireRate = PLAYER_FIRE_RATE; // Shots per second, can be increased by pickups
@@ -339,6 +356,9 @@ public:
         }
         if (!isAlive) {
             fuel = 0.0f; // If player is dead, fuel is zero
+        }
+        if (isSpectating) {
+            fuel = PLAYER_MAX_FUEL; // If player is spectating, fuel is max.  Can move freely without jetpack restrictions.
         }
     }
 

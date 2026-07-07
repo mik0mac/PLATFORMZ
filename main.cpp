@@ -340,15 +340,26 @@ int main(int argc, char** argv) {
     // Networked: the server's phase just went PLAYING (we started, a peer started,
     // or we joined a running match). Reset per-match prediction/flash state (NOT
     // inputSeq - it stays monotonic across matches so the server doesn't discard
-    // our packets) and enter the match. myIndex persists; predInit=false re-seeds
-    // the look from the server's spawn orientation.
+    // our packets) and enter the match. myIndex persists.
     auto enterNetworkedMatch = [&]() {
-        predInit = false; prevHealth = -1; netHurt = 0.0f;
+        prevHealth = -1; netHurt = 0.0f;
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
         showControls = false; showOptions = false; // close any open lobby modal so it can't hold the freed cursor
         DisableCursor();
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
         consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
+        // Seed the look prediction from the server's spawn orientation NOW - the
+        // countdown states already carried it into our slot - so the very first
+        // PLAYING frame sends and renders the correct facing instead of a stale
+        // predYaw (which showed the 2nd player facing the wrong way at spawn until
+        // they moved). If our slot isn't known yet, fall back to the lazy seed in
+        // the PLAYING block.
+        std::vector<Player>& ps = gameSpace.getPlayers();
+        if (myIndex >= 0 && myIndex < (int)ps.size()) {
+            predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch; predInit = true;
+        } else {
+            predInit = false;
+        }
         screen = GameScreen::PLAYING;
     };
 
@@ -765,9 +776,17 @@ int main(int argc, char** argv) {
             // would be unusable - so we accumulate yaw/pitch from the mouse here
             // (same math as Player::updateLook) and send the absolute values.
             in = PollLocalInput();
-            if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
-            if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; } // drop cursor-lock jump
-            if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; } // drop the match-start click (issue #4)
+            if (!IsCursorHidden()) {
+                in = PlayerInput{}; // cursor free (Esc, or window unfocused): no look/move/fire
+            } else {
+                // First frame the mouse is actually captured: swallow the cursor-
+                // centering jump and the match-start click HERE, not on the first
+                // PLAYING frame - which can arrive before the window is focused (two
+                // clients on one machine, or an alt-tab during the countdown), which
+                // would otherwise leak the capture jump into the aim later.
+                if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; }
+                if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; }
+            }
             predYaw   += in.lookDelta.x * 0.0025f;   // 0.0025 = Player::lookSensitivity
             predPitch -= in.lookDelta.y * 0.0025f;
             predPitch  = Clamp(predPitch, -89.0f * DEG2RAD, 89.0f * DEG2RAD);
@@ -872,9 +891,14 @@ int main(int argc, char** argv) {
             // Gather this frame's intent into a source-agnostic struct, then
             // apply it - the same struct the networked server applies remotely.
             in = PollLocalInput();
-            if (!IsCursorHidden()) in = PlayerInput{}; // cursor freed (Esc): no look/move/fire
-            if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; } // drop cursor-lock jump
-            if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; } // drop the match-start click (issue #4)
+            if (!IsCursorHidden()) {
+                in = PlayerInput{}; // cursor free (Esc, or window unfocused): no look/move/fire
+            } else {
+                // Swallow the cursor-centering jump + match-start click on the first
+                // CAPTURED frame, not the first PLAYING frame (see networked path).
+                if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; }
+                if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; }
+            }
             float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
             ApplyPlayerInput(player, in, dt, gravity, gameSpace);
 
@@ -946,8 +970,10 @@ int main(int argc, char** argv) {
 
         // MARK: ESCAPE KEY / CURSOR TOGGLE
         if (IsKeyPressed(KEY_ESCAPE)) {
-            // toggle cursor capture so you can alt-tab / quit comfortably
-            if (IsCursorHidden()) EnableCursor(); else DisableCursor();
+            // toggle cursor capture so you can alt-tab / quit comfortably. Re-arm
+            // the first-look swallow on re-capture so the centering jump doesn't
+            // leak into the aim (same reason it's armed at match start).
+            if (IsCursorHidden()) EnableCursor(); else { DisableCursor(); consumeFirstLook = true; }
         }
 
         // MARK: DRAW
@@ -1000,9 +1026,12 @@ int main(int argc, char** argv) {
             // On death: drive the glitch with a sustained intensity (flashIntensity
             // would otherwise decay to 0 and the effect would fade out), and render
             // the whole blit through the greyscale shader below.
-            const float DEATH_GLITCH = 0.5f;
-            if (!player.isAlive) hurt = DEATH_GLITCH;
-
+            // const float DEATH_GLITCH = 0.5f;
+            if (!player.isAlive && !player.isSpectating) {
+                hurt = player.SpectatingTimer / player.countdownToSpectating;
+            } 
+            // if (!networked && !player.isAlive && !player.isSpectating) hurt = DEATH_GLITCH;
+            
             if (!player.isAlive && grayscaleOK) BeginShaderMode(grayscaleShader);
             if (hurt <= 0.0f) {
                 // Clean path: one flipped full-screen blit.
