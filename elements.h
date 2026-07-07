@@ -435,8 +435,10 @@ public:
     }
 
     void updatePos(float dt) {
-        position = Vector3Add(position, Vector3Scale(velocity, dt));
-        // asteroids will move in a straight line at a constant velocity.
+        // Straight-line drift at constant velocity, except during a bounce, when the
+        // body physically slows while compressed and speeds back up as it springs
+        // round (bounceSpeedScale is 1.0 whenever no bounce is active).
+        position = Vector3Add(position, Vector3Scale(velocity, bounceSpeedScale() * dt));
 
         // Decay the damage-flash here since this runs every frame for every
         // asteroid (gamespace.h) - no separate update pass needed.
@@ -467,8 +469,10 @@ public:
         return ASTEROID_FLASH_DURATION > 0.0f ? Clamp(flashTimer / ASTEROID_FLASH_DURATION, 0.0f, 1.0f) : 0.0f;
     }
 
-    // Squash-and-stretch bounce state (visual only; hitbox is unaffected). Set on
-    // impact by bounce(), decayed in updatePos, read by the draw code via bounceDeform.
+    // Squash-and-stretch bounce state. Set on impact by bounce(), decayed in
+    // updatePos, read by the draw code via bounceDeform. Drives both the visual
+    // deform AND a matching physical speed dip (bounceSpeedScale); the collision
+    // hitbox (size) is still unaffected.
     float bounceTimer = 0.0f;                  // seconds of squash animation remaining
     float bounceDuration = ASTEROID_BOUNCE_DURATION; // this bounce's total run time (scaled by speed at hit time)
     Vector3 bounceNormal = {0.0f, 1.0f, 0.0f}; // world-space contact axis to compress along
@@ -498,6 +502,15 @@ public:
         if (bounceTimer <= 0.0f || bounceDuration <= 0.0f) return 0.0f;
         float phase = 1.0f - Clamp(bounceTimer / bounceDuration, 0.0f, 1.0f);
         return bounceStrength * expf(-ASTEROID_BOUNCE_DECAY * phase) * cosf(ASTEROID_BOUNCE_FREQ * phase);
+    }
+
+    // Speed multiplier applied to position integration during a bounce so the motion
+    // matches the squash: only compression (deform > 0) slows the body, so it stalls
+    // hardest at impact and speeds back up as it springs round; the overshoot-stretch
+    // (deform < 0) and the idle case both leave it at full speed (returns 1.0).
+    float bounceSpeedScale() const {
+        float compression = fmaxf(bounceDeform(), 0.0f); // 0..bounceStrength; stretch phases don't slow it
+        return 1.0f - ASTEROID_BOUNCE_SPEED_DIP * compression;
     }
 
     // attributes

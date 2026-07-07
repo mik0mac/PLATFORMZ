@@ -142,7 +142,7 @@ const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cue
 const int   WARN_HEALTH_THRESHOLD   = 20;    // health at/below this pulses the warning alarm
 const float WARN_FUEL_THRESHOLD     = 20.0f; // fuel at/below this pulses the warning alarm
 const int   WARN_AMMO_THRESHOLD     = 10;    // ammo at/below this pulses the warning alarm
-const float WARNING_SFX_INTERVAL    = 4.0f;  // min seconds between warning pulses while a resource stays low
+const float WARNING_SFX_INTERVAL    = 6.0f;  // min seconds between warning pulses while a resource stays low
 const float EARTH_GRAV_SFX_INTERVAL = 0.5f;  // min seconds between earth-gravity engage cues (guards rapid taps)
 const float PLAYER_FIRE_RATE = 3.0f; // shots per second.
 
@@ -200,7 +200,7 @@ const float ASTEROID_MIN_SIZE = 6.0f; // Minimum radius of the asteroid
 const float ASTEROID_MAX_SIZE = 6.0f; // GAMESPACE_HALF_SIZE / 5.0f; // Maximum radius of the asteroid
 const float ASTEROID_MIN_SPEED = 6.0f; // Minimum starting speed of the asteroid
 const float ASTEROID_MAX_SPEED = 12.0f; // Maximum starting speed of the asteroid
-const float ASTEROID_SPEED_LIMIT = 36.0f; // when bouncing off walls, this speed limit is enforced to avoid runaway velocity with elasticity > 1.0.
+const float ASTEROID_SPEED_LIMIT = 48.0f; // when bouncing off walls, this speed limit is enforced to avoid runaway velocity with elasticity > 1.0.
 // Min center-to-center distance to keep a freshly-scattered asteroid away from any
 // player's spawn (issue #5). ~= max asteroid radius (8) + player radius (2) + margin.
 const float ASTEROID_PLAYER_SPAWN_BUFFER = 15.0f;
@@ -211,17 +211,23 @@ const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage
 // Squash-and-stretch bounce (visual only): on impact the asteroid compresses along
 // the contact normal, springs past neutral into a brief stretch, then settles. A
 // damped cosine drives the deform; see Asteroid::bounceDeform in elements.h.
-const float ASTEROID_BOUNCE_DURATION = .25f; // seconds the squash animation runs
-const float ASTEROID_BOUNCE_SQUASH = 0.45f;   // max fractional compression along the impact normal
-const float ASTEROID_BOUNCE_STRETCH = 0.22f;  // perpendicular expansion fraction (~half squash, roughly volume-preserving)
+const float ASTEROID_BOUNCE_DURATION = 0.5f; // seconds the squash animation runs
+const float ASTEROID_BOUNCE_SQUASH = 0.2f;   // max fractional compression along the impact normal
+const float ASTEROID_BOUNCE_STRETCH = 0.1f;  // perpendicular expansion fraction (~half squash, roughly volume-preserving)
 const float ASTEROID_BOUNCE_DECAY = 4.0f;     // spring damping - higher = fewer visible wobbles
 const float ASTEROID_BOUNCE_FREQ = 3.0f;      // oscillation frequency over the phase (radians) - ~just past one overshoot
-const float ASTEROID_BOUNCE_REF_SPEED = ASTEROID_MAX_SPEED; // impact speed mapping to full-strength squash; also the speed at which the animation plays at 1x
+const float ASTEROID_BOUNCE_REF_SPEED = ASTEROID_SPEED_LIMIT; // impact speed mapping to full-strength squash; also the speed at which the animation plays at 1x
 // The animation plays faster the faster the asteroid is moving (a hard bounce snaps,
 // a slow drift squishes lazily). Effective duration = DURATION / rate, where rate is
 // (asteroid speed / REF_SPEED) clamped to this range - same spring shape, different tempo.
 const float ASTEROID_BOUNCE_RATE_MIN = 0.6f; // slowest playback (slow asteroids) - duration up to ~1.7x
 const float ASTEROID_BOUNCE_RATE_MAX = 2.5f; // fastest playback (fast asteroids) - duration down to 0.4x
+// Physical decel/accel to match the squash: while the body is compressed it also
+// travels slower, then speeds back up as it springs round - so the motion sells the
+// bounce, not just the shape. 0 = pure visual (constant speed); ~0.85 = a hard hit
+// nearly stalls at max compression before pushing off. Scales with compression, so
+// gentle grazes barely slow and hard hits stall hardest.
+const float ASTEROID_BOUNCE_SPEED_DIP = 0.85f; // fraction of speed shed at peak compression (0..1, keep < 1 so it never stops/reverses)
 
 //MARK: Rocket Constants
 const float ROCKET_SPEED = 60.0f; // units/sec
