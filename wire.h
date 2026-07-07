@@ -25,6 +25,7 @@
 
 #include "input.h"     // PlayerInput
 #include "gamespace.h" // GameSpace + element types
+#include "netbin.h"    // binary state-packet decode (UDP)
 
 //MARK: Outbound - input
 // Matches the server's parseInput() schema. yaw/pitch are absolute (the server
@@ -187,6 +188,178 @@ inline Vector3 vec3(const json& jo, const char* x, const char* y, const char* z)
 
 } // namespace wire_detail
 
+//MARK: Inbound - binary state (UDP)
+// Decode a binary state packet (server buildStateBinary) into the GameSpace, the
+// mirror of the "state" branch of applyMessage below - same sync-by-id semantics,
+// reading fields sequentially from the byte stream instead of JSON. Field ORDER
+// must match the server writer exactly.
+inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
+    ServerMessage msg;
+    msg.type = ServerMessage::Type::State;
+
+    nb::Reader r(buf);
+    r.u8();                      // version tag (already checked by caller)
+    msg.tick = r.u32();
+    r.u32();                     // seq (our own echoed lastSeq; unused client-side)
+    uint8_t phase = r.u8();
+    msg.phase = phase == 2 ? ServerMessage::Phase::Playing
+              : phase == 1 ? ServerMessage::Phase::Countdown
+              : phase == 3 ? ServerMessage::Phase::GameOver
+              : phase == 0 ? ServerMessage::Phase::Lobby
+                           : ServerMessage::Phase::Unknown;
+    msg.countdown = r.f32();
+
+    // Options (present every packet).
+    msg.hasOptions  = true;
+    msg.optNPlayers = r.u8();
+    msg.optDiff     = r.f32();
+    uint8_t optFlags = r.u8();
+    msg.optRexpl = (optFlags & 1) != 0;
+    msg.optEgpt  = (optFlags & 2) != 0;
+
+    // Players - fixed slots, never erased; hide slots the server stopped sending.
+    {
+        auto& players = gs.getPlayers();
+        std::unordered_set<uint32_t> present;
+        uint8_t count = r.u8();
+        for (int k = 0; k < count; ++k) {
+            uint32_t id = r.u32();
+            present.insert(id);
+            Player* p = nullptr;
+            for (auto& e : players) if (e.id == id) { p = &e; break; }
+            bool isNew = false;
+            if (!p) { Player np; np.id = id; players.push_back(np); p = &players.back(); isNew = true; }
+
+            Vector3 pos = { r.f32(), r.f32(), r.f32() };
+            Vector3 vel = { r.f32(), r.f32(), r.f32() };
+            float yaw = r.f32(), pitch = r.f32();
+            int   hp   = r.i16();
+            float fuel = r.f32();
+            int   ammo = r.i16();
+            float flash = r.f32();
+            float stmr  = r.f32();
+            int   score = r.i32();
+            uint8_t flags = r.u8();
+            std::string name = r.str();
+
+            p->position = pos;
+            if (isNew) p->startingPosition = pos;
+            p->velocity      = vel;
+            p->yaw           = yaw;
+            p->pitch         = pitch;
+            p->health        = hp;
+            p->fuel          = fuel;
+            p->ammo          = ammo;
+            p->flashTimer    = flash;
+            p->SpectatingTimer = stmr;
+            p->score         = score;
+            p->isAlive       = (flags & 1) != 0;
+            p->isBot         = (flags & 2) != 0;
+            p->isConnected   = (flags & 4) != 0;
+            p->isSpectating  = (flags & 8) != 0;
+            p->name          = name;
+        }
+        for (Player& p : players)
+            if (present.find(p.id) == present.end()) p.isConnected = false;
+    }
+
+    // Asteroids - sync by id, drop absent. startingPosition seeds the wire shape.
+    {
+        auto& asteroids = gs.getAsteroids();
+        std::unordered_set<uint32_t> present;
+        uint16_t count = r.u16();
+        for (int k = 0; k < count; ++k) {
+            uint32_t id = r.u32();
+            present.insert(id);
+            Asteroid* a = nullptr;
+            for (auto& e : asteroids) if (e.id == id) { a = &e; break; }
+            bool isNew = false;
+            if (!a) { Asteroid na; na.id = id; asteroids.push_back(na); a = &asteroids.back(); isNew = true; }
+
+            Vector3 pos = { r.f32(), r.f32(), r.f32() };
+            Vector3 vel = { r.f32(), r.f32(), r.f32() };
+            float size = r.f32();
+            int   hp   = r.i16();
+            float flash = r.f32();
+
+            a->position = pos;
+            if (isNew) a->startingPosition = pos;
+            a->velocity    = vel;
+            a->size        = size;
+            a->health      = hp;
+            a->flashTimer  = flash;
+            a->isDestroyed = false; // server never sends destroyed; they vanish from the set
+        }
+        asteroids.erase(std::remove_if(asteroids.begin(), asteroids.end(),
+            [&](const Asteroid& a) { return present.find(a.id) == present.end(); }), asteroids.end());
+    }
+
+    // Rockets - sync by id, drop absent. Direction derived from velocity.
+    {
+        auto& rockets = gs.getRockets();
+        std::unordered_set<uint32_t> present;
+        uint16_t count = r.u16();
+        for (int k = 0; k < count; ++k) {
+            uint32_t id = r.u32();
+            present.insert(id);
+            Rocket* rk = nullptr;
+            for (auto& e : rockets) if (e.id == id) { rk = &e; break; }
+            if (!rk) { Rocket nr; nr.id = id; rockets.push_back(nr); rk = &rockets.back(); }
+
+            Vector3 pos = { r.f32(), r.f32(), r.f32() };
+            Vector3 vel = { r.f32(), r.f32(), r.f32() };
+            rk->position    = pos;
+            rk->velocity    = vel;
+            rk->direction   = Vector3Normalize(vel);
+            rk->isDestroyed = false;
+        }
+        rockets.erase(std::remove_if(rockets.begin(), rockets.end(),
+            [&](const Rocket& rk) { return present.find(rk.id) == present.end(); }), rockets.end());
+    }
+
+    // Explosions - ephemeral, rebuilt each packet.
+    {
+        auto& explosions = gs.getExplosions();
+        explosions.clear();
+        uint16_t count = r.u16();
+        for (int k = 0; k < count; ++k) {
+            Explosion e;
+            e.position = { r.f32(), r.f32(), r.f32() };
+            e.radius   = r.f32();
+            e.isActive = r.u8() != 0;
+            explosions.push_back(e);
+        }
+    }
+
+    // Audio events - appended (drained + cleared each frame by main.cpp).
+    {
+        uint8_t count = r.u8();
+        for (int k = 0; k < count; ++k) {
+            NetAudioEvent ev;
+            ev.fx          = r.u8();
+            ev.owner       = r.u32();
+            ev.pos         = { r.f32(), r.f32(), r.f32() };
+            ev.volumeScale = r.f32();
+            gs.getAudioEvents().push_back(ev);
+        }
+    }
+
+    // Messages - appended; text/color/visibility rebuilt client-side.
+    {
+        uint8_t count = r.u8();
+        for (int k = 0; k < count; ++k) {
+            uint8_t mt = r.u8();
+            uint32_t pai = r.u32();
+            uint32_t pbi = r.u32();
+            std::string pa = r.str();
+            std::string pb = r.str();
+            gs.getMessages().push_back(Message((MessageType)mt, pa, pb, pai, pbi));
+        }
+    }
+
+    return msg;
+}
+
 //MARK: Inbound - apply
 // Parse one text frame. For a "state" packet, overwrite the GameSpace vectors to
 // match the server. Returns what kind of message it was (welcome carries the
@@ -194,6 +367,11 @@ inline Vector3 vec3(const json& jo, const char* x, const char* y, const char* z)
 inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     using nlohmann::json;
     using namespace wire_detail;
+
+    // Binary state packet (UDP): byte 0 is the version tag, never '{'. Everything
+    // else (welcome, and the JSON state sent to WebSocket clients) is JSON.
+    if (!text.empty() && (uint8_t)text[0] == nb::STATE_BIN_VERSION)
+        return applyBinaryState(text, gs);
 
     ServerMessage msg;
     json j = json::parse(text, nullptr, /*allow_exceptions=*/false);

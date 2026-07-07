@@ -1030,15 +1030,17 @@ int main(int argc, char** argv) {
             Texture2D tex = sceneTarget.texture;
             // Render textures are stored Y-flipped, so every source rect that
             // samples this texture uses a NEGATIVE height to flip it upright.
-
+            
+            // Glitch intensity ramps down to 0 at which point the player enters the spectating state.
+            if (!player.isAlive && !player.isSpectating) {
+                hurt = player.SpectatingTimer / player.countdownToSpectating;
+            }
+            // un-comment for fixed glitch intensity on death:
             // On death: drive the glitch with a sustained intensity (flashIntensity
             // would otherwise decay to 0 and the effect would fade out), and render
             // the whole blit through the greyscale shader below.
             // const float DEATH_GLITCH = 0.5f;
-            if (!player.isAlive && !player.isSpectating) {
-                hurt = player.SpectatingTimer / player.countdownToSpectating;
-            } 
-            // if (!networked && !player.isAlive && !player.isSpectating) hurt = DEATH_GLITCH;
+            // if (!player.isAlive) hurt = DEATH_GLITCH;
             
             if (!player.isAlive && grayscaleOK) BeginShaderMode(grayscaleShader);
             if (hurt <= 0.0f) {

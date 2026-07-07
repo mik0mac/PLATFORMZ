@@ -21,6 +21,7 @@
 #include "../collisions.h"
 #include "../input.h"     // PlayerInput, ApplyPlayerInput() - reused directly
 #include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
+#include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -499,6 +500,103 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     return s;
 }
 
+//MARK: State packet (binary)
+// -------------------------------------------------------------------------
+// The same state as buildStatePacket, packed as little-endian binary (netbin.h)
+// for UDP clients so it fits one datagram (~4x smaller than the JSON). Field
+// ORDER here must match the client's applyBinaryState() reader in wire.h.
+// Unused-on-the-wire fields are dropped: asteroid/rocket `dead` (the server never
+// sends dead=true - destroyed objects just vanish from the set).
+// -------------------------------------------------------------------------
+static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
+                                    const std::set<int>& connectedSlots) {
+    std::string b;
+    b.reserve(768);
+    nb::putU8(b, nb::STATE_BIN_VERSION);   // byte 0: tag (not '{'); also the discriminator
+    nb::putU32(b, tick);
+    nb::putU32(b, lastSeq);
+    nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
+    nb::putF32(b, countdownRemaining.load());
+
+    // Options (match-wide), same values buildStatePacket puts in "opt".
+    nb::putU8(b, (uint8_t)pendingPlayers.load());
+    nb::putF32(b, pendingDiff.load());
+    nb::putU8(b, (uint8_t)((pendingRocketsExplode.load() ? 1 : 0) | (pendingEgPassThrough.load() ? 2 : 0)));
+
+    // Players (fixed roster; u8 count is plenty).
+    auto& players = gameSpace.getPlayers();
+    nb::putU8(b, (uint8_t)players.size());
+    for (int i = 0; i < (int)players.size(); i++) {
+        const Player& p = players[i];
+        nb::putU32(b, p.id);
+        nb::putF32(b, p.position.x); nb::putF32(b, p.position.y); nb::putF32(b, p.position.z);
+        nb::putF32(b, p.velocity.x); nb::putF32(b, p.velocity.y); nb::putF32(b, p.velocity.z);
+        nb::putF32(b, p.yaw); nb::putF32(b, p.pitch);
+        nb::putI16(b, (int16_t)p.health);
+        nb::putF32(b, p.fuel);
+        nb::putI16(b, (int16_t)p.ammo);
+        nb::putF32(b, p.flashTimer);
+        nb::putF32(b, p.SpectatingTimer);
+        nb::putI32(b, p.score);
+        bool active = connectedSlots.count(i) > 0 || p.isBot; // occupied by a human or bot
+        nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)));
+        nb::putStr(b, p.name);
+    }
+
+    // Asteroids.
+    auto& asteroids = gameSpace.getAsteroids();
+    nb::putU16(b, (uint16_t)asteroids.size());
+    for (const Asteroid& a : asteroids) {
+        nb::putU32(b, a.id);
+        nb::putF32(b, a.position.x); nb::putF32(b, a.position.y); nb::putF32(b, a.position.z);
+        nb::putF32(b, a.velocity.x); nb::putF32(b, a.velocity.y); nb::putF32(b, a.velocity.z);
+        nb::putF32(b, a.size);
+        nb::putI16(b, (int16_t)a.health);
+        nb::putF32(b, a.flashTimer);
+    }
+
+    // Rockets.
+    auto& rockets = gameSpace.getRockets();
+    nb::putU16(b, (uint16_t)rockets.size());
+    for (const Rocket& r : rockets) {
+        nb::putU32(b, r.id);
+        nb::putF32(b, r.position.x); nb::putF32(b, r.position.y); nb::putF32(b, r.position.z);
+        nb::putF32(b, r.velocity.x); nb::putF32(b, r.velocity.y); nb::putF32(b, r.velocity.z);
+    }
+
+    // Explosions (ephemeral, no id).
+    auto& explosions = gameSpace.getExplosions();
+    nb::putU16(b, (uint16_t)explosions.size());
+    for (const Explosion& e : explosions) {
+        nb::putF32(b, e.position.x); nb::putF32(b, e.position.y); nb::putF32(b, e.position.z);
+        nb::putF32(b, e.radius);
+        nb::putU8(b, e.isActive ? 1 : 0);
+    }
+
+    // Audio events (one-shots this tick).
+    auto& audio = gameSpace.getAudioEvents();
+    nb::putU8(b, (uint8_t)audio.size());
+    for (const auto& ev : audio) {
+        nb::putU8(b, (uint8_t)ev.fx);
+        nb::putU32(b, ev.owner);
+        nb::putF32(b, ev.pos.x); nb::putF32(b, ev.pos.y); nb::putF32(b, ev.pos.z);
+        nb::putF32(b, ev.volumeScale);
+    }
+
+    // Messages (kill-feed / warnings): type + two names + two ids.
+    auto& msgs = gameSpace.getMessages();
+    nb::putU8(b, (uint8_t)msgs.size());
+    for (const auto& m : msgs) {
+        nb::putU8(b, (uint8_t)m.type);
+        nb::putU32(b, m.playerA_id);
+        nb::putU32(b, m.playerB_id);
+        nb::putStr(b, m.playerA_Name);
+        nb::putStr(b, m.playerB_Name);
+    }
+
+    return b;
+}
+
 //MARK: Session
 // -------------------------------------------------------------------------
 // Session - one WebSocket connection, one player slot.
@@ -724,7 +822,11 @@ void BroadcastState(uint32_t tick) {
     for (auto& [cid, client] : clients) connectedSlots.insert(client.playerId);
 
     for (auto& [cid, client] : clients) {
-        std::string packet = buildStatePacket(tick, client.lastSeq, connectedSlots);
+        // UDP gets the compact binary state (fits one datagram; MTU-safe over the
+        // internet). WebSocket/TCP has no MTU limit, so it keeps the JSON state.
+        std::string packet = (client.transport == Transport::UDP)
+            ? buildStateBinary(tick, client.lastSeq, connectedSlots)
+            : buildStatePacket(tick, client.lastSeq, connectedSlots);
         SendToClient(client, packet);
     }
 }
