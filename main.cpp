@@ -65,9 +65,13 @@ static void DrawMessageQueue(MessageQueue& mq, int screenW, int screenH) {
 // PLATFORMZ runs in one of two modes:
 //   ./platformz                      -> local single-player (host the sim here)
 //   ./platformz ws://host:9000       -> networked client of an authoritative
-//   ./platformz wss://host/...          server (send input, render its state)
-// The networked path reuses the exact same headers; it just doesn't run the
-// sim locally - the server owns it (see server/server_main.cpp).
+//   ./platformz wss://host/...          server over WebSocket (TCP)
+//   ./platformz udp://host:9000      -> same, but over UDP (native only; lower
+//                                        latency, tolerant of packet loss)
+// The URL scheme picks the transport (see net_client.h); the server speaks both
+// at once, so udp:// and ws:// clients share a match. The networked path reuses
+// the exact same headers; it just doesn't run the sim locally - the server owns
+// it (see server/server_main.cpp).
 //
 // In the browser there's no command line, so the web build is always a
 // networked client and the server URL comes from the page query string.
@@ -196,6 +200,16 @@ int main(int argc, char** argv) {
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
     uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
+    // Handshake/reconnect bookkeeping (networked): resend hello until welcomed, and
+    // (UDP only) treat a long state silence as a dropped connection so the handshake
+    // runs again. Both in GetTime() secs. The silence-reset is gated to UDP because
+    // WebSocket reports its own drops - on that transport a mere frame stall (an
+    // unfocused window) isn't a disconnect, and resetting would flash the connecting
+    // screen for no reason.
+    const bool udpTransport = networked && serverUrl.rfind("udp://", 0) == 0;
+    double    lastHelloTime = 0.0;
+    double    lastStateTime = 0.0;
+    double    lastKeepaliveTime = 0.0;
     float     predYaw   = 0.0f;   // locally-predicted look (mouse drives this every
     float     predPitch = 0.0f;   // frame so aiming is instant, not server-round-trip)
     bool      predInit  = false;  // seed predYaw/predPitch from the server spawn once
@@ -344,6 +358,7 @@ int main(int argc, char** argv) {
     auto pumpNet = [&]() -> ServerMessage::Phase {
         ServerMessage::Phase phase = ServerMessage::Phase::Unknown;
         for (const std::string& frame : net.poll()) {
+            lastStateTime = GetTime(); // any server frame = the connection is alive
             ServerMessage m = applyMessage(frame, gameSpace);
             if (m.type == ServerMessage::Type::Welcome) {
                 myIndex = m.playerId;
@@ -401,6 +416,31 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        // Connection maintenance (networked). Transport-agnostic, but it's what
+        // makes the connectionless UDP path work: resend hello until the server
+        // welcomes us (assigns a slot), and if a welcomed session goes silent
+        // (UDP peer reaped, or a drop) forget our slot so the handshake re-runs.
+        // Over WebSocket the server auto-welcomes on connect, so the hello is just
+        // a harmless re-welcome and TCP keeps the session alive.
+        if (networked) {
+            double nowT = GetTime();
+            if (net.isOpen() && myIndex < 0 && nowT - lastHelloTime > 0.5) {
+                net.send(serializeHello(myDisplayName()));
+                lastHelloTime = nowT;
+            }
+            // UDP keepalive: the client only streams input during PLAYING, so on
+            // the lobby/countdown/game-over screens it would otherwise go silent
+            // and the server's idle-reaper would free its slot mid-countdown. A
+            // 1s heartbeat keeps the slot alive on every screen. UDP only - WS is
+            // kept alive by TCP and is never reaped.
+            if (udpTransport && myIndex >= 0 && nowT - lastKeepaliveTime > 1.0) {
+                net.send(serializeKeepalive());
+                lastKeepaliveTime = nowT;
+            }
+            if (udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
+                myIndex = -1; // UDP only: treat as disconnected; resume the hello handshake
+        }
 
         // Web only: keep shell.html's pointer-lock handler in sync with whether a
         // title-screen modal is open (no-op on native). Modals live only on the
@@ -510,7 +550,7 @@ int main(int argc, char** argv) {
                     if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(mapSizePresets["MEDIUM"].halfSize, mapSizePresets["MEDIUM"].numPlatforms, mapSizePresets["MEDIUM"].numAsteroids);
                     if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
                 } else {
-                    UiTextCentered(net.isOpen() ? "JOINING..." : "CONNECTING...",
+                    UiTextCentered(myIndex >= 0 ? "JOINING..." : "CONNECTING...",
                                    screenWidth, (int)startY + 14, 20, GRAY);
                 }
 
@@ -746,6 +786,7 @@ int main(int argc, char** argv) {
 
             // Apply the newest server state to our local GameSpace.
             for (const std::string& frame : net.poll()) {
+                lastStateTime = GetTime(); // any server frame = the connection is alive
                 ServerMessage m = applyMessage(frame, gameSpace);
                 if (m.type == ServerMessage::Type::Welcome) {
                     myIndex = m.playerId;
@@ -915,7 +956,10 @@ int main(int argc, char** argv) {
         if (localPlayer == nullptr) {
             BeginDrawing();
                 ClearBackground(BLACK);
-                const char* msg = net.isOpen() ? "JOINING GAME..." : "CONNECTING TO SERVER...";
+                // "JOINING" only once the server has actually assigned us a slot
+                // (myIndex); merely having an open socket isn't "in" yet - and for
+                // UDP the socket is open instantly, before any welcome.
+                const char* msg = myIndex >= 0 ? "JOINING GAME..." : "CONNECTING TO SERVER...";
                 DrawText(msg, 20, 20, 20, RAYWHITE);
                 DrawText(serverUrl.c_str(), 20, 48, 14, DARKGRAY);
                 if (!net.lastError().empty())

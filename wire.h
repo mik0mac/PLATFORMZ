@@ -88,6 +88,34 @@ inline std::string serializeName(const std::string& name) {
     return j.dump();
 }
 
+//MARK: Outbound - hello (handshake / keepalive)
+// The client's "I'm here" packet. Sent on connect and re-sent until welcomed.
+// Over UDP (connectionless, unreliable) this is what claims a player slot: the
+// server assigns a slot and replies with a welcome, and the client keeps sending
+// hello until that welcome arrives. Over WebSocket the server already welcomes on
+// connect, so a hello just triggers a harmless re-welcome - keeping the client's
+// connect path identical for both transports. The name rides along so the server
+// has a baseline before the first "name" packet.
+inline std::string serializeHello(const std::string& name) {
+    nlohmann::json j = {
+        {"type", "hello"},
+        {"name", name}
+    };
+    return j.dump();
+}
+
+//MARK: Outbound - keepalive
+// A tiny heartbeat sent ~1×/sec while connected over UDP. UDP is connectionless,
+// so the server frees a client's slot after a few seconds of silence - but the
+// client only streams input during active play, going quiet on the lobby /
+// countdown / game-over screens. Without this the server would reap a live client
+// mid-countdown. Carries nothing; the server just uses its arrival to refresh the
+// client's last-seen. WebSocket doesn't need it (TCP keeps the session alive).
+inline std::string serializeKeepalive() {
+    nlohmann::json j = { {"type", "ping"} };
+    return j.dump();
+}
+
 // Live lobby-option change (match size, bot difficulty, gameplay toggles). Any
 // client may send it whenever a control in the OPTIONS modal changes; the server
 // stores it as the pending match config (WITHOUT starting) and echoes it back to

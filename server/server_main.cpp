@@ -25,6 +25,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ip/udp.hpp>
 
 #include <iostream>
 #include <memory>
@@ -36,6 +37,7 @@
 #include <atomic>
 #include <chrono>
 #include <vector>
+#include <array>
 #include <sstream>
 #include <iomanip>
 
@@ -43,11 +45,17 @@ namespace beast     = boost::beast;
 namespace websocket = boost::beast::websocket;
 namespace net       = boost::asio;
 using tcp           = boost::asio::ip::tcp;
+using udp           = boost::asio::ip::udp;
 
 //MARK: Config
 const unsigned short PORT      = 9000;
 const float          TICK_RATE = 60.0f;
 const float          TICK_DT   = 1.0f / TICK_RATE;
+// UDP is connectionless - a client that quits just stops sending. Free its slot
+// after this many seconds of silence (mirrors the WS Read()-error cleanup).
+// Comfortably above the client's 1s keepalive cadence (and deliberately NOT equal
+// to COUNTDOWN_SECONDS) so a brief frame hitch can't cull a live client.
+const double         UDP_CLIENT_TIMEOUT = 10.0;
 // const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
 
 //MARK: JSON out
@@ -78,8 +86,14 @@ static std::string js(const std::string& v) {
 
 //MARK: Client record
 // -------------------------------------------------------------------------
-// ConnectedClient - server-side record per WebSocket connection.
+// ConnectedClient - server-side record per connection. One record per player
+// slot, regardless of transport: a WebSocket client is reached via its Session,
+// a UDP client via its source endpoint. Everything else (input, name, slot) is
+// transport-agnostic, so the sim loop treats both identically.
 // -------------------------------------------------------------------------
+class Session;                          // WS sink; fully defined below.
+enum class Transport { WS, UDP };
+
 struct ConnectedClient {
     int      playerId   = -1;   // index into GameSpace::players
     uint32_t lastSeq    = 0;    // sequence number of last processed input
@@ -95,6 +109,13 @@ struct ConnectedClient {
     // single-threaded. nameDirty flags an unapplied change.
     std::string name;
     bool nameDirty      = false;
+
+    // Transport + sink. WS uses `session` (valid while that Session lives); UDP
+    // uses `udpEndpoint` + `lastSeenSec` (last packet arrival, for idle reaping).
+    Transport     transport   = Transport::WS;
+    Session*      session      = nullptr;
+    udp::endpoint udpEndpoint;
+    double        lastSeenSec  = 0.0;
 };
 
 //MARK: Globals
@@ -148,10 +169,45 @@ static const char* phaseString(Phase p) {
     }
 }
 
-// ws pointer -> client record. Protected by clientMutex.
-// Using map so iteration order is stable (useful for state serialization).
-std::map<void*, ConnectedClient> clients;
+// connId -> client record. Keyed by a monotonic id (not a socket pointer) so WS
+// and UDP clients share one registry; the id order is stable (deterministic state
+// serialization). Protected by clientMutex.
+std::map<uint64_t, ConnectedClient> clients;
+// UDP source endpoint -> connId, so an inbound datagram finds its client. UDP
+// only. Protected by clientMutex (same lock as `clients`).
+std::map<udp::endpoint, uint64_t>   udpIndex;
 std::mutex clientMutex;
+std::atomic<uint64_t> nextConnId{1};
+
+// The one server UDP socket, set in main() once the io_context exists. Used by
+// SendToClient (sim thread) and the UDP receive handler (io threads).
+udp::socket*  g_udp = nullptr;
+// Serializes concurrent send_to on g_udp (Asio sockets aren't safe for
+// concurrent ops on one object). Always innermost if nested under clientMutex.
+std::mutex    udpSendMutex;
+
+// Forward decls: Session::Read and the UDP handler both dispatch through these,
+// but their bodies need Session complete (SendToClient calls Session::Send), so
+// the definitions live just after the Session class.
+static void SendToClient(const ConnectedClient& c, const std::string& msg);
+static void HandleClientMessage(uint64_t connId, const std::string& msg);
+
+// Seconds on the steady clock - for UDP last-seen stamping / idle reaping.
+static double NowSec() {
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Lowest player slot not owned by a connected client, or -1 if the server is
+// full. Caller MUST hold gameMutex (reads players) AND clientMutex (reads clients).
+static int ClaimFreeSlot() {
+    auto& players = gameSpace.getPlayers();
+    std::set<int> claimed;
+    for (auto& [cid, c] : clients) claimed.insert(c.playerId);
+    for (int i = 0; i < (int)players.size(); i++)
+        if (claimed.find(i) == claimed.end()) return i;
+    return -1;
+}
 
 //MARK: Bot slots
 // "Fill empty slots": every player slot NOT owned by a connected client becomes
@@ -181,7 +237,7 @@ static void refreshBotSlots(const std::set<int>& claimed) {
 // Gather the claimed-slot set. Caller must hold clientMutex.
 static std::set<int> gatherClaimedSlots() {
     std::set<int> claimed;
-    for (auto& [ws, c] : clients) claimed.insert(c.playerId);
+    for (auto& [cid, c] : clients) claimed.insert(c.playerId);
     return claimed;
 }
 
@@ -265,14 +321,35 @@ static std::string buildPlatformsArray() {
     return s;
 }
 
-// Welcome packet: the client's assigned slot + the current static platform layout
-// (empty in the lobby; populated once a match has generated a world). Sent on
-// connect and re-sent to everyone when a match (re)starts so they rebuild it.
+// Cached "static" half of the welcome packet: the boundary size + platform
+// layout. These change only when a match (re)generates the world, so we build
+// this string ONCE on the sim thread under gameMutex (rebuildWelcomeStatic) and
+// hand io threads a copy. buildWelcome then does no gameSpace read at all - which
+// closes a data race: welcomes are built on network threads (connect/hello), and
+// reading the live platform vector there could tear against the sim thread
+// wiping+rebuilding it at match start.
+std::string welcomeStatic;          // e.g.  "half":40.00,"platforms":[...]
+std::mutex  welcomeStaticMutex;
+
+// Rebuild the cached welcome fragment from the current world. Caller MUST hold
+// gameMutex (reads walls + platforms); runs on the sim thread at startup and
+// after each world (re)generation.
+static void rebuildWelcomeStatic() {
+    std::string s = "\"half\":" + jf(gameSpace.getWalls().halfSize)
+                  + ",\"platforms\":" + buildPlatformsArray();
+    std::lock_guard<std::mutex> lk(welcomeStaticMutex);
+    welcomeStatic = std::move(s);
+}
+
+// Welcome packet: the client's assigned slot + the cached static world fragment.
+// Sent on connect and re-sent to everyone when a match (re)starts. Safe to call
+// from any thread - it only reads the mutex-guarded cache, never gameSpace.
 static std::string buildWelcome(int playerId) {
+    std::string statik;
+    { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStatic; }
     return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
          + ",\"tick\":" + std::to_string(serverTick.load())
-         + ",\"half\":" + jf(gameSpace.getWalls().halfSize) // boundary size for this match
-         + ",\"platforms\":" + buildPlatformsArray() + "}";
+         + "," + statik + "}";
 }
 
 //MARK: State packet
@@ -438,21 +515,19 @@ public:
             {
                 std::lock_guard<std::mutex> gg(gameMutex);
                 std::lock_guard<std::mutex> gc(clientMutex);
-                auto& players = gameSpace.getPlayers();
-                std::set<int> claimed;
-                for (auto& [ws, c] : clients) claimed.insert(c.playerId);
-                for (int i = 0; i < (int)players.size(); i++) {
-                    if (claimed.find(i) == claimed.end()) { playerId = i; break; }
-                }
+                playerId = ClaimFreeSlot();
                 if (playerId == -1) {
                     std::cout << "Server full, rejecting connection\n";
                     beast::error_code cec;
                     self->ws_.close(websocket::close_code::try_again_later, cec);
                     return;
                 }
+                self->connId_ = nextConnId++;
                 ConnectedClient c;
-                c.playerId = playerId;
-                clients[self.get()] = c;
+                c.playerId  = playerId;
+                c.transport = Transport::WS;
+                c.session   = self.get();
+                clients[self->connId_] = c;
                 // Note: no bot-slot refresh here. Bots exist only during a match
                 // (set at match start + reconciled each sim tick), so the lobby
                 // stays bot-free and a mid-match join's slot yields on the next
@@ -481,13 +556,14 @@ public:
 private:
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
+    uint64_t connId_ = 0;   // this Session's key into `clients` (set in Start)
 
     void Read() {
         ws_.async_read(buffer_,
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) {
                     std::lock_guard<std::mutex> lock(clientMutex);
-                    auto it = clients.find(self.get());
+                    auto it = clients.find(self->connId_);
                     if (it != clients.end()) {
                         std::cout << "Player " << it->second.playerId
                                   << " disconnected. Active: "
@@ -500,82 +576,131 @@ private:
                 std::string msg = beast::buffers_to_string(self->buffer_.data());
                 self->buffer_.consume(self->buffer_.size());
 
-                //MARK: Msg: start
-                // Control message: a client asking to start/restart a match. Any
-                // client may send it. Flagged here and performed by the sim loop
-                // so all gameSpace mutation stays on a single thread.
-                if (msg.find("\"type\":\"start\"") != std::string::npos) {
-                    // Map preset chosen by the requesting client (first press wins).
-                    pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
-                    pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
-                    pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
-                    pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
-                    pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY);
-                    pendingRocketsExplode = parseBool(msg, "rexpl", WALLS_STOP_ROCKETS);
-                    pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
-                    startRequested = true; // release: set after the preset values above
-                    self->Read();
-                    return;
-                }
-
-                //MARK: Msg: name
-                // Control message: a client setting its display name. Store it on
-                // the client record; the sim loop copies it onto the player slot
-                // (keeping gameSpace mutation single-threaded) and it then rides
-                // every state packet. Sent on welcome and on each title-screen edit.
-                if (msg.find("\"type\":\"name\"") != std::string::npos) {
-                    std::lock_guard<std::mutex> lock(clientMutex);
-                    auto it = clients.find(self.get());
-                    if (it != clients.end()) {
-                        it->second.name = parseString(msg, "name");
-                        it->second.nameDirty = true;
-                    }
-                    self->Read();
-                    return;
-                }
-
-                //MARK: Msg: options
-                // Control message: a client changing a lobby option (match size,
-                // bot difficulty, gameplay toggles). Options are match-wide, so we
-                // just update the pending config (no per-client state) WITHOUT
-                // starting a match; the next "start" uses these, and buildStatePacket
-                // echoes them every tick so every client's OPTIONS modal stays live.
-                if (msg.find("\"type\":\"options\"") != std::string::npos) {
-                    pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
-                    pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
-                    pendingRocketsExplode = parseBool(msg, "rexpl", pendingRocketsExplode.load());
-                    pendingEgPassThrough = parseBool(msg, "egpt", pendingEgPassThrough.load());
-                    self->Read();
-                    return;
-                }
-
-                //MARK: Msg: input
-                // Parse input packet and store as this client's latest input.
-                // The sim loop reads lastInput each tick; if packets arrive
-                // faster than tick rate, only the newest is used (last-write-wins).
-                {
-                    std::lock_guard<std::mutex> lock(clientMutex);
-                    auto it = clients.find(self.get());
-                    if (it != clients.end()) {
-                        uint32_t seq = parseUInt(msg, "seq", 0);
-                        // Discard out-of-order packets
-                        if (seq > it->second.lastSeq || !it->second.hasInput) {
-                            PlayerInput parsed = parseInput(msg);
-                            // Latch fire: a press only appears in one packet, and
-                            // the next (fire=false) packet would otherwise overwrite
-                            // it before the tick reads it. Sticky until consumed.
-                            if (parsed.fire) it->second.firePending = true;
-                            it->second.lastInput = parsed;
-                            it->second.lastSeq = seq;
-                            it->second.hasInput = true;
-                        }
-                    }
-                }
-
+                // All message dispatch (start/name/options/input/hello) is shared
+                // with the UDP path - see HandleClientMessage.
+                HandleClientMessage(self->connId_, msg);
                 self->Read();
             });
     }
 };
+
+//MARK: SendToClient
+// -------------------------------------------------------------------------
+// Ship one text frame to a client over whichever transport it uses. WS goes
+// through the Session (ws_.write); UDP is a single datagram via the shared
+// socket, serialized by udpSendMutex (Asio sockets aren't safe for concurrent
+// send_to). Errors are swallowed - a dead WS client is cleaned up by its Read()
+// callback; a dead UDP client is reaped on idle timeout.
+// -------------------------------------------------------------------------
+static void SendToClient(const ConnectedClient& c, const std::string& msg) {
+    if (c.transport == Transport::WS) {
+        if (c.session) c.session->Send(msg);
+    } else if (g_udp) {
+        std::lock_guard<std::mutex> lk(udpSendMutex);
+        boost::system::error_code ec;
+        g_udp->send_to(net::buffer(msg), c.udpEndpoint, 0, ec);
+    }
+}
+
+//MARK: Handle client message
+// -------------------------------------------------------------------------
+// Dispatch one inbound text frame from an already-registered client (WS or UDP).
+// Shared by Session::Read and the UDP receive handler; runs on an io thread.
+// New-UDP-peer registration (claiming a slot) happens in the UDP handler BEFORE
+// this is called, so here the client always exists in `clients`.
+// -------------------------------------------------------------------------
+static void HandleClientMessage(uint64_t connId, const std::string& msg) {
+    //MARK: Msg: hello
+    // Handshake / keepalive: (re)send the welcome to this client. UDP clients
+    // resend hello until welcomed (unreliable transport); a WS client's hello
+    // just re-welcomes harmlessly. A name may ride the hello. buildWelcome reads
+    // gameSpace unlocked exactly as the WS connect-welcome does.
+    if (msg.find("\"type\":\"hello\"") != std::string::npos) {
+        std::lock_guard<std::mutex> lock(clientMutex);
+        auto it = clients.find(connId);
+        if (it != clients.end()) {
+            std::string nm = parseString(msg, "name");
+            if (!nm.empty()) { it->second.name = nm; it->second.nameDirty = true; }
+            SendToClient(it->second, buildWelcome(it->second.playerId));
+        }
+        return;
+    }
+
+    //MARK: Msg: start
+    // Control message: a client asking to start/restart a match. Any client may
+    // send it. Flagged here and performed by the sim loop so all gameSpace
+    // mutation stays on a single thread.
+    if (msg.find("\"type\":\"start\"") != std::string::npos) {
+        // Map preset chosen by the requesting client (first press wins).
+        pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
+        pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
+        pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
+        pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
+        pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY);
+        pendingRocketsExplode = parseBool(msg, "rexpl", WALLS_STOP_ROCKETS);
+        pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
+        startRequested = true; // release: set after the preset values above
+        return;
+    }
+
+    //MARK: Msg: name
+    // Control message: a client setting its display name. Store it on the client
+    // record; the sim loop copies it onto the player slot (keeping gameSpace
+    // mutation single-threaded) and it then rides every state packet.
+    if (msg.find("\"type\":\"name\"") != std::string::npos) {
+        std::lock_guard<std::mutex> lock(clientMutex);
+        auto it = clients.find(connId);
+        if (it != clients.end()) {
+            it->second.name = parseString(msg, "name");
+            it->second.nameDirty = true;
+        }
+        return;
+    }
+
+    //MARK: Msg: options
+    // Control message: a client changing a lobby option (match size, bot
+    // difficulty, gameplay toggles). Match-wide, so just update the pending
+    // config (no per-client state) WITHOUT starting; the next "start" uses these.
+    if (msg.find("\"type\":\"options\"") != std::string::npos) {
+        pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
+        pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
+        pendingRocketsExplode = parseBool(msg, "rexpl", pendingRocketsExplode.load());
+        pendingEgPassThrough = parseBool(msg, "egpt", pendingEgPassThrough.load());
+        return;
+    }
+
+    //MARK: Msg: ping
+    // Keepalive heartbeat (UDP). It carries nothing - its whole job is to prove
+    // the client is still alive, and OnDatagram already stamped lastSeenSec before
+    // dispatching here. Return early so it doesn't fall through to the input parser
+    // (which would store a bogus all-zero input).
+    if (msg.find("\"type\":\"ping\"") != std::string::npos) {
+        return;
+    }
+
+    //MARK: Msg: input
+    // Parse input packet and store as this client's latest input. The sim loop
+    // reads lastInput each tick; if packets arrive faster than tick rate, only
+    // the newest is used (last-write-wins). seq drops stale/out-of-order packets
+    // - already the case for TCP, and essential for UDP's reordering.
+    {
+        std::lock_guard<std::mutex> lock(clientMutex);
+        auto it = clients.find(connId);
+        if (it != clients.end()) {
+            uint32_t seq = parseUInt(msg, "seq", 0);
+            if (seq > it->second.lastSeq || !it->second.hasInput) {
+                PlayerInput parsed = parseInput(msg);
+                // Latch fire: a press only appears in one packet, and the next
+                // (fire=false) packet would otherwise overwrite it before the
+                // tick reads it. Sticky until consumed.
+                if (parsed.fire) it->second.firePending = true;
+                it->second.lastInput = parsed;
+                it->second.lastSeq = seq;
+                it->second.hasInput = true;
+            }
+        }
+    }
+}
 
 //MARK: Broadcast
 // -------------------------------------------------------------------------
@@ -594,11 +719,11 @@ void BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
     // Which player slots are occupied, so clients can hide empty ones.
     std::set<int> connectedSlots;
-    for (auto& [ws, client] : clients) connectedSlots.insert(client.playerId);
+    for (auto& [cid, client] : clients) connectedSlots.insert(client.playerId);
 
-    for (auto& [ws, client] : clients) {
+    for (auto& [cid, client] : clients) {
         std::string packet = buildStatePacket(tick, client.lastSeq, connectedSlots);
-        static_cast<Session*>(ws)->Send(packet);
+        SendToClient(client, packet);
     }
 }
 
@@ -666,7 +791,7 @@ void SimulationLoop() {
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
                     matchStartConnected = (int)clients.size();
-                    for (auto& [ws, c] : clients) maxClaimed = std::max(maxClaimed, c.playerId + 1);
+                    for (auto& [cid, c] : clients) maxClaimed = std::max(maxClaimed, c.playerId + 1);
                 }
                 want = std::min(std::max(want, maxClaimed), GAMESPACE_NUMBER_OF_PLAYERS);
                 gameSpace.setPlayerCount(want);
@@ -684,6 +809,9 @@ void SimulationLoop() {
                 // slot id) at the requested difficulty. Which slots are bots is set
                 // by the per-tick reconcile above; drive() reads the profiles here.
                 botController.init(gameSpace.getPlayers(), pendingDiff.load());
+                // Refresh the cached welcome fragment now that the world exists, so
+                // clients that (re)connect during this match get the new platforms.
+                rebuildWelcomeStatic();
                 // Open the match with a pre-match countdown instead of going live
                 // immediately. The world is built but stays FROZEN (the sim body
                 // below only ticks in PLAYING/GAMEOVER), so it doesn't move until the
@@ -720,6 +848,27 @@ void SimulationLoop() {
             // warning messages so they don't re-send or accumulate.
             gameSpace.getMessages().clear();
 
+            //MARK: Reap idle UDP clients
+            // UDP has no disconnect event, so a client that quit just goes quiet.
+            // Free any UDP slot whose last packet is older than the timeout; the
+            // bot reconcile below then turns the vacated slot back into a bot.
+            // (WS clients are cleaned up by their Read()-error callback instead.)
+            {
+                std::lock_guard<std::mutex> gc(clientMutex);
+                double now = NowSec();
+                for (auto it = clients.begin(); it != clients.end(); ) {
+                    if (it->second.transport == Transport::UDP &&
+                        now - it->second.lastSeenSec > UDP_CLIENT_TIMEOUT) {
+                        std::cout << "UDP player " << it->second.playerId
+                                  << " timed out. Active: " << (clients.size() - 1) << "\n";
+                        udpIndex.erase(it->second.udpEndpoint);
+                        it = clients.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
             //MARK: Name sync
             // Apply any pending display-name changes onto their player slots. Runs
             // every tick in every phase (lock order gameMutex->clientMutex), so
@@ -728,7 +877,7 @@ void SimulationLoop() {
             {
                 std::lock_guard<std::mutex> gc(clientMutex);
                 auto& players = gameSpace.getPlayers();
-                for (auto& [ws, client] : clients) {
+                for (auto& [cid, client] : clients) {
                     if (!client.nameDirty) continue;
                     if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
                     players[client.playerId].name = client.name;
@@ -758,7 +907,7 @@ void SimulationLoop() {
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
                     auto& players = gameSpace.getPlayers();
-                    for (auto& [ws, client] : clients) {
+                    for (auto& [cid, client] : clients) {
                         if (!client.hasInput) continue;
                         if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
                         Player& player = players[client.playerId];
@@ -794,7 +943,7 @@ void SimulationLoop() {
                     std::lock_guard<std::mutex> gc(clientMutex);
                     auto& players = gameSpace.getPlayers();
                     int aliveConnected = 0;
-                    for (auto& [ws, client] : clients) {
+                    for (auto& [cid, client] : clients) {
                         if (client.playerId >= 0 && client.playerId < (int)players.size()
                             && players[client.playerId].isAlive) aliveConnected++;
                     }
@@ -815,8 +964,8 @@ void SimulationLoop() {
         // platform layout) so they rebuild it. Done off gameMutex like BroadcastState.
         if (justStarted) {
             std::lock_guard<std::mutex> gc(clientMutex);
-            for (auto& [ws, client] : clients)
-                static_cast<Session*>(ws)->Send(buildWelcome(client.playerId));
+            for (auto& [cid, client] : clients)
+                SendToClient(client, buildWelcome(client.playerId));
         }
 
         // Broadcast authoritative state to all clients every tick.
@@ -865,13 +1014,93 @@ private:
     }
 };
 
+//MARK: UDP Listener
+// -------------------------------------------------------------------------
+// UdpListener - the connectionless counterpart to Listener. One shared UDP
+// socket receives datagrams from every native client; peers are tracked by
+// source endpoint (udpIndex) rather than a per-connection object. A native
+// client sends "hello" to claim a slot (resent until it gets a welcome, since
+// UDP is unreliable); thereafter its packets carry input/name/options/start.
+// Only one async_receive_from is outstanding at a time, so buf_/sender_ are
+// never touched concurrently.
+// -------------------------------------------------------------------------
+class UdpListener : public std::enable_shared_from_this<UdpListener> {
+public:
+    UdpListener(net::io_context& ioc, udp::endpoint endpoint)
+        : socket_(ioc, endpoint) {
+        g_udp = &socket_;   // shared send handle for SendToClient / BroadcastState
+    }
+    void Run() { Receive(); }
+private:
+    udp::socket             socket_;
+    udp::endpoint           sender_;
+    std::array<char, 65536> buf_;  // one datagram (IP-reassembled; up to 64 KB)
+
+    void Receive() {
+        socket_.async_receive_from(net::buffer(buf_), sender_,
+            [self = shared_from_this()](boost::system::error_code ec, std::size_t n) {
+                if (!ec && n > 0)
+                    self->OnDatagram(std::string(self->buf_.data(), n), self->sender_);
+                self->Receive();   // re-arm (single outstanding receive)
+            });
+    }
+
+    void OnDatagram(const std::string& msg, const udp::endpoint& from) {
+        uint64_t connId = 0;
+        bool known = false;
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            auto idx = udpIndex.find(from);
+            if (idx != udpIndex.end()) {
+                connId = idx->second;
+                known  = true;
+                auto it = clients.find(connId);
+                if (it != clients.end()) it->second.lastSeenSec = NowSec();
+            }
+        }
+        if (known) { HandleClientMessage(connId, msg); return; }
+        // Unknown endpoint: only a hello registers a slot; ignore stray datagrams.
+        if (msg.find("\"type\":\"hello\"") != std::string::npos) RegisterPeer(from, msg);
+    }
+
+    void RegisterPeer(const udp::endpoint& from, const std::string& helloMsg) {
+        int playerId = -1;
+        ConnectedClient sink;
+        bool ok = false;
+        {
+            // Lock order gameMutex->clientMutex, matching Session::Start.
+            std::lock_guard<std::mutex> gg(gameMutex);
+            std::lock_guard<std::mutex> gc(clientMutex);
+            playerId = ClaimFreeSlot();
+            if (playerId == -1) { std::cout << "Server full, rejecting UDP client\n"; return; }
+            uint64_t connId = nextConnId++;
+            ConnectedClient c;
+            c.playerId    = playerId;
+            c.transport   = Transport::UDP;
+            c.udpEndpoint = from;
+            c.lastSeenSec = NowSec();
+            std::string nm = parseString(helloMsg, "name");
+            if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
+            clients[connId] = c;
+            udpIndex[from]  = connId;
+            sink = c;
+            ok = true;
+            std::cout << "UDP client connected -> player slot " << playerId
+                      << ". Active: " << clients.size() << "\n";
+        }
+        // Welcome after releasing locks (mirrors Session::Start): buildWelcome
+        // reads gameSpace unlocked exactly as the WS connect-welcome does.
+        if (ok) SendToClient(sink, buildWelcome(playerId));
+    }
+};
+
 //MARK: main
 // -------------------------------------------------------------------------
 // main
 // -------------------------------------------------------------------------
 int main() {
     std::cout << "PLATFORMZ server | port " << PORT
-              << " | " << TICK_RATE << " Hz\n";
+              << " (TCP/WebSocket + UDP) | " << TICK_RATE << " Hz\n";
 
     {
         std::lock_guard<std::mutex> lock(gameMutex);
@@ -879,6 +1108,7 @@ int main() {
         // and be listed), but no world. A client "start" message generates the
         // world and begins the match (see SimulationLoop).
         gameSpace.spawnPlayers();
+        rebuildWelcomeStatic(); // seed the cached welcome (empty lobby world) before clients connect
         std::cout << "GameSpace: lobby ready, "
                   << gameSpace.getPlayers().size()
                   << " player slots (waiting for a player to start)\n";
@@ -890,6 +1120,12 @@ int main() {
     auto listener = std::make_shared<Listener>(
         ioc, tcp::endpoint{net::ip::make_address("0.0.0.0"), PORT});
     listener->Run();
+
+    // Native clients connect over UDP on the same port (separate TCP/UDP port
+    // space, so no conflict with the WebSocket listener above).
+    auto udpListener = std::make_shared<UdpListener>(
+        ioc, udp::endpoint{udp::v4(), PORT});
+    udpListener->Run();
 
     std::thread(SimulationLoop).detach();
 

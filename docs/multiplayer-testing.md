@@ -116,6 +116,48 @@ renders the shared world. Watch the server log climb `players 0 → 1 → 2`.
 
 ---
 
+## 3b. Test: Native UDP
+
+The native client picks its transport from the URL **scheme**: `ws://`/`wss://`
+use WebSocket (as above), `udp://` uses raw UDP. The server listens on **both**
+at once (same port, 9000), so a UDP client and a WebSocket/browser client can
+share the same match. UDP is native-only — browsers can't open a raw UDP socket,
+so the browser build always uses WebSocket.
+
+```bash
+./platformz udp://localhost:9000        # same machine
+./platformz udp://192.168.4.21:9000     # another Mac on the LAN
+```
+
+How it differs from the WebSocket path (all handled for you):
+
+- **Handshake.** UDP is connectionless, so the client sends a `hello` on connect
+  and resends it (~2×/sec) until the server's `welcome` assigns a slot. State and
+  input packets are unreliable (newest wins); the `welcome` is made reliable by
+  that resend-until-answered loop.
+- **Disconnect.** There's no close event: the server frees a UDP client's slot
+  after ~5 s of silence, and the client re-runs the handshake if the server goes
+  quiet for ~3 s. So quitting a UDP client shows up in the server log as
+  `UDP player N timed out` a few seconds later, not immediately.
+
+**Mixed match (headline):** run the game server, then join with one native UDP
+client and one browser (WebSocket) client at the same time — both land in one
+match and see each other. Watch the server log climb `players 0 → 1 → 2`, with a
+`UDP client connected` line for the native UDP join and a `Client connected` line
+for the WebSocket join.
+
+> **Testing packet loss.** localhost/LAN almost never drops a datagram, so the
+> loss-tolerance code won't get exercised there. To see the game under realistic
+> loss, enable Apple's **Network Link Conditioner** (Additional Tools for Xcode)
+> with e.g. 5 % loss + 80 ms delay — the game should stay playable and the UDP
+> handshake should still complete.
+
+> **Reach.** Raw UDP works on a LAN or to a server with a directly-reachable
+> public UDP port (a `$5–10/mo` VPS). The `wss://…trycloudflare.com` internet
+> tunnel is TCP-only, so it carries WebSocket clients but **not** `udp://`.
+
+---
+
 ## 4. Test: Browser LAN
 
 The browser test needs **two servers running at the same time**, in two separate
