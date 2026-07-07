@@ -381,6 +381,15 @@ inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass) {
     axis = Vector3Normalize(axis);
     float angle = asteroid.spinAngle; // pre-integrated each frame (no GetTime() snap on bounce)
 
+    // Squash-and-stretch: a recent bounce compresses the body along its contact
+    // normal (squash < 1) and bulges it perpendicular (stretch > 1); deform swings
+    // negative during the overshoot, flipping squash/stretch. deform == 0 (the common
+    // case) leaves every vertex exactly as before, so there's no cost when idle.
+    float deform = asteroid.bounceDeform();
+    float squash = 1.0f - ASTEROID_BOUNCE_SQUASH * deform;
+    float stretch = 1.0f + ASTEROID_BOUNCE_STRETCH * deform;
+    Vector3 n = asteroid.bounceNormal;
+
     // Build the displaced, oriented, world-space vertices.
     Vector3 verts[12];
     for (int i = 0; i < 12; i++) {
@@ -388,6 +397,14 @@ inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass) {
         float jitter = 0.72f + 0.28f * Hash01(seed.x + i, seed.y, seed.z);  // 0.72..1.0, like the 2D version
         Vector3 local = Vector3Scale(dir, asteroid.size * jitter);
         local = Vector3RotateByAxisAngle(local, axis, angle);
+        if (deform != 0.0f) {
+            // Split the vertex into its along-normal and perpendicular parts and
+            // scale each independently (pure non-uniform scale about the center - no shear).
+            float along = Vector3DotProduct(local, n);
+            Vector3 alongVec = Vector3Scale(n, along);
+            Vector3 perpVec = Vector3Subtract(local, alongVec);
+            local = Vector3Add(Vector3Scale(alongVec, squash), Vector3Scale(perpVec, stretch));
+        }
         verts[i] = Vector3Add(asteroid.position, local);
     }
 

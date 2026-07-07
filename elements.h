@@ -441,6 +441,8 @@ public:
         // Decay the damage-flash here since this runs every frame for every
         // asteroid (gamespace.h) - no separate update pass needed.
         if (flashTimer > 0.0f) flashTimer -= dt;
+        // Decay the squash-and-stretch bounce timer the same way.
+        if (bounceTimer > 0.0f) bounceTimer -= dt;
     }
 
     // shape and collision box
@@ -463,6 +465,39 @@ public:
     // (non-member) draw code read flash strength without exposing the constant.
     float flashIntensity() const {
         return ASTEROID_FLASH_DURATION > 0.0f ? Clamp(flashTimer / ASTEROID_FLASH_DURATION, 0.0f, 1.0f) : 0.0f;
+    }
+
+    // Squash-and-stretch bounce state (visual only; hitbox is unaffected). Set on
+    // impact by bounce(), decayed in updatePos, read by the draw code via bounceDeform.
+    float bounceTimer = 0.0f;                  // seconds of squash animation remaining
+    float bounceDuration = ASTEROID_BOUNCE_DURATION; // this bounce's total run time (scaled by speed at hit time)
+    Vector3 bounceNormal = {0.0f, 1.0f, 0.0f}; // world-space contact axis to compress along
+    float bounceStrength = 0.0f;               // [0,1] impact-speed factor captured at hit time
+
+    // Kick off a squash-and-stretch on a bounce. normal is the contact direction;
+    // impactSpeed (units/sec along that normal) scales how hard the asteroid deforms.
+    // The animation also plays faster the faster the asteroid is moving overall.
+    void bounce(Vector3 normal, float impactSpeed) {
+        if (Vector3LengthSqr(normal) < 1e-8f) return; // no usable contact axis
+        bounceNormal = Vector3Normalize(normal);
+        bounceStrength = Clamp(impactSpeed / ASTEROID_BOUNCE_REF_SPEED, 0.0f, 1.0f);
+        // Tempo scales with the asteroid's current speed: rate > 1 shortens the run.
+        float rate = Clamp(Vector3Length(velocity) / ASTEROID_BOUNCE_REF_SPEED,
+                           ASTEROID_BOUNCE_RATE_MIN, ASTEROID_BOUNCE_RATE_MAX);
+        bounceDuration = ASTEROID_BOUNCE_DURATION / rate;
+        bounceTimer = bounceDuration;
+    }
+
+    // Signed, strength-scaled spring value driving the deform: +1 = full compression
+    // along bounceNormal at the instant of impact, swinging negative (overshoot
+    // stretch) and ringing down to 0. Mirrors flashIntensity's encapsulation of its
+    // constants so the (non-member) draw code needn't know the curve. phase is
+    // normalized over this bounce's (speed-scaled) duration, so the spring keeps its
+    // shape and only its wall-clock tempo changes with speed.
+    float bounceDeform() const {
+        if (bounceTimer <= 0.0f || bounceDuration <= 0.0f) return 0.0f;
+        float phase = 1.0f - Clamp(bounceTimer / bounceDuration, 0.0f, 1.0f);
+        return bounceStrength * expf(-ASTEROID_BOUNCE_DECAY * phase) * cosf(ASTEROID_BOUNCE_FREQ * phase);
     }
 
     // attributes

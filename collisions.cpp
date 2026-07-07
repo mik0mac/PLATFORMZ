@@ -363,8 +363,10 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                     float dist = Vector3Length(offset);
                     if (dist > 1e-4f) {
                         Vector3 normal = Vector3Scale(offset, 1.0f / dist);
+                        float impactSpeed = fabsf(Vector3DotProduct(asteroid.velocity, normal)); // pre-bounce closing speed along the normal
                         asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), 1.0f); // asteroid bounces off the player, same elasticity as the walls
                         player.velocity = Vector3Scale(Vector3Reflect(player.velocity, normal), 1.0f); // player bounces off the asteroid, same elasticity as the walls
+                        asteroid.bounce(normal, impactSpeed); // squash-and-stretch on impact
                         // push clear of the overlap
                         float overlap = (asteroid.size + player.radius) - dist;
                         asteroid.position = Vector3Subtract(asteroid.position, Vector3Scale(normal, overlap *0.5f));
@@ -431,7 +433,9 @@ void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid
                 }
             }
 
+            float impactSpeed = fabsf(Vector3DotProduct(asteroid.velocity, normal)); // pre-bounce closing speed along the normal
             asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), platform.elasticityAsteroid); // bounce off the platform, same elasticity as the walls
+            asteroid.bounce(normal, impactSpeed); // squash-and-stretch on impact
             // Push clear of the overlap so it isn't re-detected next frame.
             asteroid.position = Vector3Add(closest, Vector3Scale(normal, asteroid.size));
         }
@@ -668,18 +672,30 @@ void CheckAsteroidWallCollisions(GameSpace& space) {
         float minBound = -halfSize + r;
         float maxBound = halfSize - r;
 
+        // Accumulate the contact normal across axes (a corner hit can trip more than
+        // one) and the strongest axis impact speed, so we fire one squash-and-stretch
+        // for the frame's bounce - before the speed-limit clamp, so impactSpeed is real.
+        Vector3 wallNormal = {0.0f, 0.0f, 0.0f};
+        float impactSpeed = 0.0f;
         if (asteroid.position.x < minBound || asteroid.position.x > maxBound) {
+            wallNormal.x = asteroid.position.x > maxBound ? 1.0f : -1.0f;
+            impactSpeed = fmaxf(impactSpeed, fabsf(asteroid.velocity.x));
             asteroid.position.x = Clamp(asteroid.position.x, minBound, maxBound);
             asteroid.velocity.x = -asteroid.velocity.x * walls.elasticityAsteroid;
         }
         if (asteroid.position.y < minBound || asteroid.position.y > maxBound) {
+            wallNormal.y = asteroid.position.y > maxBound ? 1.0f : -1.0f;
+            impactSpeed = fmaxf(impactSpeed, fabsf(asteroid.velocity.y));
             asteroid.position.y = Clamp(asteroid.position.y, minBound, maxBound);
             asteroid.velocity.y = -asteroid.velocity.y * walls.elasticityAsteroid;
         }
         if (asteroid.position.z < minBound || asteroid.position.z > maxBound) {
+            wallNormal.z = asteroid.position.z > maxBound ? 1.0f : -1.0f;
+            impactSpeed = fmaxf(impactSpeed, fabsf(asteroid.velocity.z));
             asteroid.position.z = Clamp(asteroid.position.z, minBound, maxBound);
             asteroid.velocity.z = -asteroid.velocity.z * walls.elasticityAsteroid;
         }
+        if (Vector3LengthSqr(wallNormal) > 0.0f) asteroid.bounce(wallNormal, impactSpeed);
         // clamp the asteroid's velocity so the speed doesn't exceed ASTEROID_SPEED_LIMIT
         float asteroidSpeed = abs(Vector3Length(asteroid.velocity));
         if (asteroidSpeed > ASTEROID_SPEED_LIMIT) {

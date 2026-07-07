@@ -134,15 +134,15 @@ const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec.
-const float FUEL_REGEN_RATE = 0.5f; // Per sec.
+const float FUEL_REGEN_RATE = 1.0f; // Per sec.
 const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
 const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
 
 // Low-resource warning cue (FX_WARNING): alarm pulses while any of these is at/below threshold.
-const int   WARN_HEALTH_THRESHOLD   = 25;    // health at/below this pulses the warning alarm
+const int   WARN_HEALTH_THRESHOLD   = 20;    // health at/below this pulses the warning alarm
 const float WARN_FUEL_THRESHOLD     = 20.0f; // fuel at/below this pulses the warning alarm
 const int   WARN_AMMO_THRESHOLD     = 10;    // ammo at/below this pulses the warning alarm
-const float WARNING_SFX_INTERVAL    = 1.5f;  // min seconds between warning pulses while a resource stays low
+const float WARNING_SFX_INTERVAL    = 4.0f;  // min seconds between warning pulses while a resource stays low
 const float EARTH_GRAV_SFX_INTERVAL = 0.5f;  // min seconds between earth-gravity engage cues (guards rapid taps)
 const float PLAYER_FIRE_RATE = 3.0f; // shots per second.
 
@@ -207,6 +207,21 @@ const float ASTEROID_PLAYER_SPAWN_BUFFER = 15.0f;
 
 const float ASTEROID_FLASH_DURATION = 4.0f; // length of the hot-glow damage flash, seconds
 const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage flash, 0.0 - 1.0
+
+// Squash-and-stretch bounce (visual only): on impact the asteroid compresses along
+// the contact normal, springs past neutral into a brief stretch, then settles. A
+// damped cosine drives the deform; see Asteroid::bounceDeform in elements.h.
+const float ASTEROID_BOUNCE_DURATION = .25f; // seconds the squash animation runs
+const float ASTEROID_BOUNCE_SQUASH = 0.45f;   // max fractional compression along the impact normal
+const float ASTEROID_BOUNCE_STRETCH = 0.22f;  // perpendicular expansion fraction (~half squash, roughly volume-preserving)
+const float ASTEROID_BOUNCE_DECAY = 4.0f;     // spring damping - higher = fewer visible wobbles
+const float ASTEROID_BOUNCE_FREQ = 3.0f;      // oscillation frequency over the phase (radians) - ~just past one overshoot
+const float ASTEROID_BOUNCE_REF_SPEED = ASTEROID_MAX_SPEED; // impact speed mapping to full-strength squash; also the speed at which the animation plays at 1x
+// The animation plays faster the faster the asteroid is moving (a hard bounce snaps,
+// a slow drift squishes lazily). Effective duration = DURATION / rate, where rate is
+// (asteroid speed / REF_SPEED) clamped to this range - same spring shape, different tempo.
+const float ASTEROID_BOUNCE_RATE_MIN = 0.6f; // slowest playback (slow asteroids) - duration up to ~1.7x
+const float ASTEROID_BOUNCE_RATE_MAX = 2.5f; // fastest playback (fast asteroids) - duration down to 0.4x
 
 //MARK: Rocket Constants
 const float ROCKET_SPEED = 60.0f; // units/sec
