@@ -267,6 +267,20 @@ public:
         }
     }
 
+    // Networked-only: dead-reckon between server snapshots. The client renders
+    // discrete 60Hz snapshots; without this, motion freezes on gap frames and
+    // jumps on double frames (visible stepping). Advancing each authoritative
+    // mover by its (synced) velocity fills those gaps; the next snapshot re-bases
+    // position, so there's no drift (a stationary object has zero velocity, hence
+    // zero extrapolation). Position ONLY - it must not touch the per-object timers
+    // that updatePos() ticks (flash/cooldown/spectate), since those are
+    // server-owned and synced. Explosions/sparks/spin are handled elsewhere.
+    void extrapolate(float dt) {
+        for (Player& p : players)   p.position = Vector3Add(p.position, Vector3Scale(p.velocity, dt));
+        for (Asteroid& a : asteroids) a.position = Vector3Add(a.position, Vector3Scale(a.velocity, dt));
+        for (Rocket& r : rockets)   r.position = Vector3Add(r.position, Vector3Scale(r.velocity, dt));
+    }
+
     // Advance each asteroid's tumble angle. Runs every frame in BOTH local and
     // networked modes (asteroid.velocity is synced on net clients), replacing the old
     // GetTime()*speed formula in DrawAsteroidShape that snapped on bounce.

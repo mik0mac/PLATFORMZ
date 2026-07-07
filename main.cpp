@@ -876,6 +876,14 @@ int main(int argc, char** argv) {
                 prevHealth = hp;
             }
             netHurt = fmaxf(0.0f, netHurt - dt / 0.5f); // decay over flash_duration (0.5s)
+
+            // Dead-reckon between server snapshots: advance every mover by its
+            // synced velocity so motion doesn't freeze on a gap frame and jump on
+            // a double frame (the "stepped" look). The next snapshot re-bases
+            // position, so this only smooths - it never drifts. Runs after the
+            // snapshot is applied and before reticles/camera read positions.
+            gameSpace.extrapolate(dt);
+
             // Color each player slot by its index, matching GameSpace::spawnPlayers():
             // bots are magenta (BOT_*_COLOR), humans round-robin through HUMAN_PLAYER_COLORS.
             // Color isn't sent over the wire (it's static per slot); the `bot` flag is.
@@ -1075,7 +1083,7 @@ int main(int argc, char** argv) {
             // below, which owns all death text, so the dead frame renders only its
             // glitched/greyscale frozen world here - no live HUD, no death text.)
             if (player.isAlive) {
-                // DrawFPS(10, 10); // Draws the current FPS in the top-left corner of the screen
+                DrawFPS(10, 10); // TEMP diagnostic: current FPS, top-left. Remove after checking networked perf.
                 // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
                 DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
                 DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
