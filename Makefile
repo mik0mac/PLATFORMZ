@@ -11,6 +11,10 @@ IX_DEFS := -DIXWEBSOCKET_USE_TLS -DIXWEBSOCKET_USE_SECURE_TRANSPORT
 
 # -I/opt/homebrew/include also resolves nlohmann/json.hpp (brew nlohmann-json).
 CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR)
+# Extra compile flags for one-off/release builds without editing sources. Mainly
+# for baking a server address into a distribution binary (see docs/deploy-vultr.md):
+#   make EXTRA_CXXFLAGS='-DPLATFORMZ_DEFAULT_SERVER_HOST=\"203.0.113.10\"'
+CXXFLAGS += $(EXTRA_CXXFLAGS)
 LDFLAGS  := -L/opt/homebrew/lib -lraylib \
             -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo \
             -framework Security -framework CoreFoundation -lz

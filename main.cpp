@@ -76,20 +76,42 @@ static void DrawMessageQueue(MessageQueue& mq, int screenW, int screenH) {
 // In the browser there's no command line, so the web build is always a
 // networked client and the server URL comes from the page query string.
 int main(int argc, char** argv) {
+    bool        networked;
+    std::string serverUrl;
+    // Auto-fallback (native, baked-in server only): start on UDP and pivot to the
+    // ws:// at the same host if the UDP handshake never completes. Left off for the
+    // browser and for an explicit URL arg (which honors whatever scheme was given).
+    bool        autoFallback  = false;
+    std::string fallbackWsUrl;
 #if defined(__EMSCRIPTEN__)
     (void)argc; (void)argv;
-    const bool networked = true;
+    networked = true;
     // e.g. platformz.html?server=ws://192.168.1.20:9000
     // Falls back to the page's own host on :9000 if the param is absent.
-    const std::string serverUrl = [] {
+    serverUrl = [] {
         const char* s = emscripten_run_script_string(
             "(new URLSearchParams(location.search).get('server')) || "
             "('ws://' + location.hostname + ':9000')");
         return std::string(s ? s : "");
     }();
 #else
-    const bool networked = (argc > 1);
-    const std::string serverUrl = networked ? argv[1] : std::string();
+    // Native launch: a URL arg is an explicit override; the word "local" forces
+    // single-player; no arg uses the baked-in server (if any) preferring UDP with a
+    // WS pivot, else falls back to local single-player (dev default).
+    std::string defaultHost = PLATFORMZ_DEFAULT_SERVER_HOST;
+    if (argc > 1 && std::string(argv[1]) == "local") {
+        networked = false;                             // explicit single-player
+    } else if (argc > 1) {
+        networked = true; serverUrl = argv[1];         // explicit URL: honor scheme, no auto-fallback
+    } else if (!defaultHost.empty()) {                 // baked server: prefer UDP, allow a WS pivot
+        networked = true;
+        std::string port = PLATFORMZ_DEFAULT_SERVER_PORT;
+        serverUrl     = "udp://" + defaultHost + ":" + port;
+        fallbackWsUrl = "ws://"  + defaultHost + ":" + port;
+        autoFallback  = true;
+    } else {
+        networked = false;                             // dev default: no arg -> local single-player
+    }
 #endif
 //MARK: SETUP
     // --- Setup (runs once) ---
@@ -210,7 +232,8 @@ int main(int argc, char** argv) {
     // WebSocket reports its own drops - on that transport a mere frame stall (an
     // unfocused window) isn't a disconnect, and resetting would flash the connecting
     // screen for no reason.
-    const bool udpTransport = networked && serverUrl.rfind("udp://", 0) == 0;
+    bool      udpTransport = networked && serverUrl.rfind("udp://", 0) == 0; // not const: flips to false if the UDP->WS auto-fallback fires
+    double    connectStartTime = 0.0; // GetTime() when we first connected; drives the UDP->WS fallback timeout
     double    lastHelloTime = 0.0;
     double    lastStateTime = 0.0;
     double    lastKeepaliveTime = 0.0;
@@ -261,7 +284,7 @@ int main(int argc, char** argv) {
     // OPTIONS sliders (see the OPTIONS modal below). Stored as floats so UiSlider
     // can drive them; cast where an int is needed. Defaults match the constants.
     float optNumPlayers    = (float)GAMESPACE_NUMBER_OF_PLAYERS; // 1..GAMESPACE_NUMBER_OF_PLAYERS
-    float optBotDifficulty = BOT_DIFFICULTY;                     // 0.0..BOT_DIFFICULTY
+    float optBotDifficulty = BOT_DIFFICULTY_DEFAULT;            // starting value; slider range is 0.0..BOT_DIFFICULTY
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
@@ -290,6 +313,7 @@ int main(int argc, char** argv) {
     // mode has no server.
     if (networked) {
         net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
+        connectStartTime = GetTime(); // start the UDP->WS fallback clock (InitWindow already ran)
         TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
     }
 
@@ -450,6 +474,19 @@ int main(int argc, char** argv) {
         // a harmless re-welcome and TCP keeps the session alive.
         if (networked) {
             double nowT = GetTime();
+            // Auto-fallback (baked-in UDP default only): if the UDP handshake never
+            // completes (no welcome, myIndex still -1) within the timeout, the path
+            // is likely blocking UDP - switch once to WebSocket at the same host and
+            // restart the handshake. WsTransport then retries on its own thread.
+            if (autoFallback && udpTransport && myIndex < 0 && nowT - connectStartTime > 3.0) {
+                TraceLog(LOG_WARNING, "UDP handshake timed out; falling back to WebSocket: %s",
+                         fallbackWsUrl.c_str());
+                net.connect(fallbackWsUrl); // swaps UdpTransport -> WsTransport (old socket closed by its dtor)
+                udpTransport = false;       // stop UDP-only keepalive / silence-reset below
+                autoFallback = false;       // one-shot
+                connectStartTime = nowT;
+                lastHelloTime = 0.0;        // send hello immediately on the new socket
+            }
             if (net.isOpen() && myIndex < 0 && nowT - lastHelloTime > 0.5) {
                 // Only carry a name if the user actually set one (same gate as
                 // serializeName). Before welcome myIndex is -1, so myDisplayName()
@@ -696,7 +733,7 @@ int main(int argc, char** argv) {
                     }
 
                     int y4 = y3 + 70;
-                    DrawText("PASS THROUGH PLATFORMS UNDER EARTH GRAVITY", (int)lx, y4, 18, RAYWHITE);
+                    DrawText("EARTH GRAV: PASS THROUGH PLATFORMS", (int)lx, y4, 18, RAYWHITE);
                     if (UiToggle({lx, (float)(y4 + 26), 100, 24}, optPassThroughPlatformsEarthGrav)) {
                         optChanged = true; optSentEgpt = optPassThroughPlatformsEarthGrav;
                     }

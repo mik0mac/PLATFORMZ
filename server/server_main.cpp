@@ -156,7 +156,7 @@ std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
 // OPTIONS carried by a start request: requested match size (clamped to connected
 // clients at consume) and bot difficulty center. Same io->sim handoff as above.
 std::atomic<int>   pendingPlayers{GAMESPACE_NUMBER_OF_PLAYERS};
-std::atomic<float> pendingDiff{BOT_DIFFICULTY};
+std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
 // OPTIONS bool toggles carried by a start request; defaults from constants.h.
 std::atomic<bool>  pendingRocketsExplode{WALLS_STOP_ROCKETS};
 std::atomic<bool>  pendingEgPassThrough{EARTH_GRAVITY_PASS_THROUGH_PLATFORMS};
@@ -790,7 +790,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
         pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
         pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
-        pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY);
+        pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
         pendingRocketsExplode = parseBool(msg, "rexpl", WALLS_STOP_ROCKETS);
         pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
         pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);

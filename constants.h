@@ -166,7 +166,8 @@ const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target hea
 // the center of the personality distribution [0..1]; each bot's aggression &
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
 // with bot count (so a lone bot ~= difficulty, a crowd is varied).
-const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; center for all bot personalities
+const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; also the BOT DIFFICULTY slider MAX / hard cap
+const float BOT_DIFFICULTY_DEFAULT = 0.2f; // OPTIONS starting value for BOT DIFFICULTY (client + server defaults)
 const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
 const float BOT_MAX_AIM_SPREAD = 0.50f;    // radians of aim error at accuracy=0 (0 at accuracy=1) 0.5 = ~28.6 degrees 0.3 = ~17.2 degrees
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
@@ -254,3 +255,17 @@ const uint32_t ID_NONE = 0; // uninitialized/invalid sentinel
 
 const uint32_t PLAYER_ID_BASE    = 0x00000001; // 1 - 255 (max 255 players)
 const uint32_t NON_PLAYER_ID_BASE  = 0x00000100; // 256 - 65535
+
+//MARK: Native client built-in server (address baked into the binary)
+// Native client's built-in server. Empty host => no baked server: launching with
+// no arg starts LOCAL single-player (dev default), and a URL arg goes networked.
+// Set a host (e.g. a Vultr IP) to ship a binary that auto-connects: no-arg launch
+// then connects over UDP and pivots to WebSocket if the UDP handshake stalls, and
+// `./platformz local` is the single-player escape hatch. Override at build time:
+//   -DPLATFORMZ_DEFAULT_SERVER_HOST='"203.0.113.10"'
+#ifndef PLATFORMZ_DEFAULT_SERVER_HOST
+#define PLATFORMZ_DEFAULT_SERVER_HOST ""       // e.g. "203.0.113.10"
+#endif
+#ifndef PLATFORMZ_DEFAULT_SERVER_PORT
+#define PLATFORMZ_DEFAULT_SERVER_PORT "9000"
+#endif
