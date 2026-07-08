@@ -19,7 +19,10 @@ persistent setup for later.
 - **Ports:** the server listens on **9000** for both TCP/WebSocket (browser + native
   `ws://`) and UDP (native `udp://`). The web page is served on **80**.
 
-> Below, `SERVER_IP` = the VPS's public IP.
+> Below, `SERVER_IP` = the VPS's public **IPv4** address — use it everywhere
+> (baked-in client address, `?server=`, native `udp://`/`ws://`). The server is
+> IPv4-only (it binds `0.0.0.0` for TCP and `udp::v4()` for UDP), so the box's IPv6
+> address won't connect; ignore it.
 
 ---
 
