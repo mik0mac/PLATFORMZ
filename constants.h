@@ -62,9 +62,9 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {40.0f, 8, 4}}, // 8 platforms, 4 asteroids
-    {"MEDIUM", {60.0f, 32, 12}}, // 32 platforms, 12 asteroids
-    {"LARGE",  {90.0f, 128, 24}}  // 128 platforms, 24 asteroids
+    {"SMALL",  {60.0f, 32, 6}}, // 8 platforms, 4 asteroids
+    {"MEDIUM", {90.0f, 64, 12}}, // 32 platforms, 12 asteroids
+    {"LARGE",  {120.0f, 128, 24}}  // 128 platforms, 24 asteroids
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
@@ -120,10 +120,10 @@ const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of R
 const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
 //MARK: Player Speed
-const float PLAYER_SPEED_WALK = 12.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 12.0f; // units/sec^2
-const float PLAYER_SPEED_JETPACK = 18.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 18.0f; // units/sec^2
+const float PLAYER_SPEED_WALK = 18.0f; // units/sec
+const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
+const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
+const float PLAYER_ACCELERATION_JETPACK = 24.0f; // units/sec^2
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -152,7 +152,7 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
     {255, 0, 0, 255},     // Red
     {0, 0, 255, 255},     // Blue
     {0, 255, 0, 255},     // Green
-    {255, 255, 0, 255},   // Yellow
+    {255, 0, 255, 255},   // Pink
 };
 
 //MARK: Bot Constants
@@ -210,8 +210,15 @@ const float ASTEROID_FLASH_DURATION = 4.0f; // length of the hot-glow damage fla
 const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage flash, 0.0 - 1.0
 
 //MARK: Rocket Constants
-const float ROCKET_SPEED = 60.0f; // units/sec
-const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
+const Color ROCKET_OUTLINE_COLOR = {255, 255, 0, 255}; // Yellow outline for rockets.
+const Color ROCKET_FILL_COLOR = {255, 255, 0, 40};
+const Color ROCKET_OOB_OUTLINE_COLOR = {128, 128, 128, 0}; // Grey outline for rockets that are out-of-bounds.
+const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets that are out-of-bounds.
+
+const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
+
+const float ROCKET_SPEED = 80.0f; // units/sec
+const float ROCKET_KICKBACK_FACTOR = 0.2f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
 // OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket

@@ -265,8 +265,8 @@ public:
                 velocity.y = targetVerticalSpeed;
             }
         }
-        // Apply gravity
-        velocity.y -= gravity * dt;
+        // Apply gravity (remove downward velocity when using jetpack to make the upward thrust feel more responsive).
+        if (!isUsingJetpack || !canJetpack()) velocity.y -= gravity * dt;
     }
 
     void updatePos(float dt) {
@@ -529,26 +529,38 @@ public:
         }
         // velocityInheritance is applied once at spawn (input.h), not per-frame.
         position = Vector3Add(position, Vector3Scale(velocity, dt));
+
+        //MARK: Rocket Out-of-Bounds
         if (isOutOfBounds) {
             fadeTimer -= (dt / 1.0f);
-            color_outline.a = (int)(255.0f * (fadeTimer / fadeLength));
-            color_fill.a = (int)(40.0f * (fadeTimer / fadeLength));
+            oobFade(1.0f - (fadeTimer / fadeLength)); // Fade from normal to OOB colors over fadeLength seconds
             if (fadeTimer <= 0.0f) isDestroyed = true;
         }
     }
 
     // size and collision box
     // Vector3 size = {0.2f, 0.2f, 0.8f}; // width, height, depth of the rocket's collision box (a small rectangular prism)
-    float size = 0.25f; // Radius.
+    float size = ROCKET_RADIUS; // Radius.
     // For rendering the rocket, we can use a wireframe rectangular prism or a simple 3D model.
     // For collision detection, we will use the position as the center of the rocket,
     // and size to define the extents of the collision box.
 
     // appearance
-    Color color_outline = {255, 255, 0, 255};  // yellow.
-    Color color_fill = {255, 255, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
-    float fadeLength = 2.0f;
+    Color color_outline = ROCKET_OUTLINE_COLOR;
+    Color color_fill = ROCKET_FILL_COLOR; // low alpha translucent fill for the "glowing vector glass" look
+    float fadeLength = 3.0f;
     float fadeTimer = fadeLength; // seconds of fade remaining; set on spawn, decayed in updatePos
+
+    void oobFade (float scale) {
+        color_outline.r = (int)((ROCKET_OOB_OUTLINE_COLOR.r - ROCKET_OUTLINE_COLOR.r) * scale + ROCKET_OUTLINE_COLOR.r);
+        color_outline.g = (int)((ROCKET_OOB_OUTLINE_COLOR.g - ROCKET_OUTLINE_COLOR.g) * scale + ROCKET_OUTLINE_COLOR.g);
+        color_outline.b = (int)((ROCKET_OOB_OUTLINE_COLOR.b - ROCKET_OUTLINE_COLOR.b) * scale + ROCKET_OUTLINE_COLOR.b);
+        color_outline.a = (int)((ROCKET_OOB_OUTLINE_COLOR.a - ROCKET_OUTLINE_COLOR.a) * scale + ROCKET_OUTLINE_COLOR.a);
+        color_fill.r = (int)((ROCKET_OOB_FILL_COLOR.r - ROCKET_FILL_COLOR.r) * scale + ROCKET_FILL_COLOR.r);
+        color_fill.g = (int)((ROCKET_OOB_FILL_COLOR.g - ROCKET_FILL_COLOR.g) * scale + ROCKET_FILL_COLOR.g);
+        color_fill.b = (int)((ROCKET_OOB_FILL_COLOR.b - ROCKET_FILL_COLOR.b) * scale + ROCKET_FILL_COLOR.b);
+        color_fill.a = (int)((ROCKET_OOB_FILL_COLOR.a - ROCKET_FILL_COLOR.a) * scale + ROCKET_FILL_COLOR.a);
+    }
 
     // attributes
     // damage and explosion radius are properties of the resulting Explosion.
