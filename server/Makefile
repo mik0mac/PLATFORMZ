@@ -38,13 +38,12 @@ CXXFLAGS  := -std=c++17 -O2 -Wall \
 
 LDFLAGS   := -lpthread
 
+# Boost.System is header-only (Boost >= 1.69), so we never link libboost_system.
+# On macOS, still add Homebrew's include/lib paths so the Boost headers are found;
+# on Linux/CI the headers are on the default search path (libboost-dev).
 ifneq ($(BREW_PREFIX),)
-# macOS/Homebrew: Boost.System is header-only here (no libboost_system to link).
 CXXFLAGS += -I$(BREW_PREFIX)/include
 LDFLAGS  += -L$(BREW_PREFIX)/lib
-else
-# Linux/CI: link the distro's Boost.System.
-LDFLAGS  += -lboost_system
 endif
 
 # server_main.cpp + collisions.cpp (game logic, no rendering)

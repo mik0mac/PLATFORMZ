@@ -39,11 +39,12 @@ Vultr control panel → **Deploy → Cloud Compute – Shared CPU**:
 ```bash
 ssh root@SERVER_IP
 apt update && apt upgrade -y
-apt install -y build-essential libboost-dev libboost-system-dev git nginx rsync
+apt install -y build-essential libboost-dev git nginx rsync
 ```
-`build-essential` → `g++`/`make`; `libboost-system-dev` is what the server links
-(`-lboost_system`); `nginx` serves the web page. **No raylib needed** — the server
-compiles against `server/raylib_server_stub.h` (math types only).
+`build-essential` → `g++`/`make`; `libboost-dev` provides the Boost **headers** the
+server needs (Boost.System is header-only since Boost 1.69, so there's nothing to
+link — no `libboost-system-dev` required); `nginx` serves the web page. **No raylib
+needed** — the server compiles against `server/raylib_server_stub.h` (math types only).
 
 ## 3. Get the code onto the box
 
