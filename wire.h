@@ -68,6 +68,8 @@ struct ServerMessage {
     float optDiff     = 0.0f;   // bot difficulty
     bool  optRexpl    = false;  // rockets detonate on boundary wall
     bool  optEgpt     = false;  // fall through platforms under earth gravity
+    bool  optPhys     = false;  // rockets obey gravity + inherit shooter velocity
+    bool  optFf       = false;  // friendly fire (own blast can self-damage)
 };
 
 //MARK: Outbound - start request
@@ -123,20 +125,24 @@ inline std::string serializeKeepalive() {
 // everyone in the next state packet, so all clients' OPTIONS modals stay in sync.
 // Map size isn't here - it's chosen at the START button press (serializeStart).
 inline std::string serializeOptions(int nplayers, float diff,
-                                    bool rocketsExplode, bool egPassThrough) {
+                                    bool rocketsExplode, bool egPassThrough,
+                                    bool rocketsPhysics, bool friendlyFire) {
     nlohmann::json j = {
         {"type", "options"},
         {"nplayers", nplayers},
         {"diff", diff},
         {"rexpl", rocketsExplode},
-        {"egpt", egPassThrough}
+        {"egpt", egPassThrough},
+        {"phys", rocketsPhysics},
+        {"ff", friendlyFire}
     };
     return j.dump();
 }
 
 inline std::string serializeStart(float half, int platforms, int asteroids,
                                   int nplayers, float diff,
-                                  bool rocketsExplode, bool egPassThrough) {
+                                  bool rocketsExplode, bool egPassThrough,
+                                  bool rocketsPhysics, bool friendlyFire) {
     nlohmann::json j = {
         {"type", "start"},
         {"half", half},
@@ -145,7 +151,9 @@ inline std::string serializeStart(float half, int platforms, int asteroids,
         {"nplayers", nplayers},        // requested match size (server clamps to connected)
         {"diff", diff},                // bot difficulty center [0..BOT_DIFFICULTY]
         {"rexpl", rocketsExplode},     // OPTIONS: rockets detonate on the boundary wall
-        {"egpt", egPassThrough}        // OPTIONS: fall through platforms under earth gravity
+        {"egpt", egPassThrough},       // OPTIONS: fall through platforms under earth gravity
+        {"phys", rocketsPhysics},      // OPTIONS: rockets obey gravity + inherit shooter velocity
+        {"ff", friendlyFire}           // OPTIONS: a player's own blast can self-damage
     };
     return j.dump();
 }
@@ -243,6 +251,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     uint8_t optFlags = r.u8();
     msg.optRexpl = (optFlags & 1) != 0;
     msg.optEgpt  = (optFlags & 2) != 0;
+    msg.optPhys  = (optFlags & 4) != 0;
+    msg.optFf    = (optFlags & 8) != 0;
 
     // Players - fixed slots, never erased; hide slots the server stopped sending.
     {
@@ -453,6 +463,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.optDiff     = o.value("diff", 0.0f);
         msg.optRexpl    = o.value("rexpl", false);
         msg.optEgpt     = o.value("egpt", false);
+        msg.optPhys     = o.value("phys", false);
+        msg.optFf       = o.value("ff", false);
     }
 
     // Players - a fixed, persistent set of slots; never erased (also Player

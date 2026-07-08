@@ -166,7 +166,8 @@ const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target hea
 // the center of the personality distribution [0..1]; each bot's aggression &
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
 // with bot count (so a lone bot ~= difficulty, a crowd is varied).
-const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; center for all bot personalities
+const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; also the BOT DIFFICULTY slider MAX / hard cap
+const float BOT_DIFFICULTY_DEFAULT = 0.2f; // OPTIONS starting value for BOT DIFFICULTY (client + server defaults)
 const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
 const float BOT_MAX_AIM_SPREAD = 0.50f;    // radians of aim error at accuracy=0 (0 at accuracy=1) 0.5 = ~28.6 degrees 0.3 = ~17.2 degrees
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
@@ -211,10 +212,14 @@ const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage
 //MARK: Rocket Constants
 const float ROCKET_SPEED = 60.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
-const bool ROCKET_GRAVITY_ENABLED = false; // If true, rockets are affected by gravity.
-const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // If true, rockets inherit the player's velocity when fired.
+const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
+const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
+// OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket
+// gravity and shooter-velocity inheritance (input.h sets each fired rocket's
+// gravityEnabled/velocityInheritance from GameSpace::rocketsObeyPhysics).
+const bool ROCKETS_OBEY_PHYSICS = false; // default OFF: rockets fly straight, no inherited velocity (current behavior)
 const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
-const float ROCKET_SPIN_SPEED = 18.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
+const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
 //MARK: Explosion Constants
 const int EXPLOSION_DAMAGE = 25;
@@ -222,6 +227,10 @@ const float EXPLOSION_DAMAGE_RADIUS = 25.0f; // units
 const float EXPLOSION_MAX_RADIUS = EXPLOSION_DAMAGE_RADIUS * 1.8f; // units, visual radius of the explosion effect
 const float EXPLOSION_EXPANSION_RATE = 15.0f; // How quickly the explosion expands, in units/sec
 const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as pushback force
+// OPTIONS "FRIENDLY FIRE": when OFF, a player takes no splash DAMAGE from their own
+// blast (self-knockback still applies, so rocket-jumping survives). Default ON keeps
+// the current behavior. Consumed in ApplyExplosionSplashDamage (collisions.cpp).
+const bool FRIENDLY_FIRE = true; // default ON: your own rocket can damage you (current behavior)
 
 //MARK: Spark VFX Constants
 // Sparks are pure visual particles (no collision). Shared physics/draw, spawned
@@ -246,3 +255,17 @@ const uint32_t ID_NONE = 0; // uninitialized/invalid sentinel
 
 const uint32_t PLAYER_ID_BASE    = 0x00000001; // 1 - 255 (max 255 players)
 const uint32_t NON_PLAYER_ID_BASE  = 0x00000100; // 256 - 65535
+
+//MARK: Native client built-in server (address baked into the binary)
+// Native client's built-in server. Empty host => no baked server: launching with
+// no arg starts LOCAL single-player (dev default), and a URL arg goes networked.
+// Set a host (e.g. a Vultr IP) to ship a binary that auto-connects: no-arg launch
+// then connects over UDP and pivots to WebSocket if the UDP handshake stalls, and
+// `./platformz local` is the single-player escape hatch. Override at build time:
+//   -DPLATFORMZ_DEFAULT_SERVER_HOST='"203.0.113.10"'
+#ifndef PLATFORMZ_DEFAULT_SERVER_HOST
+#define PLATFORMZ_DEFAULT_SERVER_HOST ""       // e.g. "203.0.113.10"
+#endif
+#ifndef PLATFORMZ_DEFAULT_SERVER_PORT
+#define PLATFORMZ_DEFAULT_SERVER_PORT "9000"
+#endif

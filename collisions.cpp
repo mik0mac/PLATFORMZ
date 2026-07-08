@@ -753,28 +753,34 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
-            player.takeDamage(splashDamage);
-            if (player.isAlive) {
-                space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
-                if (explosion.owner != &player) {
-                    // don't play the sound if the player hit themself.
-                    space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
-                }
+            // OPTIONS "FRIENDLY FIRE": when off, a player's own blast deals no
+            // self-DAMAGE (the pushback below still applies, so rocket-jumping
+            // survives). All the damage + hit/elimination bookkeeping is skipped
+            // for the self-blast; other players are always damaged.
+            if (space.friendlyFire || explosion.owner != &player) {
+                player.takeDamage(splashDamage);
+                if (player.isAlive) {
+                    space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
+                    if (explosion.owner != &player) {
+                        // don't play the sound if the player hit themself.
+                        space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                    }
 
-                if (explosion.owner) {
-                    Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name, explosion.owner->id, player.id);
-                    space.emitMessage(msg);
+                    if (explosion.owner) {
+                        Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name, explosion.owner->id, player.id);
+                        space.emitMessage(msg);
+                    }
                 }
-            }
-            // check if player has been eliminated.
-            if (!player.isAlive) {
-                awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
-                space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.owner ? explosion.owner->id : 0);
-                if (explosion.owner) {
-                    Message msg(MSG_TYPE_ELIMINATION, explosion.owner->name, player.name, explosion.owner->id, player.id);
-                    space.emitMessage(msg);
+                // check if player has been eliminated.
+                if (!player.isAlive) {
+                    awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
+                    space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                    if (explosion.owner) {
+                        Message msg(MSG_TYPE_ELIMINATION, explosion.owner->name, player.name, explosion.owner->id, player.id);
+                        space.emitMessage(msg);
+                    }
+                    // could add fuel/ammo/health awards for eliminating a player, if desired.
                 }
-                // could add fuel/ammo/health awards for eliminating a player, if desired.
             }
 
             // Also apply a pushback force to the player, scaled by the same falloff.

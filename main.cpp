@@ -76,20 +76,42 @@ static void DrawMessageQueue(MessageQueue& mq, int screenW, int screenH) {
 // In the browser there's no command line, so the web build is always a
 // networked client and the server URL comes from the page query string.
 int main(int argc, char** argv) {
+    bool        networked;
+    std::string serverUrl;
+    // Auto-fallback (native, baked-in server only): start on UDP and pivot to the
+    // ws:// at the same host if the UDP handshake never completes. Left off for the
+    // browser and for an explicit URL arg (which honors whatever scheme was given).
+    bool        autoFallback  = false;
+    std::string fallbackWsUrl;
 #if defined(__EMSCRIPTEN__)
     (void)argc; (void)argv;
-    const bool networked = true;
+    networked = true;
     // e.g. platformz.html?server=ws://192.168.1.20:9000
     // Falls back to the page's own host on :9000 if the param is absent.
-    const std::string serverUrl = [] {
+    serverUrl = [] {
         const char* s = emscripten_run_script_string(
             "(new URLSearchParams(location.search).get('server')) || "
             "('ws://' + location.hostname + ':9000')");
         return std::string(s ? s : "");
     }();
 #else
-    const bool networked = (argc > 1);
-    const std::string serverUrl = networked ? argv[1] : std::string();
+    // Native launch: a URL arg is an explicit override; the word "local" forces
+    // single-player; no arg uses the baked-in server (if any) preferring UDP with a
+    // WS pivot, else falls back to local single-player (dev default).
+    std::string defaultHost = PLATFORMZ_DEFAULT_SERVER_HOST;
+    if (argc > 1 && std::string(argv[1]) == "local") {
+        networked = false;                             // explicit single-player
+    } else if (argc > 1) {
+        networked = true; serverUrl = argv[1];         // explicit URL: honor scheme, no auto-fallback
+    } else if (!defaultHost.empty()) {                 // baked server: prefer UDP, allow a WS pivot
+        networked = true;
+        std::string port = PLATFORMZ_DEFAULT_SERVER_PORT;
+        serverUrl     = "udp://" + defaultHost + ":" + port;
+        fallbackWsUrl = "ws://"  + defaultHost + ":" + port;
+        autoFallback  = true;
+    } else {
+        networked = false;                             // dev default: no arg -> local single-player
+    }
 #endif
 //MARK: SETUP
     // --- Setup (runs once) ---
@@ -210,7 +232,8 @@ int main(int argc, char** argv) {
     // WebSocket reports its own drops - on that transport a mere frame stall (an
     // unfocused window) isn't a disconnect, and resetting would flash the connecting
     // screen for no reason.
-    const bool udpTransport = networked && serverUrl.rfind("udp://", 0) == 0;
+    bool      udpTransport = networked && serverUrl.rfind("udp://", 0) == 0; // not const: flips to false if the UDP->WS auto-fallback fires
+    double    connectStartTime = 0.0; // GetTime() when we first connected; drives the UDP->WS fallback timeout
     double    lastHelloTime = 0.0;
     double    lastStateTime = 0.0;
     double    lastKeepaliveTime = 0.0;
@@ -261,7 +284,7 @@ int main(int argc, char** argv) {
     // OPTIONS sliders (see the OPTIONS modal below). Stored as floats so UiSlider
     // can drive them; cast where an int is needed. Defaults match the constants.
     float optNumPlayers    = (float)GAMESPACE_NUMBER_OF_PLAYERS; // 1..GAMESPACE_NUMBER_OF_PLAYERS
-    float optBotDifficulty = BOT_DIFFICULTY;                     // 0.0..BOT_DIFFICULTY
+    float optBotDifficulty = BOT_DIFFICULTY_DEFAULT;            // starting value; slider range is 0.0..BOT_DIFFICULTY
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
@@ -272,6 +295,8 @@ int main(int argc, char** argv) {
     // the GameSpace at match start - locally in startGame, remotely via serializeStart.
     bool  optRocketsExplodeOnWalls         = WALLS_STOP_ROCKETS;                    // ON => rockets detonate on the boundary wall
     bool  optPassThroughPlatformsEarthGrav = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // ON => fall through platforms under earth gravity
+    bool  optRocketsObeyPhysics            = ROCKETS_OBEY_PHYSICS;                  // ON => rockets obey gravity + inherit shooter velocity
+    bool  optFriendlyFire                  = FRIENDLY_FIRE;                         // OFF => a player's own blast deals no self-damage
     // Networked options sync (lobby): the server echoes the match-wide options in
     // every state packet so any client's change shows live. The two sliders are
     // guarded from server echoes while being dragged (their active latches); the
@@ -280,12 +305,15 @@ int main(int argc, char** argv) {
     // being flipped back before the server's echo of it arrives.
     bool  optSentRexpl = optRocketsExplodeOnWalls;
     bool  optSentEgpt  = optPassThroughPlatformsEarthGrav;
+    bool  optSentPhys  = optRocketsObeyPhysics;
+    bool  optSentFf    = optFriendlyFire;
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
     // mode has no server.
     if (networked) {
         net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
+        connectStartTime = GetTime(); // start the UDP->WS fallback clock (InitWindow already ran)
         TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
     }
 
@@ -308,12 +336,15 @@ int main(int argc, char** argv) {
             // server applies them before generating the world (first press wins).
             if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
                                                       (int)optNumPlayers, optBotDifficulty,
-                                                      optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav));
+                                                      optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav,
+                                                      optRocketsObeyPhysics, optFriendlyFire));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.wallsStopRockets = optRocketsExplodeOnWalls;                    // OPTIONS: rockets detonate on walls vs fly through
         gameSpace.earthGravityPassThroughPlatforms = optPassThroughPlatformsEarthGrav; // OPTIONS: fall through platforms under earth gravity
+        gameSpace.rocketsObeyPhysics = optRocketsObeyPhysics;                     // OPTIONS: rockets obey gravity + inherit shooter velocity
+        gameSpace.friendlyFire = optFriendlyFire;                                 // OPTIONS: own blast self-damage on/off
         gameSpace.setPlayerCount((int)optNumPlayers); // OPTIONS: 1 human + (N-1) bots
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
@@ -395,6 +426,8 @@ int main(int argc, char** argv) {
                     if (!sliderDiffActive)    optBotDifficulty = m.optDiff;
                     if (m.optRexpl != optSentRexpl) { optRocketsExplodeOnWalls = m.optRexpl; optSentRexpl = m.optRexpl; }
                     if (m.optEgpt  != optSentEgpt)  { optPassThroughPlatformsEarthGrav = m.optEgpt; optSentEgpt = m.optEgpt; }
+                    if (m.optPhys  != optSentPhys)  { optRocketsObeyPhysics = m.optPhys; optSentPhys = m.optPhys; }
+                    if (m.optFf    != optSentFf)    { optFriendlyFire = m.optFf; optSentFf = m.optFf; }
                 }
             }
         }
@@ -441,6 +474,19 @@ int main(int argc, char** argv) {
         // a harmless re-welcome and TCP keeps the session alive.
         if (networked) {
             double nowT = GetTime();
+            // Auto-fallback (baked-in UDP default only): if the UDP handshake never
+            // completes (no welcome, myIndex still -1) within the timeout, the path
+            // is likely blocking UDP - switch once to WebSocket at the same host and
+            // restart the handshake. WsTransport then retries on its own thread.
+            if (autoFallback && udpTransport && myIndex < 0 && nowT - connectStartTime > 3.0) {
+                TraceLog(LOG_WARNING, "UDP handshake timed out; falling back to WebSocket: %s",
+                         fallbackWsUrl.c_str());
+                net.connect(fallbackWsUrl); // swaps UdpTransport -> WsTransport (old socket closed by its dtor)
+                udpTransport = false;       // stop UDP-only keepalive / silence-reset below
+                autoFallback = false;       // one-shot
+                connectStartTime = nowT;
+                lastHelloTime = 0.0;        // send hello immediately on the new socket
+            }
             if (net.isOpen() && myIndex < 0 && nowT - lastHelloTime > 0.5) {
                 // Only carry a name if the user actually set one (same gate as
                 // serializeName). Before welcome myIndex is -1, so myDisplayName()
@@ -512,11 +558,36 @@ int main(int argc, char** argv) {
                 // server (isConnected), yours marked (YOU). Panel height tracks the
                 // row count.
                 std::vector<Player>& titlePlayers = gameSpace.getPlayers();
+
+                // Host identity: only "player 1" - the lowest connected HUMAN slot
+                // - may adjust OPTIONS and START the match; everyone else sees a
+                // passive lobby with a "waiting for the host" line. hostSlot is the
+                // smallest human-occupied slot (-1 until the server tells us who's
+                // connected); host migrates automatically if that client leaves.
+                // Bot slots also carry isConnected (their bodies render in a match),
+                // so exclude them with !isBot. Local single-player is always host.
+                int hostSlot = -1;
+                for (int i = 0; i < (int)titlePlayers.size(); ++i)
+                    if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) { hostSlot = i; break; }
+                bool amHost = !networked || (myIndex >= 0 && myIndex == hostSlot);
+                if (!amHost) showOptions = false; // never leave the OPTIONS modal open on a non-host (e.g. after a host handoff)
+
+                // Networked: preview the roster the match will build - the
+                // connected humans plus bot-fillers up to the chosen NUMBER OF
+                // PLAYERS. The server holds a full slot set (unclaimed ones held by
+                // bots, all flagged isConnected) and echoes optNumPlayers to every
+                // client, so this preview tracks the host's slider live on ALL
+                // clients. Never hide a connected human sitting above the chosen
+                // count (a mid-roster slot can be free while a higher one is taken).
                 int rowsShown;
+                int previewCount = 0; // networked: number of roster rows to draw (slots 0..previewCount-1)
                 if (networked) {
-                    rowsShown = 0;
-                    for (const Player& p : titlePlayers) if (p.isConnected) rowsShown++;
-                    if (rowsShown == 0) rowsShown = 1; // "waiting" line
+                    int lastHumanSlot = -1;
+                    for (int i = 0; i < (int)titlePlayers.size(); ++i)
+                        if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) lastHumanSlot = i;
+                    previewCount = std::min(std::max((int)optNumPlayers, lastHumanSlot + 1),
+                                            (int)titlePlayers.size());
+                    rowsShown = previewCount > 0 ? previewCount : 1; // >=1 so the "waiting" line has a row
                 } else {
                     rowsShown = (int)optNumPlayers; // OPTIONS slider previews the roster
                 }
@@ -525,12 +596,16 @@ int main(int argc, char** argv) {
                 UiPanel(playersBox);
                 DrawText("PLAYERS", (int)playersBox.x + 10, (int)playersBox.y + 8, 14, ui::OUTLINE);
                 if (networked) {
-                    int row = 0;
-                    for (int i = 0; i < (int)titlePlayers.size(); ++i) {
-                        if (!titlePlayers[i].isConnected) continue;
-                        int ry = (int)(playersBox.y + headerH + row * rowH);
+                    if (previewCount == 0) {
+                        DrawText("Waiting for players...", (int)playersBox.x + 10,
+                                 (int)(playersBox.y + headerH), 18, GRAY);
+                    }
+                    // Slots 0..previewCount-1 are all occupied (human or bot), so
+                    // draw them as contiguous rows.
+                    for (int i = 0; i < previewCount; ++i) {
+                        int ry = (int)(playersBox.y + headerH + i * rowH);
                         bool you = (i == myIndex);
-                        // Local row shows the live-typed name (or our slot-numbered
+                        // Our row shows the live-typed name (or our slot-numbered
                         // default while untouched); other rows show the server-synced
                         // name, falling back to a slot label until they've set one.
                         std::string shown = you
@@ -539,11 +614,7 @@ int main(int argc, char** argv) {
                                                             : titlePlayers[i].name);
                         DrawText(TextFormat("%d. %s%s", i + 1, shown.c_str(), you ? " (YOU)" : ""),
                                  (int)playersBox.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
-                        row++;
                     }
-                    if (row == 0)
-                        DrawText("Waiting for players...", (int)playersBox.x + 10,
-                                 (int)(playersBox.y + headerH), 18, GRAY);
                 } else {
                     for (int i = 0; i < rowsShown; ++i) {
                         int ry = (int)(playersBox.y + headerH + i * rowH);
@@ -563,15 +634,25 @@ int main(int argc, char** argv) {
                 // connected with a slot; local is always ready.
                 float startY = playersBox.y + playersBox.height + 20.0f;
                 bool ready = !networked || (net.isOpen() && myIndex >= 0);
-                if (ready) {
+                if (ready && amHost) {
                     Rectangle bs = {210, startY, 180, 50};
                     Rectangle bm = {410, startY, 180, 50};
                     Rectangle bl = {610, startY, 180, 50};
                     if (uiEnabled && UiButton(bs, "SMALL"))  startGame(mapSizePresets["SMALL"].halfSize, mapSizePresets["SMALL"].numPlatforms, mapSizePresets["SMALL"].numAsteroids);
                     if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(mapSizePresets["MEDIUM"].halfSize, mapSizePresets["MEDIUM"].numPlatforms, mapSizePresets["MEDIUM"].numAsteroids);
                     if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
-                } else {
+                } else if (!ready) {
                     UiTextCentered(myIndex >= 0 ? "JOINING..." : "CONNECTING...",
+                                   screenWidth, (int)startY + 14, 20, GRAY);
+                } else {
+                    // Connected but not the host: only "player 1" starts the match.
+                    // Show who we're waiting on (their synced name, or the slot-
+                    // numbered default until they've set one - same fallback as the
+                    // roster rows above).
+                    std::string hostName = (hostSlot >= 0 && !titlePlayers[hostSlot].name.empty())
+                        ? titlePlayers[hostSlot].name
+                        : TextFormat("PLAYER %d", hostSlot + 1);
+                    UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
                                    screenWidth, (int)startY + 14, 20, GRAY);
                 }
 
@@ -581,8 +662,12 @@ int main(int argc, char** argv) {
                 // is ever opened from a captured (in-game) context.
                 Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
                 if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) { showControls = true; if (IsCursorHidden()) EnableCursor(); }
-                Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
-                if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
+                // OPTIONS is host-only (it reconfigures the whole match); non-hosts
+                // don't get the button, matching the START gating above.
+                if (amHost) {
+                    Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
+                    if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
+                }
 
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
@@ -603,10 +688,11 @@ int main(int argc, char** argv) {
                 }
 
                 // Options popup, same opaque modal style. Two functional sliders
-                // (match size + bot difficulty); they drive local play directly and
-                // ride the start request to the server for networked play.
+                // (match size + bot difficulty) and four gameplay toggles; they drive
+                // local play directly and ride the start request to the server for
+                // networked play. Taller + raised so four toggles fit the 700px window.
                 if (showOptions) {
-                    Rectangle m = {250, 170, 500, 520}; // taller than CONTROLS: two sliders + two toggles
+                    Rectangle m = {250, 40, 500, 600}; // two sliders + four toggles + CLOSE
                     UiModalChrome(m, "OPTIONS");
 
                     float lx = m.x + 40, sw = m.width - 80;
@@ -630,31 +716,45 @@ int main(int argc, char** argv) {
                              sliderPlayersActive, 1.0f)) optChanged = true;
 
                     // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
-                    int y2 = y1 + 90;
+                    int y2 = y1 + 85;
                     DrawText("BOT DIFFICULTY", (int)lx, y2, 18, RAYWHITE);
                     valueRight(TextFormat("%.2f", optBotDifficulty), y2);
                     if (UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
                              0.0f, BOT_DIFFICULTY, sliderDiffActive)) optChanged = true;
 
                     // Toggles: label on its own line, a compact ON/OFF control below
-                    // (labels are long, so keep them off the control's line). Both
-                    // default to their constants.h value; applied at match start.
-                    int y3 = y2 + 90;
+                    // (labels are long, so keep them off the control's line). Each
+                    // defaults to its constants.h value; applied at match start. The
+                    // sliders use an 85px rhythm; the toggles are tighter at 70px.
+                    int y3 = y2 + 85;
                     DrawText("ROCKETS EXPLODE ON BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
                     if (UiToggle({lx, (float)(y3 + 26), 100, 24}, optRocketsExplodeOnWalls)) {
                         optChanged = true; optSentRexpl = optRocketsExplodeOnWalls;
                     }
 
-                    int y4 = y3 + 90;
-                    DrawText("PASS THROUGH PLATFORMS UNDER EARTH GRAVITY", (int)lx, y4, 18, RAYWHITE);
+                    int y4 = y3 + 70;
+                    DrawText("EARTH GRAV: PASS THROUGH PLATFORMS", (int)lx, y4, 18, RAYWHITE);
                     if (UiToggle({lx, (float)(y4 + 26), 100, 24}, optPassThroughPlatformsEarthGrav)) {
                         optChanged = true; optSentEgpt = optPassThroughPlatformsEarthGrav;
+                    }
+
+                    int y5 = y4 + 70;
+                    DrawText("ROCKETS OBEY PHYSICS", (int)lx, y5, 18, RAYWHITE);
+                    if (UiToggle({lx, (float)(y5 + 26), 100, 24}, optRocketsObeyPhysics)) {
+                        optChanged = true; optSentPhys = optRocketsObeyPhysics;
+                    }
+
+                    int y6 = y5 + 70;
+                    DrawText("FRIENDLY FIRE", (int)lx, y6, 18, RAYWHITE);
+                    if (UiToggle({lx, (float)(y6 + 26), 100, 24}, optFriendlyFire)) {
+                        optChanged = true; optSentFf = optFriendlyFire;
                     }
 
                     // Push the change to the server (it re-broadcasts to all clients).
                     if (optChanged && networked && net.isOpen())
                         net.send(serializeOptions((int)optNumPlayers, optBotDifficulty,
-                                                  optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav));
+                                                  optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav,
+                                                  optRocketsObeyPhysics, optFriendlyFire));
 
                     if (UiModalClose(m, optionsWasOpen)) showOptions = false;
                 }
