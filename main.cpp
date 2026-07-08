@@ -512,11 +512,36 @@ int main(int argc, char** argv) {
                 // server (isConnected), yours marked (YOU). Panel height tracks the
                 // row count.
                 std::vector<Player>& titlePlayers = gameSpace.getPlayers();
+
+                // Host identity: only "player 1" - the lowest connected HUMAN slot
+                // - may adjust OPTIONS and START the match; everyone else sees a
+                // passive lobby with a "waiting for the host" line. hostSlot is the
+                // smallest human-occupied slot (-1 until the server tells us who's
+                // connected); host migrates automatically if that client leaves.
+                // Bot slots also carry isConnected (their bodies render in a match),
+                // so exclude them with !isBot. Local single-player is always host.
+                int hostSlot = -1;
+                for (int i = 0; i < (int)titlePlayers.size(); ++i)
+                    if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) { hostSlot = i; break; }
+                bool amHost = !networked || (myIndex >= 0 && myIndex == hostSlot);
+                if (!amHost) showOptions = false; // never leave the OPTIONS modal open on a non-host (e.g. after a host handoff)
+
+                // Networked: preview the roster the match will build - the
+                // connected humans plus bot-fillers up to the chosen NUMBER OF
+                // PLAYERS. The server holds a full slot set (unclaimed ones held by
+                // bots, all flagged isConnected) and echoes optNumPlayers to every
+                // client, so this preview tracks the host's slider live on ALL
+                // clients. Never hide a connected human sitting above the chosen
+                // count (a mid-roster slot can be free while a higher one is taken).
                 int rowsShown;
+                int previewCount = 0; // networked: number of roster rows to draw (slots 0..previewCount-1)
                 if (networked) {
-                    rowsShown = 0;
-                    for (const Player& p : titlePlayers) if (p.isConnected) rowsShown++;
-                    if (rowsShown == 0) rowsShown = 1; // "waiting" line
+                    int lastHumanSlot = -1;
+                    for (int i = 0; i < (int)titlePlayers.size(); ++i)
+                        if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) lastHumanSlot = i;
+                    previewCount = std::min(std::max((int)optNumPlayers, lastHumanSlot + 1),
+                                            (int)titlePlayers.size());
+                    rowsShown = previewCount > 0 ? previewCount : 1; // >=1 so the "waiting" line has a row
                 } else {
                     rowsShown = (int)optNumPlayers; // OPTIONS slider previews the roster
                 }
@@ -525,12 +550,16 @@ int main(int argc, char** argv) {
                 UiPanel(playersBox);
                 DrawText("PLAYERS", (int)playersBox.x + 10, (int)playersBox.y + 8, 14, ui::OUTLINE);
                 if (networked) {
-                    int row = 0;
-                    for (int i = 0; i < (int)titlePlayers.size(); ++i) {
-                        if (!titlePlayers[i].isConnected) continue;
-                        int ry = (int)(playersBox.y + headerH + row * rowH);
+                    if (previewCount == 0) {
+                        DrawText("Waiting for players...", (int)playersBox.x + 10,
+                                 (int)(playersBox.y + headerH), 18, GRAY);
+                    }
+                    // Slots 0..previewCount-1 are all occupied (human or bot), so
+                    // draw them as contiguous rows.
+                    for (int i = 0; i < previewCount; ++i) {
+                        int ry = (int)(playersBox.y + headerH + i * rowH);
                         bool you = (i == myIndex);
-                        // Local row shows the live-typed name (or our slot-numbered
+                        // Our row shows the live-typed name (or our slot-numbered
                         // default while untouched); other rows show the server-synced
                         // name, falling back to a slot label until they've set one.
                         std::string shown = you
@@ -539,11 +568,7 @@ int main(int argc, char** argv) {
                                                             : titlePlayers[i].name);
                         DrawText(TextFormat("%d. %s%s", i + 1, shown.c_str(), you ? " (YOU)" : ""),
                                  (int)playersBox.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
-                        row++;
                     }
-                    if (row == 0)
-                        DrawText("Waiting for players...", (int)playersBox.x + 10,
-                                 (int)(playersBox.y + headerH), 18, GRAY);
                 } else {
                     for (int i = 0; i < rowsShown; ++i) {
                         int ry = (int)(playersBox.y + headerH + i * rowH);
@@ -563,15 +588,25 @@ int main(int argc, char** argv) {
                 // connected with a slot; local is always ready.
                 float startY = playersBox.y + playersBox.height + 20.0f;
                 bool ready = !networked || (net.isOpen() && myIndex >= 0);
-                if (ready) {
+                if (ready && amHost) {
                     Rectangle bs = {210, startY, 180, 50};
                     Rectangle bm = {410, startY, 180, 50};
                     Rectangle bl = {610, startY, 180, 50};
                     if (uiEnabled && UiButton(bs, "SMALL"))  startGame(mapSizePresets["SMALL"].halfSize, mapSizePresets["SMALL"].numPlatforms, mapSizePresets["SMALL"].numAsteroids);
                     if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(mapSizePresets["MEDIUM"].halfSize, mapSizePresets["MEDIUM"].numPlatforms, mapSizePresets["MEDIUM"].numAsteroids);
                     if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
-                } else {
+                } else if (!ready) {
                     UiTextCentered(myIndex >= 0 ? "JOINING..." : "CONNECTING...",
+                                   screenWidth, (int)startY + 14, 20, GRAY);
+                } else {
+                    // Connected but not the host: only "player 1" starts the match.
+                    // Show who we're waiting on (their synced name, or the slot-
+                    // numbered default until they've set one - same fallback as the
+                    // roster rows above).
+                    std::string hostName = (hostSlot >= 0 && !titlePlayers[hostSlot].name.empty())
+                        ? titlePlayers[hostSlot].name
+                        : TextFormat("PLAYER %d", hostSlot + 1);
+                    UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
                                    screenWidth, (int)startY + 14, 20, GRAY);
                 }
 
@@ -581,8 +616,12 @@ int main(int argc, char** argv) {
                 // is ever opened from a captured (in-game) context.
                 Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
                 if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) { showControls = true; if (IsCursorHidden()) EnableCursor(); }
-                Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
-                if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
+                // OPTIONS is host-only (it reconfigures the whole match); non-hosts
+                // don't get the button, matching the START gating above.
+                if (amHost) {
+                    Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
+                    if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
+                }
 
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.

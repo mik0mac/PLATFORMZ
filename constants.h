@@ -214,7 +214,7 @@ const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot,
 const bool ROCKET_GRAVITY_ENABLED = false; // If true, rockets are affected by gravity.
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // If true, rockets inherit the player's velocity when fired.
 const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
-const float ROCKET_SPIN_SPEED = 18.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
+const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
 //MARK: Explosion Constants
 const int EXPLOSION_DAMAGE = 25;

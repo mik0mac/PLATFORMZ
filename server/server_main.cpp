@@ -242,6 +242,21 @@ static std::set<int> gatherClaimedSlots() {
     return claimed;
 }
 
+// Is this connection the lobby "host"? The host is the client owning the lowest
+// player slot (playerId) among all connected clients - the same "player 1 = lowest
+// connected slot" rule the client uses to gate its lobby UI. Only the host may
+// start a match or change OPTIONS; this is the authoritative backstop behind that
+// UI gate. Locks clientMutex itself; returns false for an unknown conn or no
+// clients. Self-contained (never touches gameMutex), so no lock-ordering risk.
+static bool isHostConn(uint64_t connId) {
+    std::lock_guard<std::mutex> lock(clientMutex);
+    auto it = clients.find(connId);
+    if (it == clients.end()) return false;
+    int minSlot = it->second.playerId;
+    for (auto& [cid, c] : clients) minSlot = std::min(minSlot, c.playerId);
+    return it->second.playerId == minSlot;
+}
+
 //MARK: Input parse
 // -------------------------------------------------------------------------
 // Packet parsing - JSON input from client into PlayerInput.
@@ -759,10 +774,12 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     }
 
     //MARK: Msg: start
-    // Control message: a client asking to start/restart a match. Any client may
-    // send it. Flagged here and performed by the sim loop so all gameSpace
-    // mutation stays on a single thread.
+    // Control message: a client asking to start/restart a match. Only the host
+    // (lowest connected slot) may start; ignore it from anyone else. Flagged here
+    // and performed by the sim loop so all gameSpace mutation stays on a single
+    // thread.
     if (msg.find("\"type\":\"start\"") != std::string::npos) {
+        if (!isHostConn(connId)) return; // host-only; non-host clients have no START button, this is the backstop
         // Map preset chosen by the requesting client (first press wins).
         pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
         pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
@@ -791,9 +808,11 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
 
     //MARK: Msg: options
     // Control message: a client changing a lobby option (match size, bot
-    // difficulty, gameplay toggles). Match-wide, so just update the pending
-    // config (no per-client state) WITHOUT starting; the next "start" uses these.
+    // difficulty, gameplay toggles). Host-only (match-wide config); ignore from
+    // non-host clients. Just update the pending config (no per-client state)
+    // WITHOUT starting; the next "start" uses these.
     if (msg.find("\"type\":\"options\"") != std::string::npos) {
+        if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
         pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
         pendingRocketsExplode = parseBool(msg, "rexpl", pendingRocketsExplode.load());
