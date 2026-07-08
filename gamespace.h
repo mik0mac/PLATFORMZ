@@ -43,6 +43,8 @@ public:
     // compile-time constants so an unconfigured GameSpace behaves as before.
     bool wallsStopRockets = WALLS_STOP_ROCKETS;                                    // rockets detonate on the boundary wall vs fly through
     bool earthGravityPassThroughPlatforms = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // under earth gravity, fall through platforms vs land on them
+    bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
+    bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
     
     uint32_t nextID = NON_PLAYER_ID_BASE; // Platforms and Asteroids (0x00000100) 256, 257, 258, ... 
     uint32_t nextPlayerID = PLAYER_ID_BASE; // (0x00000001) 1, 2, 3, ... 255.

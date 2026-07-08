@@ -211,8 +211,12 @@ const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage
 //MARK: Rocket Constants
 const float ROCKET_SPEED = 60.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
-const bool ROCKET_GRAVITY_ENABLED = false; // If true, rockets are affected by gravity.
-const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // If true, rockets inherit the player's velocity when fired.
+const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
+const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
+// OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket
+// gravity and shooter-velocity inheritance (input.h sets each fired rocket's
+// gravityEnabled/velocityInheritance from GameSpace::rocketsObeyPhysics).
+const bool ROCKETS_OBEY_PHYSICS = false; // default OFF: rockets fly straight, no inherited velocity (current behavior)
 const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
 const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
@@ -222,6 +226,10 @@ const float EXPLOSION_DAMAGE_RADIUS = 25.0f; // units
 const float EXPLOSION_MAX_RADIUS = EXPLOSION_DAMAGE_RADIUS * 1.8f; // units, visual radius of the explosion effect
 const float EXPLOSION_EXPANSION_RATE = 15.0f; // How quickly the explosion expands, in units/sec
 const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as pushback force
+// OPTIONS "FRIENDLY FIRE": when OFF, a player takes no splash DAMAGE from their own
+// blast (self-knockback still applies, so rocket-jumping survives). Default ON keeps
+// the current behavior. Consumed in ApplyExplosionSplashDamage (collisions.cpp).
+const bool FRIENDLY_FIRE = true; // default ON: your own rocket can damage you (current behavior)
 
 //MARK: Spark VFX Constants
 // Sparks are pure visual particles (no collision). Shared physics/draw, spawned

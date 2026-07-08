@@ -138,6 +138,9 @@ on the web but not native (see `docs/multiplayer-testing.md` for the full setup)
   game input, so without the lock the game is uncontrollable.
 
 ## Known quirks — leave as-is unless asked
-- `Rocket::updatePos` has a commented-out gravity line — intentional (rockets
-  fly straight). Leave it.
+- Rocket gravity and shooter-velocity inheritance are both driven by the OPTIONS
+  **ROCKETS OBEY PHYSICS** toggle (`GameSpace::rocketsObeyPhysics`, set onto each
+  fired rocket in `input.h`). Gravity is applied in `Rocket::updatePos`
+  (`gravityEnabled`), inheritance once at spawn in `input.h` (`velocityInheritance`).
+  Both default OFF, so rockets fly straight unless the toggle is on.
 - This builds/runs on macOS with Homebrew paths only; no cross-platform build.

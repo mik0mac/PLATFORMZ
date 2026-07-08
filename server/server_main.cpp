@@ -160,6 +160,8 @@ std::atomic<float> pendingDiff{BOT_DIFFICULTY};
 // OPTIONS bool toggles carried by a start request; defaults from constants.h.
 std::atomic<bool>  pendingRocketsExplode{WALLS_STOP_ROCKETS};
 std::atomic<bool>  pendingEgPassThrough{EARTH_GRAVITY_PASS_THROUGH_PLATFORMS};
+std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
+std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
 
 static const char* phaseString(Phase p) {
     switch (p) {
@@ -541,6 +543,8 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     s += ",\"diff\":"   + jf(pendingDiff.load());
     s += ",\"rexpl\":"  + jb(pendingRocketsExplode.load());
     s += ",\"egpt\":"   + jb(pendingEgPassThrough.load());
+    s += ",\"phys\":"   + jb(pendingRocketsPhysics.load());
+    s += ",\"ff\":"     + jb(pendingFriendlyFire.load());
     s += "}";
 
     s += "}";
@@ -568,7 +572,8 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
     // Options (match-wide), same values buildStatePacket puts in "opt".
     nb::putU8(b, (uint8_t)pendingPlayers.load());
     nb::putF32(b, pendingDiff.load());
-    nb::putU8(b, (uint8_t)((pendingRocketsExplode.load() ? 1 : 0) | (pendingEgPassThrough.load() ? 2 : 0)));
+    nb::putU8(b, (uint8_t)((pendingRocketsExplode.load() ? 1 : 0) | (pendingEgPassThrough.load() ? 2 : 0)
+                          | (pendingRocketsPhysics.load() ? 4 : 0) | (pendingFriendlyFire.load() ? 8 : 0)));
 
     // Players (fixed roster; u8 count is plenty).
     auto& players = gameSpace.getPlayers();
@@ -788,6 +793,8 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY);
         pendingRocketsExplode = parseBool(msg, "rexpl", WALLS_STOP_ROCKETS);
         pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
+        pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);
+        pendingFriendlyFire = parseBool(msg, "ff", FRIENDLY_FIRE);
         startRequested = true; // release: set after the preset values above
         return;
     }
@@ -817,6 +824,8 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
         pendingRocketsExplode = parseBool(msg, "rexpl", pendingRocketsExplode.load());
         pendingEgPassThrough = parseBool(msg, "egpt", pendingEgPassThrough.load());
+        pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
+        pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
         return;
     }
 
@@ -954,6 +963,8 @@ void SimulationLoop() {
                 // before the world is built (collisions read these off GameSpace).
                 gameSpace.wallsStopRockets = pendingRocketsExplode.load();
                 gameSpace.earthGravityPassThroughPlatforms = pendingEgPassThrough.load();
+                gameSpace.rocketsObeyPhysics = pendingRocketsPhysics.load();
+                gameSpace.friendlyFire = pendingFriendlyFire.load();
                 // Issue #5 order: platforms -> players (spread) -> asteroids
                 // (buffered away from the placed players). Same sequence the local
                 // client's generate() uses, so both modes build worlds identically.

@@ -527,10 +527,7 @@ public:
         if (gravityEnabled) {
             velocity.y -= MOON_GRAVITY * dt; // Apply gravity to the rocket's velocity
         }
-        // if (velocityInheritance && owner != nullptr) {
-        //     Vector3 inheritedVelocity = owner->velocity * dt; // Inherit player's velocity
-        //     velocity = Vector3Add(velocity, inheritedVelocity); // Inherit player's velocity
-        // }
+        // velocityInheritance is applied once at spawn (input.h), not per-frame.
         position = Vector3Add(position, Vector3Scale(velocity, dt));
         if (isOutOfBounds) {
             fadeTimer -= (dt / 1.0f);

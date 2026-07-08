@@ -138,6 +138,11 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             // is standing on straddles that gap on a downward shot.
             rocket.prevPosition = eyePos;
             rocket.direction = aim;
+            // OPTIONS "ROCKETS OBEY PHYSICS": one match-wide flag drives both rocket
+            // gravity (applied in Rocket::updatePos) and shooter-velocity inheritance
+            // (applied just below). Overrides the per-rocket constant defaults.
+            rocket.gravityEnabled      = gameSpace.rocketsObeyPhysics;
+            rocket.velocityInheritance = gameSpace.rocketsObeyPhysics;
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             if (rocket.velocityInheritance) {
                 rocket.velocity = Vector3Add(rocket.velocity, player.velocity); // inherit player's velocity
