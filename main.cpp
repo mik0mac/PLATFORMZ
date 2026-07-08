@@ -113,12 +113,19 @@ int main(int argc, char** argv) {
         networked = false;                             // dev default: no arg -> local single-player
     }
 #endif
+
 //MARK: SETUP
     // --- Setup (runs once) ---
-    const int screenWidth = 1000;
-    const int screenHeight = 700;
+    const int initialWidth = 1000;
+    const int initialHeight = 700;
+    
+    int screenWidth = initialWidth;
+    int screenHeight = initialHeight;
     const int textHeight = 20;
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(screenWidth, screenHeight, "PLATFORMZ");
+
+    
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
                           // quit key - quit via the window close button or Cmd+Q.
@@ -457,9 +464,35 @@ int main(int argc, char** argv) {
         int k = GetKeyPressed();
         return (k != 0 && k != KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     };
-//MARK: MAIN LOOP
+    //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
+        
+        // Handle Fullscreen toggle (Cmd+F on Mac, Win+F on Windows).
+        if (IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER)) { // Cmd on Mac, Win key on Windows
+            if (IsKeyPressed(KEY_F)) {
+                if (!IsWindowFullscreen()) {
+                    // 1. Get the target monitor's native size
+                    int monitor = GetCurrentMonitor();
+                    int monitorWidth = GetMonitorWidth(monitor);
+                    int monitorHeight = GetMonitorHeight(monitor);
+
+                    // 2. Expand window size to match monitor BEFORE toggling
+                    screenWidth = monitorWidth;
+                    screenHeight = monitorHeight;
+                    SetWindowSize(screenWidth, screenHeight);
+                    
+                    ToggleFullscreen();
+                } else {
+                    // 3. Revert to original windowed size when exiting
+                    ToggleFullscreen();
+                    screenWidth = initialWidth;
+                    screenHeight = initialHeight;
+                    SetWindowSize(screenWidth, screenHeight);
+                }
+            }
+        }
+    
 
         // 1. TIME
         // dt = seconds since last frame. Multiply all movement by this
