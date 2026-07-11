@@ -163,6 +163,21 @@ int main(int argc, char** argv) {
     fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
 
+    // MARK: MUSIC
+    // list of music cues
+    MusicCue musicCueTable[] = {
+        // filename, volume, loop, loopStart, loopEnd, num_of_loops
+        MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, true),
+        MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, false),
+        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, true)
+    };
+    // load all cues
+    for (MusicCue& mc : musicCueTable) mc.load();
+    // set a pointer to the current music cue (start on title)
+    MusicCue* currentMusic = &musicCueTable[MUSIC_TITLE];
+
+    
+
     // MARK: RENDER TEXTURE 2D
     // The 3D scene is rendered into this off-screen target each frame so the
     // finished image can be sampled and distorted on the way to the screen -
@@ -457,7 +472,11 @@ int main(int argc, char** argv) {
         int k = GetKeyPressed();
         return (k != 0 && k != KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     };
-//MARK: MAIN LOOP
+
+    // Remember the previous screen so we can detect a transition and change music.
+    GameScreen previousScreen = screen;
+
+    //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
 
@@ -465,6 +484,22 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        // MUSIC STREAM
+        if (screen != previousScreen) {
+            if (screen == GameScreen::TITLE) {
+                currentMusic = &musicCueTable[MUSIC_TITLE];
+            } else if (screen == GameScreen::COUNTDOWN) {
+                currentMusic = &musicCueTable[MUSIC_COUNTDOWN];
+            } else if (screen == GameScreen::PLAYING) {
+                currentMusic = &musicCueTable[MUSIC_PLAYING];
+            } else if (screen == GameScreen::GAME_OVER) {
+                currentMusic = &musicCueTable[MUSIC_TITLE];
+            }
+            previousScreen = screen;
+            currentMusic->play();
+        }
+        UpdateMusicStream(currentMusic->music);
 
         // Connection maintenance (networked). Transport-agnostic, but it's what
         // makes the connectionless UDP path work: resend hello until the server
@@ -1302,8 +1337,12 @@ int main(int argc, char** argv) {
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
     }
 
+    // MARK: TEARDOWN
     // --- Teardown (runs once, after the loop exits) ---
     for (audioFX& fx : fxTable) fx.unload();
+    UnloadMusicStream(title);
+    UnloadMusicStream(countdown);
+    UnloadMusicStream(gameplay);
     CloseAudioDevice();
     UnloadRenderTexture(sceneTarget);
     UnloadShader(grayscaleShader);

@@ -29,6 +29,17 @@ enum AudioFXId {
 const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  The distance at which the sound is the softest.
 const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
 
+// MARK: MUSIC
+
+enum MusicId {
+    MUSIC_TITLE = 0,
+    MUSIC_COUNTDOWN,
+    MUSIC_GAMEPLAY,
+    MUSIC_COUNT
+};
+
+const float DEFAULT_MUSIC_VOLUME = 0.5f; // default music volume for all tracks
+
 //MARK: Message events
 enum MessageType {
     MSG_TYPE_LOW_FUEL,

@@ -156,3 +156,41 @@ public:
 private:
     std::vector<AudioEvent> queue;
 };
+
+class MusicCue {
+public:
+    std::string filename;
+    float volume;
+    float pan = 0.5f;
+    
+    bool loop;
+    float loopStart = 0.0f; // in seconds
+    float loopEnd = -1.0f;   // negative means "end of track" (set in constructor after loading the music)
+    int num_of_loops = -1; // number of times the music should loop (0 = no loop, 1 = play once, 2 = play twice, etc.. -1 = infinite loop)
+    int loopCount = 0; // number of times the music has looped (incremented each time it loops)
+
+    MusicCue (const std::string& filename, float volume = 1.0f, bool loop = true,
+              float loopStart = 0.0f, float loopEnd = -1.0f, int num_of_loops = -1)
+        : filename(filename), volume(volume), loop(loop), loopStart(loopStart), loopEnd(loopEnd), num_of_loops(num_of_loops) {
+        music = LoadMusicStream(filename.c_str());
+        loopEnd = loopEnd == -1.0f ? GetMusicTimeLength(music) : loopEnd;
+        SetMusicVolume(music, volume);
+    }
+
+    void load() {
+        music = LoadMusicStream(filename.c_str());
+        loopEnd = loopEnd == -1.0f ? GetMusicTimeLength(music) : loopEnd;
+        SetMusicVolume(music, volume);
+    }
+
+    void unload() {
+        UnloadMusicStream(music);
+    }
+
+    void play() {
+        PlayMusicStream(music);  // restarts the music from the beginning
+        loopCount = 0;
+    }
+private:
+    Music music;
+};
