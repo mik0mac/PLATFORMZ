@@ -165,8 +165,8 @@ public:
     
     bool loop;
     float loopStart = 0.0f; // in seconds
-    float loopEnd = -1.0f;   // negative means "end of track" (set in constructor after loading the music)
-    int num_of_loops = -1; // number of times the music should loop (0 = no loop, 1 = play once, 2 = play twice, etc.. -1 = infinite loop)
+    float loopEnd = -1.0f;   // negative means "end of track" (resolved in load() once the music's length is known)
+    int num_of_loops = -1; // number of REPEATS (seek-backs to loopStart): 0 = play the section once, 1 = twice, etc. -1 = loop forever
     int loopCount = 0; // number of times the music has looped (incremented each time it loops)
 
     MusicCue (const std::string& filename, float volume = 1.0f, bool loop = true,
