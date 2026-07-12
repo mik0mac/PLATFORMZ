@@ -82,7 +82,21 @@ WEB_LDFLAGS  := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY \
                 --exclude-file "*.DS_Store" \
                 --shell-file shell.html
 
+# Download-size budget for the preloaded assets. assets/ ships wholesale (see
+# WEB_LDFLAGS above), so a misplaced audio master would silently bloat every
+# player's platformz.data - fail the build instead of shipping it.
+WEB_ASSET_BUDGET_MB := 20
+
 web: $(SRCS) $(HDRS) shell.html | webdir
+	@size=$$(du -sm assets | cut -f1); \
+	if [ $$size -gt $(WEB_ASSET_BUDGET_MB) ]; then \
+	  echo "ERROR: assets/ is $${size}MB, over the $(WEB_ASSET_BUDGET_MB)MB web-download budget."; \
+	  echo "assets/ ships wholesale into platformz.data. Largest files:"; \
+	  find assets -type f -size +1M -exec du -h {} + | sort -rh | head; \
+	  echo "Move non-runtime audio (masters/WIP/retired) to audio-src/, or raise WEB_ASSET_BUDGET_MB."; \
+	  exit 1; \
+	fi; \
+	echo "assets/ -> platformz.data: $${size}MB (budget $(WEB_ASSET_BUDGET_MB)MB)"
 	$(EMCC) $(WEB_CXXFLAGS) $(SRCS) $(RAYLIB_WEB_LIB) -o $(WEB_OUT) $(WEB_LDFLAGS)
 
 webdir:
