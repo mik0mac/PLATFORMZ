@@ -72,11 +72,14 @@ WEB_CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(RAYLIB_WEB_INC)
 # `Module.HEAPF32.buffer` in its Web Audio callback, but emscripten 6.x no longer
 # attaches HEAPF32 to Module by default - without this export it's undefined and
 # the audio callback throws every frame (silent game). See miniaudio.h ScriptNode.
+# --preload-file assets: assets/ ships WHOLESALE into platformz.data, so keep
+# only runtime files in it - audio masters/WIP/retired live in audio-src/, which
+# is never built or deployed. The one exclusion is .DS_Store (macOS recreates it).
 WEB_LDFLAGS  := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY \
                 -sEXPORTED_RUNTIME_METHODS=HEAPF32 \
                 -lwebsocket.js \
                 --preload-file assets \
-                --exclude-file "*audio_WIP*" \
+                --exclude-file "*.DS_Store" \
                 --shell-file shell.html
 
 web: $(SRCS) $(HDRS) shell.html | webdir
