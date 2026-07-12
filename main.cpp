@@ -581,9 +581,16 @@ int main(int argc, char** argv) {
                 // Name entry (local-only for now).
                 UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
                 Rectangle nameBox = {350, 240, 300, 40};
+                // Let the name fill the space the UI allots but never overflow
+                // it. The tightest renderer is the lobby roster row below:
+                // "%d. NAME (YOU)" at font 18 inside the 300px players panel.
+                // Convert its leftover width to the field's font size (20) and
+                // let UiTextField reject chars past that budget.
+                int nameBudget = (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * 20 / 18;
                 // Push every edit to the server so the latest typed name wins
                 // (the welcome already sent a baseline before this field changed).
-                if (UiTextField(nameBox, playerName, nameFocused, 16, 20, &namePristine) &&
+                if (UiTextField(nameBox, playerName, nameFocused, PLAYER_NAME_MAX_CHARS, 20,
+                                &namePristine, nameBudget) &&
                     networked && net.isOpen())
                     net.send(serializeName(playerName));
 

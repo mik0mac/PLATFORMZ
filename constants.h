@@ -115,6 +115,12 @@ const float PLAYER_RADIUS = PLAYER_BASE_RADIUS * PLAYER_SCALE; // == 2.0 (preser
 
 const int PLAYER_DAMAGE = 10; // Damage dealt to other players or asteroids when colliding.
 
+// Hard cap on display-name length, enforced on the client (name entry field)
+// and the server (incoming "name"/"hello" messages, so a modified client can't
+// overflow other players' UI). The entry field also limits by rendered pixel
+// width, so this is the backstop for very narrow glyphs.
+const size_t PLAYER_NAME_MAX_CHARS = 32;
+
 //MARK: Reticle Constants
 // The reticle is a purely visual in-world object (no collision): the player's
 // aiming device and, to others, an indicator of where they are looking. It is

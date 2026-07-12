@@ -302,6 +302,14 @@ static std::string parseString(const std::string& json, const std::string& key,
     return out;
 }
 
+// Clamp a client-supplied display name to the shared cap (constants.h). The
+// stock client's entry field already enforces this; this is the backstop so a
+// modified client can't ship a name that overflows everyone else's UI.
+static std::string clampName(std::string name) {
+    if (name.size() > PLAYER_NAME_MAX_CHARS) name.resize(PLAYER_NAME_MAX_CHARS);
+    return name;
+}
+
 static PlayerInput parseInput(const std::string& json) {
     PlayerInput in;
     // lookDelta comes as absolute yaw/pitch from client (not mouse delta),
@@ -771,7 +779,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         std::lock_guard<std::mutex> lock(clientMutex);
         auto it = clients.find(connId);
         if (it != clients.end()) {
-            std::string nm = parseString(msg, "name");
+            std::string nm = clampName(parseString(msg, "name"));
             if (!nm.empty()) { it->second.name = nm; it->second.nameDirty = true; }
             SendToClient(it->second, welcomeFor(it->second));
         }
@@ -807,7 +815,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         std::lock_guard<std::mutex> lock(clientMutex);
         auto it = clients.find(connId);
         if (it != clients.end()) {
-            it->second.name = parseString(msg, "name");
+            it->second.name = clampName(parseString(msg, "name"));
             it->second.nameDirty = true;
         }
         return;
@@ -1252,7 +1260,7 @@ private:
             c.transport   = Transport::UDP;
             c.udpEndpoint = from;
             c.lastSeenSec = NowSec();
-            std::string nm = parseString(helloMsg, "name");
+            std::string nm = clampName(parseString(helloMsg, "name"));
             if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
             clients[connId] = c;
             udpIndex[from]  = connId;

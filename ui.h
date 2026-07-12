@@ -90,11 +90,20 @@ inline bool UiToggle(Rectangle r, bool& value, int fontSize = 20) {
 // `pristine` (optional) enables "clear the default on first edit": while
 // *pristine is true the field still holds untouched default text, so the first
 // keystroke wipes it before the input is applied. Pass nullptr to disable.
+// Typed chars are also rejected once the rendered text would no longer fit the
+// field (or `maxTextWidth` pixels, if a tighter caller budget is given) — so
+// the text can fill the visible space but never overflow it. Narrow glyphs get
+// more characters than wide ones; maxLen stays as the hard backstop.
 inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
                         size_t maxLen = 16, int fontSize = 20,
-                        bool* pristine = nullptr) {
+                        bool* pristine = nullptr, int maxTextWidth = 0) {
     bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) focused = hovered; // click toggles focus
+
+    // Pixel budget for the rendered text: the field's inner width (padding both
+    // sides, room for the caret), tightened further if the caller passed one.
+    int fitWidth = (int)r.width - 2 * (int)ui::PAD - 4;
+    if (maxTextWidth > 0 && maxTextWidth < fitWidth) fitWidth = maxTextWidth;
 
     bool changed = false;
     if (focused) {
@@ -102,7 +111,8 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
         while (c > 0) {
             if (c >= 32 && c <= 125) {
                 if (pristine && *pristine) { text.clear(); *pristine = false; }
-                if (text.size() < maxLen) {
+                if (text.size() < maxLen &&
+                    MeasureText((text + (char)c).c_str(), fontSize) <= fitWidth) {
                     text.push_back((char)c);
                     changed = true;
                 }
