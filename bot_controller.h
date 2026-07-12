@@ -133,8 +133,9 @@ struct BotController {
         // (defensive — callers init() at match start).
         if ((int)decisions.size() < (int)players.size()) init(players);
         for (int i = 0; i < (int)players.size(); ++i) {
-            if (!players[i].isBot) continue;
+            if (!players[i].isBot || !players[i].isAlive) continue;
             int targetIdx = pickTarget(players, i);
+            if (targetIdx == i) continue; // no living target (bot is last alive) — idle
             PlayerInput botIn = botInput(players[i], players[targetIdx], players,
                                          gs.getPlatforms(), gs.getAsteroids(), gs.getWalls(),
                                          botTree, dt, decisions[i], profiles[i]);
@@ -144,13 +145,15 @@ struct BotController {
     }
 
 private:
-    // Nearest human to slot `self`. Falls back to the nearest other player, then
-    // to self (harmless — only reached if this bot is the only slot).
+    // Nearest living human to slot `self`. Falls back to the nearest other
+    // living player, then to self (harmless — only reached if this bot is the
+    // only one left alive). Dead players are free-flying spectators; targeting
+    // them means shooting at a ghost.
     static int pickTarget(const std::vector<Player>& players, int self) {
         int bestHuman = -1, bestAny = -1;
         float dHuman = FLT_MAX, dAny = FLT_MAX;
         for (int j = 0; j < (int)players.size(); ++j) {
-            if (j == self) continue;
+            if (j == self || !players[j].isAlive) continue;
             float d = Vector3DistanceSqr(players[self].position, players[j].position);
             if (d < dAny) { dAny = d; bestAny = j; }
             if (!players[j].isBot && d < dHuman) { dHuman = d; bestHuman = j; }
