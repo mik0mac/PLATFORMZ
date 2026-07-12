@@ -1252,9 +1252,12 @@ int main(int argc, char** argv) {
             }
 
             // MARK: Message Queue Draw
-            int msg_index = 0;
-            for (Message& msg : messageQueue.getMessages()) {
-                
+            // Index-based loop (not range-for): remove() erases from the vector,
+            // which invalidates a range-for's cached end() iterator.
+            std::vector<Message>& messages = messageQueue.getMessages();
+            for (int msg_index = 0; msg_index < (int)messages.size(); ) {
+                Message& msg = messages[msg_index];
+
                 std::string pa;
                 std::string pb;
                 // replace the local player's name with "YOU" for clarity in the
