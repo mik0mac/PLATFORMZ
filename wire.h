@@ -324,6 +324,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             a->velocity    = vel;
             a->size        = size;
             a->health      = hp;
+            a->syncFillAlpha(); // fill alpha tracks health; clients never run takeDamage
             a->flashTimer  = flash;
             a->isDestroyed = false; // server never sends destroyed; they vanish from the set
         }
@@ -521,6 +522,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 a.velocity    = vec3(jo, "vx", "vy", "vz");
                 a.size        = jo.value("size", a.size);
                 a.health      = jo.value("hp", a.health);
+                a.syncFillAlpha(); // fill alpha tracks health; clients never run takeDamage
                 a.flashTimer  = jo.value("flash", 0.0f); // server-driven hot-glow damage flash
                 a.isDestroyed = jo.value("dead", false);
             });
