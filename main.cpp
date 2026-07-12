@@ -151,7 +151,6 @@ int main(int argc, char** argv) {
                   "assets/sounds/move_through_platform_2.wav",
                   "assets/sounds/move_through_platform_3.wav" },
                 0.3f, true, false, 0.08f),                                             // FX_PLATFORM_PASSTHROUGH (4 round-robin variation files, gated below)
-        audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false, 1),           // FX_MESSAGE_RECEIVED (local only)
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
         audioFX("assets/sounds/warning.wav",             0.25f, true, false, 2),       // FX_WARNING (local only)
@@ -1118,7 +1117,7 @@ int main(int argc, char** argv) {
         // first server packet (the connecting-screen guard below handles that
         // frame), and nothing has queued a sound yet anyway.
         if (localPlayer != nullptr)
-            audioQueue.flush(localPlayer ? *localPlayer : gameSpace.getPlayers()[0]);
+            audioQueue.flush(*localPlayer);
 
         // MARK: MESSAGE CUE DRAIN
         // messages from the gameSpace are pushed into the local player queue.

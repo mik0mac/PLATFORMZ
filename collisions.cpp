@@ -372,8 +372,8 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                     float dist = Vector3Length(offset);
                     if (dist > 1e-4f) {
                         Vector3 normal = Vector3Scale(offset, 1.0f / dist);
-                        asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), 1.0f); // asteroid bounces off the player, same elasticity as the walls
-                        player.velocity = Vector3Scale(Vector3Reflect(player.velocity, normal), 1.0f); // player bounces off the asteroid, same elasticity as the walls
+                        asteroid.velocity = Vector3Reflect(asteroid.velocity, normal); // asteroid bounces off the player, same elasticity as the walls
+                        player.velocity = Vector3Reflect(player.velocity, normal); // player bounces off the asteroid, same elasticity as the walls
                         // push clear of the overlap
                         float overlap = (asteroid.size + player.radius) - dist;
                         asteroid.position = Vector3Subtract(asteroid.position, Vector3Scale(normal, overlap *0.5f));
@@ -590,7 +590,7 @@ void CheckPlayerWallCollisions(GameSpace& space) {
 }
 
 //MARK: Player vs Player
-void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
+void CheckPlayerPlayerCollisions(GameSpace& space) {
     auto& players = space.getPlayers();
 
     for (int i = 0; i < (int)players.size(); i++) {
@@ -654,8 +654,8 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                     playerB.position = Vector3Subtract(playerB.position, Vector3Scale(normal, overlap * 0.5f));
 
                     // Bounce apart, same elasticity as the walls (matches the asteroid-vs-player bounce).
-                    playerA.velocity = Vector3Scale(Vector3Reflect(playerA.velocity, normal), 1.0f);
-                    playerB.velocity = Vector3Scale(Vector3Reflect(playerB.velocity, normal), 1.0f);
+                    playerA.velocity = Vector3Reflect(playerA.velocity, normal);
+                    playerB.velocity = Vector3Reflect(playerB.velocity, normal);
                 }
             }
         }
@@ -821,7 +821,7 @@ void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
     CheckRocketPlayerCollisions(space, grid);
     ApplyExplosionSplashDamage(space, grid); // after rocket detonation checks so this-frame explosions resolve immediately
     CheckAsteroidPlayerCollisions(space, grid);
-    CheckPlayerPlayerCollisions(space, grid);
+    CheckPlayerPlayerCollisions(space);
     CheckAsteroidPlatformCollisions(space, grid);
     CheckPlayerPlatformCollisions(space, grid);
     CheckPlayerWallCollisions(space);

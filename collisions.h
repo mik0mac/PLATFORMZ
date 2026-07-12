@@ -131,7 +131,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckAsteroidPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
 void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid);
-void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid);
+void CheckPlayerPlayerCollisions(GameSpace& space);
 void CheckPlayerWallCollisions(GameSpace& space);
 void CheckAsteroidWallCollisions(GameSpace& space);
 

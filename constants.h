@@ -18,7 +18,6 @@ enum AudioFXId {
     FX_WALL_BOUNCE_PLAYER,
     FX_ROCKET_THROUGH_WALL,
     FX_PLATFORM_PASSTHROUGH,
-    FX_MESSAGE_RECEIVED,
     FX_PLAYER_ELIMINATION_SCORE,
     FX_PLAYER_LOCAL_DAMAGE,
     FX_WARNING,
@@ -73,9 +72,9 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {60.0f, 32, 6}}, // 8 platforms, 4 asteroids
-    {"MEDIUM", {90.0f, 64, 12}}, // 32 platforms, 12 asteroids
-    {"LARGE",  {120.0f, 128, 24}}  // 128 platforms, 24 asteroids
+    {"SMALL",  {60.0f, 32, 6}},
+    {"MEDIUM", {90.0f, 64, 12}},
+    {"LARGE",  {120.0f, 128, 24}}
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies

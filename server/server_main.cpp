@@ -145,7 +145,6 @@ std::atomic<bool>  startRequested{false};
 // clients show the same number and drive their fade-ins in lockstep. Written by the
 // sim thread each COUNTDOWN tick, read by the io thread in buildStatePacket.
 std::atomic<float> countdownRemaining{0.0f};
-int matchStartConnected = 0; // connected count at match start (sim thread only); sets the last-man-standing threshold
 
 // Map preset carried by a start request (boundary half-size + object counts).
 // Written by the io thread when a "start" arrives, read by the sim thread when
@@ -959,10 +958,10 @@ void SimulationLoop() {
                 // body). Empty slots become bots via the per-tick reconcile. Do this
                 // BEFORE generate so resetPlayersForMatch/placePlayersSpread size to
                 // the final count. (lock order gameMutex->clientMutex preserved.)
-                int want = pendingPlayers.load(), maxClaimed = 0;
+                int want = pendingPlayers.load(), maxClaimed = 0, connectedAtStart = 0;
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
-                    matchStartConnected = (int)clients.size();
+                    connectedAtStart = (int)clients.size();
                     for (auto& [cid, c] : clients) maxClaimed = std::max(maxClaimed, c.playerId + 1);
                 }
                 want = std::min(std::max(want, maxClaimed), GAMESPACE_NUMBER_OF_PLAYERS);
@@ -996,7 +995,7 @@ void SimulationLoop() {
                                          std::chrono::duration<double>(COUNTDOWN_SECONDS));
                 countdownRemaining = COUNTDOWN_SECONDS;
                 justStarted = true;
-                std::cout << "Match countdown started (" << matchStartConnected << " connected)\n";
+                std::cout << "Match countdown started (" << connectedAtStart << " connected)\n";
             }
 
             //MARK: Countdown
@@ -1008,7 +1007,7 @@ void SimulationLoop() {
                 if (left <= 0.0) {
                     countdownRemaining = 0.0f;
                     gamePhase = Phase::PLAYING;
-                    std::cout << "Match started (" << matchStartConnected << " connected)\n";
+                    std::cout << "Match started\n";
                 } else {
                     countdownRemaining = (float)left;
                 }

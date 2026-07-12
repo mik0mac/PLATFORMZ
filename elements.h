@@ -91,7 +91,6 @@ public:
 
     // size, shape, and appearance
     float size = RETICLE_SIZE; // radius of the ring / bracket frame, units
-    float thickness = 0.1f; // Thickness of the reticle lines
     float rotation = 0.0f; // Rotation angle of the reticle in radians. AKA Roll.  Remains fixed, unlike pitch and yaw.  Represents the rotation around the forward axis (the direction the player is facing).
     float standoff = RETICLE_STANDOFF; // gap beyond the body surface, along the aim direction (so it clears the body)
 
@@ -572,7 +571,6 @@ public:
     // attributes
     // damage and explosion radius are properties of the resulting Explosion.
     bool isDestroyed = false; // Rocket is destroyed on collision or when it goes out of bounds
-    bool isExploding = false; // Rocket is in the process of exploding, can be used for visual effects
 
 private:
     bool firstStep = true; // see updatePos: preserves the spawn eye->muzzle segment
