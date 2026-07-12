@@ -37,7 +37,7 @@ enum MusicId {
     MUSIC_COUNT
 };
 
-const float DEFAULT_MUSIC_VOLUME = 0.5f; // default music volume for all tracks
+const float DEFAULT_MUSIC_VOLUME = 0.25f; // default music volume for all tracks
 
 //MARK: Message events
 enum MessageType {

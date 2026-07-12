@@ -171,26 +171,52 @@ public:
 
     MusicCue (const std::string& filename, float volume = 1.0f, bool loop = true,
               float loopStart = 0.0f, float loopEnd = -1.0f, int num_of_loops = -1)
-        : filename(filename), volume(volume), loop(loop), loopStart(loopStart), loopEnd(loopEnd), num_of_loops(num_of_loops) {
-        music = LoadMusicStream(filename.c_str());
-        loopEnd = loopEnd == -1.0f ? GetMusicTimeLength(music) : loopEnd;
-        SetMusicVolume(music, volume);
-    }
+        : filename(filename), volume(volume), loop(loop), loopStart(loopStart), loopEnd(loopEnd), num_of_loops(num_of_loops) {}
 
     void load() {
         music = LoadMusicStream(filename.c_str());
-        loopEnd = loopEnd == -1.0f ? GetMusicTimeLength(music) : loopEnd;
+        // A failed load yields an invalid Music; every raylib call on it is
+        // skipped, so a missing file just means silence.
+        if (!IsMusicValid(music)) return;
+        if (loopEnd < 0.0f) loopEnd = GetMusicTimeLength(music);
         SetMusicVolume(music, volume);
+        // raylib defaults Music.looping to true - a non-looping cue must opt out.
+        music.looping = loop;
     }
 
     void unload() {
-        UnloadMusicStream(music);
+        if (IsMusicValid(music)) UnloadMusicStream(music);
     }
 
     void play() {
-        PlayMusicStream(music);  // restarts the music from the beginning
+        if (!IsMusicValid(music)) return;
+        StopMusicStream(music); // PlayMusicStream alone resumes from the old position
+        PlayMusicStream(music);
         loopCount = 0;
+        music.looping = loop; // may have been cleared by a finished loop quota
+    }
+
+    void stop() {
+        if (IsMusicValid(music)) StopMusicStream(music);
+    }
+
+    // Per-frame: feed the stream and handle the custom loop points. While the
+    // cue is looping, music.looping stays true as a safety net - if a frame
+    // hiccup skips past a loopEnd at the very end of the track, raylib wraps
+    // to 0 instead of going silent.
+    void update() {
+        if (!IsMusicValid(music)) return;
+        UpdateMusicStream(music);
+        if (!loop) return;
+        if (GetMusicTimePlayed(music) >= loopEnd) {
+            if (num_of_loops < 0 || loopCount < num_of_loops) {
+                SeekMusicStream(music, loopStart);
+                loopCount++;
+            } else {
+                music.looping = false; // quota used up: play out to the end, stop
+            }
+        }
     }
 private:
-    Music music;
+    Music music = {}; // zero until load(); IsMusicValid guards every use
 };

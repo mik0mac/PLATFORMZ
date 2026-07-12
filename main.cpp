@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
     fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
 
-    // MARK: MUSIC
+    // MARK: MUSIC FILES
     // list of music cues
     MusicCue musicCueTable[] = {
         // filename, volume, loop, loopStart, loopEnd, num_of_loops
@@ -174,6 +174,9 @@ int main(int argc, char** argv) {
     for (MusicCue& mc : musicCueTable) mc.load();
     // set a pointer to the current music cue (start on title)
     MusicCue* currentMusic = &musicCueTable[MUSIC_TITLE];
+    // The in-loop music switch only fires on a screen *transition*, and the
+    // game boots already on the title screen - start the first cue by hand.
+    currentMusic->play();
 
     
 
@@ -486,19 +489,20 @@ int main(int argc, char** argv) {
 
         // MUSIC STREAM
         if (screen != previousScreen) {
+            currentMusic->stop(); // outgoing cue: don't leave it holding a stale position
             if (screen == GameScreen::TITLE) {
                 currentMusic = &musicCueTable[MUSIC_TITLE];
             } else if (screen == GameScreen::COUNTDOWN) {
                 currentMusic = &musicCueTable[MUSIC_COUNTDOWN];
             } else if (screen == GameScreen::PLAYING) {
-                currentMusic = &musicCueTable[MUSIC_PLAYING];
+                currentMusic = &musicCueTable[MUSIC_GAMEPLAY];
             } else if (screen == GameScreen::GAME_OVER) {
                 currentMusic = &musicCueTable[MUSIC_TITLE];
             }
             previousScreen = screen;
             currentMusic->play();
         }
-        UpdateMusicStream(currentMusic->music);
+        currentMusic->update();
 
         // Connection maintenance (networked). Transport-agnostic, but it's what
         // makes the connectionless UDP path work: resend hello until the server
@@ -1349,9 +1353,7 @@ int main(int argc, char** argv) {
     // MARK: TEARDOWN
     // --- Teardown (runs once, after the loop exits) ---
     for (audioFX& fx : fxTable) fx.unload();
-    UnloadMusicStream(title);
-    UnloadMusicStream(countdown);
-    UnloadMusicStream(gameplay);
+    for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();
     UnloadRenderTexture(sceneTarget);
     UnloadShader(grayscaleShader);
