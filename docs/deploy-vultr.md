@@ -39,7 +39,7 @@ Vultr control panel → **Deploy → Cloud Compute – Shared CPU**:
 ```bash
 ssh root@SERVER_IP
 apt update && apt upgrade -y
-apt install -y build-essential libboost-dev git nginx rsync
+apt install -y build-essential libboost-dev git nginx
 ```
 `build-essential` → `g++`/`make`; `libboost-dev` provides the Boost **headers** the
 server needs (Boost.System is header-only since Boost 1.69, so there's nothing to
@@ -48,23 +48,20 @@ needed** — the server compiles against `server/raylib_server_stub.h` (math typ
 
 ## 3. Get the code onto the box
 
-**Option A — deploys exactly what's on your Mac, including uncommitted work.** Run
-*from your Mac* (quote the Dropbox path — it has a space):
-```bash
-rsync -avz --exclude '.git' \
-  "/Users/michaelmacallister/Dropbox (Personal)/VS_CODE/PLATFORMZ/" \
-  root@SERVER_IP:/opt/PLATFORMZ/
-```
-
-**Option B — clone (commit + push your branch first).** On your Mac:
-`git add -A && git commit && git push -u origin <your-branch>`, then on the box:
+Everything the box needs is tracked in git — the server source **and** the built
+browser client (`web/platformz.*` is committed) — while the heavyweight local-only
+stuff (`audio-src/` masters, `WireframeTests/`, binaries) is gitignored and never
+makes the trip. So deploying is just a clone. Commit + push first
+(`git add -A && git commit && git push -u origin <your-branch>`), then on the box:
 ```bash
 git clone -b <your-branch> https://github.com/mik0mac/PLATFORMZ.git /opt/PLATFORMZ
 ```
 
 > A plain `git clone` pulls `main`. If your latest work is on a feature branch,
-> clone that branch (Option B) or use rsync (Option A), or the server will be built
-> from stale code.
+> clone that branch, or the server will be built from stale code. Uncommitted work
+> never deploys — if something is missing on the box, commit it and `git pull`.
+> (Don't be tempted to rsync the working tree up instead: it drags along ~140 MB
+> of audio masters and prototypes that the server has no use for.)
 
 ## 4. Build the server
 
@@ -102,6 +99,7 @@ Description=PLATFORMZ game server
 After=network.target
 
 [Service]
+DynamicUser=yes
 WorkingDirectory=/opt/PLATFORMZ/server
 ExecStart=/opt/PLATFORMZ/server/gameserver
 Restart=always
@@ -115,6 +113,12 @@ systemctl enable --now platformz
 systemctl status platformz     # "active (running)"
 journalctl -u platformz -f     # live log; players climb as people join
 ```
+
+`DynamicUser=yes` runs the server as a throwaway unprivileged user instead of
+root — the process is pure in-memory (reads no files, writes no files, and port
+9000 doesn't need privileges), so it costs nothing and a compromised server
+can't touch the box. The `EnvironmentFile` line below still works with it:
+systemd reads the root-only key file itself before dropping privileges.
 
 ### Optional: require a join key (recommended once the IP is public)
 
@@ -217,10 +221,11 @@ filtered. `./platformz local` is the single-player escape hatch.
 
 ## Redeploying after code changes
 
-- **Server:** rsync/`git pull` the new code → `make -C /opt/PLATFORMZ/server` →
-  `systemctl restart platformz`.
-- **Web:** rebuild on your Mac (`make web RAYLIB_WEB_DIR=$HOME/raylib`), rsync the new
-  `web/platformz.*` up, then `cp /opt/PLATFORMZ/web/platformz.* /var/www/html/`.
+- **Server:** commit + push, then on the box: `cd /opt/PLATFORMZ && git pull` →
+  `make -C server` → `systemctl restart platformz`.
+- **Web:** rebuild on your Mac (`make web RAYLIB_WEB_DIR=$HOME/raylib`), commit +
+  push the regenerated `web/platformz.*` (they're tracked), then on the box:
+  `git pull` and `cp /opt/PLATFORMZ/web/platformz.* /var/www/html/`.
 
 ## Caveats while on plain IP/HTTP
 
@@ -258,8 +263,9 @@ yourdomain.com {
 }
 ```
 
-Deploy the web build to `/var/www/platformz` (or point `root` wherever rsync
-puts it), then `systemctl reload caddy`. Checks:
+Deploy the web build to `/var/www/platformz`
+(`mkdir -p /var/www/platformz && cp /opt/PLATFORMZ/web/platformz.* /var/www/platformz/`),
+then `systemctl reload caddy`. Checks:
 
 - `https://yourdomain.com/platformz.html` loads and auto-connects (no
   `?server=` needed — the default is scheme-aware).
