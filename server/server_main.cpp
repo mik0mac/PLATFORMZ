@@ -816,7 +816,30 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
     } else if (g_udp) {
         std::lock_guard<std::mutex> lk(udpSendMutex);
         boost::system::error_code ec;
-        g_udp->send_to(net::buffer(msg), c.udpEndpoint, 0, ec);
+        if (msg.size() <= nb::UDP_SAFE_DATAGRAM) {
+            g_udp->send_to(net::buffer(msg), c.udpEndpoint, 0, ec);
+            return;
+        }
+        // Oversized (in practice: the LARGE-map welcome): split into chunked
+        // datagrams that each dodge IP fragmentation - some home routers drop
+        // fragmented UDP, which used to make big welcomes undeliverable (#30).
+        // Framing + reassembly rules live in netbin.h; the client reassembles
+        // in UdpTransport::poll. gen is guarded by udpSendMutex (held here).
+        static uint8_t chunkGen = 0;
+        uint8_t gen = ++chunkGen;
+        size_t count = (msg.size() + nb::CHUNK_PAYLOAD - 1) / nb::CHUNK_PAYLOAD;
+        if (count > 255) return; // >300 KB: not a message we ever produce
+        for (size_t i = 0; i < count; ++i) {
+            std::string chunk;
+            chunk.reserve(nb::UDP_SAFE_DATAGRAM);
+            nb::putU8(chunk, nb::CHUNK_VERSION);
+            nb::putU8(chunk, gen);
+            nb::putU8(chunk, (uint8_t)i);
+            nb::putU8(chunk, (uint8_t)count);
+            chunk += msg.substr(i * nb::CHUNK_PAYLOAD,
+                                std::min(nb::CHUNK_PAYLOAD, msg.size() - i * nb::CHUNK_PAYLOAD));
+            g_udp->send_to(net::buffer(chunk), c.udpEndpoint, 0, ec);
+        }
     }
 }
 
