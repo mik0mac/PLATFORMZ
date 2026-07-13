@@ -292,3 +292,13 @@ const uint32_t NON_PLAYER_ID_BASE  = 0x00000100; // 256 - 65535
 #ifndef PLATFORMZ_DEFAULT_SERVER_PORT
 #define PLATFORMZ_DEFAULT_SERVER_PORT "9000"
 #endif
+// Join key baked into handout builds (the server-side gate is PLATFORMZ_KEY in
+// the server's environment; empty on either side = gate off / no key sent).
+// NEVER commit a real key here - bake it via secrets.mk / EXTRA_CXXFLAGS:
+//   -DPLATFORMZ_DEFAULT_SERVER_KEY='"the-key"'
+// Note the web build deliberately ignores EXTRA_CXXFLAGS: the wasm bundle is
+// served to anyone who visits the page, so a key baked there would be public.
+// Browser players get the key from their invite link (?key=...) instead.
+#ifndef PLATFORMZ_DEFAULT_SERVER_KEY
+#define PLATFORMZ_DEFAULT_SERVER_KEY ""
+#endif

@@ -116,6 +116,45 @@ systemctl status platformz     # "active (running)"
 journalctl -u platformz -f     # live log; players climb as people join
 ```
 
+### Optional: require a join key (recommended once the IP is public)
+
+Port 9000 answers anyone by default — scanners can claim slots, and the
+lowest-slot stranger becomes host. Setting `PLATFORMZ_KEY` in the server's
+environment closes the door: joins without the key get **no reply at all**
+(to a scanner the port looks dead). The key lives only on the box — never in
+the repo.
+
+```bash
+install -m 600 /dev/null /etc/platformz.env
+echo 'PLATFORMZ_KEY=pick-something-url-safe' > /etc/platformz.env
+```
+
+Add one line to the `[Service]` section of the unit above, then restart:
+
+```
+EnvironmentFile=/etc/platformz.env
+```
+
+```bash
+systemctl daemon-reload && systemctl restart platformz
+journalctl -u platformz | tail   # should show "Join key: REQUIRED"
+```
+
+How players present the key (it always travels inside the invitation):
+
+- **Browser friends:** put it in the link you send —
+  `https://yourdomain.com/platformz.html?key=pick-something-url-safe`. The
+  page forwards it onto the WebSocket URL automatically.
+- **Native handout builds:** bake it next to the host via the gitignored
+  `secrets.mk` (see the note at the top of the repo `Makefile`), then
+  `make` — the app connects with the key without the player seeing anything.
+- **Terminal/testing:** append it to the URL arg:
+  `./platformz "udp://yourdomain.com:9000?key=pick-something-url-safe"`.
+
+Keep the key URL-safe (letters, digits, dashes). To rotate it: change the
+file, restart the service, send fresh links. This is a friends-and-family
+gate, not real security — anyone holding an invite can share it.
+
 ## 7. Serve the web client over HTTP
 
 The `web/` files are already built (`make web` output). Point nginx's default site

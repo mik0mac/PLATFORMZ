@@ -230,8 +230,12 @@ public:
     ~UdpTransport() override { stop(); }
 
     void connect(const std::string& url) override {
-        // url is "udp://host:port".
-        const std::string hostport = url.substr(std::string("udp://").size());
+        // url is "udp://host:port", optionally with a query ("?key=...") which
+        // is not transport information - main.cpp reads it and puts the key in
+        // the hello message instead. Strip it before parsing host:port.
+        std::string hostport = url.substr(std::string("udp://").size());
+        const auto query = hostport.find('?');
+        if (query != std::string::npos) hostport = hostport.substr(0, query);
         const auto colon = hostport.rfind(':');
         if (colon == std::string::npos) { lastError_ = "udp url needs host:port"; return; }
         const std::string host = hostport.substr(0, colon);

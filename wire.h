@@ -99,11 +99,17 @@ inline std::string serializeName(const std::string& name) {
 // connect, so a hello just triggers a harmless re-welcome - keeping the client's
 // connect path identical for both transports. The name rides along so the server
 // has a baseline before the first "name" packet.
-inline std::string serializeHello(const std::string& name) {
+// The join key (if the server requires one) also rides here for UDP - a URL
+// query never reaches the server over UDP, so every hello carries it; that
+// also re-passes the gate if an idle-reaped client re-registers. Over
+// WebSocket the key is checked from the URL during the HTTP upgrade instead,
+// but sending it here too is harmless.
+inline std::string serializeHello(const std::string& name, const std::string& key = "") {
     nlohmann::json j = {
         {"type", "hello"},
         {"name", name}
     };
+    if (!key.empty()) j["key"] = key;
     return j.dump();
 }
 
