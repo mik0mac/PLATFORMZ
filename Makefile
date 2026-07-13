@@ -1,5 +1,14 @@
 CXX := g++
 
+# Local secrets (optional, gitignored). Create secrets.mk to bake private
+# values into handout builds without them ever touching the repo, e.g.:
+#   EXTRA_CXXFLAGS += -DPLATFORMZ_DEFAULT_SERVER_KEY='"the-join-key"'
+#   EXTRA_CXXFLAGS += -DPLATFORMZ_DEFAULT_SERVER_HOST='"yourdomain.com"'
+# The web build ignores EXTRA_CXXFLAGS on purpose - the wasm bundle is served
+# to anyone who visits the page, so a key baked there would be public. Browser
+# players get the key from their invite link (?key=...) instead.
+-include secrets.mk
+
 # --- IXWebSocket (vendored git submodule) ---------------------------------
 # Compiled once into a local static lib so editing game code doesn't recompile
 # it. TLS on macOS uses Secure Transport (-framework Security); no OpenSSL needed.

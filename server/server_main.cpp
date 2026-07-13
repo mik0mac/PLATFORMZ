@@ -24,12 +24,14 @@
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
 
 #include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>       // read the upgrade request (join-key gate)
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/strand.hpp>  // per-session strands (serialize each Session's handlers)
 
 #include <iostream>
+#include <cstdlib>   // getenv (join key)
 #include <memory>
 #include <map>
 #include <set>
@@ -45,6 +47,7 @@
 #include <iomanip>
 
 namespace beast     = boost::beast;
+namespace http      = boost::beast::http;
 namespace websocket = boost::beast::websocket;
 namespace net       = boost::asio;
 using tcp           = boost::asio::ip::tcp;
@@ -130,6 +133,38 @@ GameSpace     gameSpace;
 CollisionGrid collisionGrid;
 std::mutex    gameMutex;
 std::atomic<uint32_t> serverTick{0};
+// Join key gate (#33): set PLATFORMZ_KEY in the server's environment and every
+// join attempt must present it - in the ws:// URL query (checked during the
+// HTTP upgrade) or in the UDP hello's "key" field. Wrong/missing key gets NO
+// reply: to a port scanner a silent port looks like nothing worth probing.
+// Empty (unset) = gate off, exactly the old behavior. Read once at startup,
+// then only ever read - safe from any thread.
+std::string   joinKey;
+
+// True if `provided` passes the join gate.
+static bool JoinKeyOk(const std::string& provided) {
+    return joinKey.empty() || provided == joinKey;
+}
+
+// Pull one query parameter out of an HTTP request target, e.g.
+// "/ws?key=banana42&x=1" -> "banana42". Empty if absent. No URL-decoding:
+// keys should be URL-safe (letters/digits/dash) to begin with.
+static std::string QueryParam(const std::string& target, const std::string& name) {
+    auto q = target.find('?');
+    if (q == std::string::npos) return "";
+    std::string query = target.substr(q + 1);
+    std::string prefix = name + "=";
+    size_t k = 0;
+    while (k != std::string::npos) {
+        if (query.compare(k, prefix.size(), prefix) == 0) {
+            size_t start = k + prefix.size();
+            return query.substr(start, query.find('&', start) - start);
+        }
+        k = query.find('&', k);
+        if (k != std::string::npos) ++k;
+    }
+    return "";
+}
 // Drives the bot slots (every player slot with no connected client). Same tree
 // and per-slot state the local client uses, so networked bots == local bots.
 // Sim-thread only; guarded by gameMutex like the rest of gameSpace.
@@ -679,7 +714,27 @@ public:
     explicit Session(tcp::socket socket) : ws_(std::move(socket)) {}
 
     void Start() {
-        ws_.async_accept([self = shared_from_this()](beast::error_code ec) {
+        // Read the HTTP upgrade request ourselves (instead of letting
+        // async_accept consume it) so the join gate can check ?key= in the URL
+        // BEFORE the WebSocket handshake completes. A wrong/missing key just
+        // returns: the socket destructs and the connection closes without a
+        // single byte answered - a scanner learns nothing.
+        http::async_read(ws_.next_layer(), buffer_, req_,
+            [self = shared_from_this()](beast::error_code ec, std::size_t) {
+                if (ec) return; // not even HTTP; drop silently
+                if (!websocket::is_upgrade(self->req_)) return;
+                if (!JoinKeyOk(QueryParam(std::string(self->req_.target()), "key"))) {
+                    std::cout << "WS join rejected (bad key)\n";
+                    return;
+                }
+                self->Accept();
+            });
+    }
+
+    // Key passed (or gate off): finish the WebSocket handshake from the
+    // already-read upgrade request, then claim a slot and welcome the client.
+    void Accept() {
+        ws_.async_accept(req_, [self = shared_from_this()](beast::error_code ec) {
             if (ec) { std::cerr << "accept: " << ec.message() << "\n"; return; }
 
             // Assign player slot - acquire locks in a consistent order:
@@ -731,6 +786,7 @@ public:
 private:
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
+    http::request<http::string_body> req_; // the upgrade request (read in Start, accepted in Accept)
     uint64_t connId_ = 0;   // this Session's key into `clients` (set in Start)
 
     // Outbound queue - strand-only state (touched exclusively from handlers
@@ -1330,6 +1386,13 @@ private:
     }
 
     void RegisterPeer(const udp::endpoint& from, const std::string& helloMsg) {
+        // Join gate: a hello without the right key claims nothing and gets NO
+        // reply - silence also kills the reflection trick (spoofed hellos can't
+        // make us mail welcomes at a victim address the prankster picked).
+        if (!JoinKeyOk(parseString(helloMsg, "key"))) {
+            std::cout << "UDP join rejected (bad key)\n";
+            return;
+        }
         int playerId = -1;
         ConnectedClient sink;
         bool ok = false;
@@ -1367,6 +1430,16 @@ private:
 int main() {
     std::cout << "PLATFORMZ server | port " << PORT
               << " (TCP/WebSocket + UDP) | " << TICK_RATE << " Hz\n";
+
+    // Join key gate (never printed - it's the secret). Lives in the
+    // environment, not the repo: docs/deploy-vultr.md covers setting it on
+    // the box; friends receive it inside their invite link / handout build.
+    if (const char* k = std::getenv("PLATFORMZ_KEY"); k && *k) {
+        joinKey = k;
+        std::cout << "Join key: REQUIRED (PLATFORMZ_KEY is set)\n";
+    } else {
+        std::cout << "Join key: none (open server; set PLATFORMZ_KEY to require one)\n";
+    }
 
     {
         std::lock_guard<std::mutex> lock(gameMutex);

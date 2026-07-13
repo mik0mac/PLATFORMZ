@@ -93,12 +93,22 @@ int main(int argc, char** argv) {
     // the standard port, which forwards /ws to the game server (see
     // docs/deploy-vultr.md "HTTPS upgrade"). Plain http (LAN/dev) keeps
     // talking straight to the game server on :9000.
+    // A ?key= param on the page (the invite link) is forwarded onto the socket
+    // URL, where the server's join gate reads it during the HTTP upgrade. The
+    // key is never baked into the wasm - the bundle is public; the invite link
+    // is the private channel.
     serverUrl = [] {
         const char* s = emscripten_run_script_string(
-            "(new URLSearchParams(location.search).get('server')) || "
+            "(function(){"
+            "var p = new URLSearchParams(location.search);"
+            "var s = p.get('server') || "
             "(location.protocol === 'https:'"
             " ? 'wss://' + location.host + '/ws'"
-            " : 'ws://' + location.hostname + ':9000')");
+            " : 'ws://' + location.hostname + ':9000');"
+            "var k = p.get('key');"
+            "if (k && s.indexOf('key=') < 0)"
+            " s += (s.indexOf('?') < 0 ? '?' : '&') + 'key=' + encodeURIComponent(k);"
+            "return s;})()");
         return std::string(s ? s : "");
     }();
 #else
@@ -115,11 +125,39 @@ int main(int argc, char** argv) {
         std::string port = PLATFORMZ_DEFAULT_SERVER_PORT;
         serverUrl     = "udp://" + defaultHost + ":" + port;
         fallbackWsUrl = "ws://"  + defaultHost + ":" + port;
+        // A baked join key (handout builds; see constants.h) rides the URL the
+        // same way a ?key= on a hand-typed URL arg does.
+        std::string bakedKey = PLATFORMZ_DEFAULT_SERVER_KEY;
+        if (!bakedKey.empty()) {
+            serverUrl     += "?key=" + bakedKey;
+            fallbackWsUrl += "?key=" + bakedKey;
+        }
         autoFallback  = true;
     } else {
         networked = false;                             // dev default: no arg -> local single-player
     }
 #endif
+    // Join key: if the server was launched with PLATFORMZ_KEY, every join must
+    // carry it. It travels inside the URL (?key=...) however that URL arrived -
+    // invite link, command-line arg, or baked default. ws/wss servers read it
+    // straight from the URL during the HTTP upgrade; UDP has no URL on the
+    // wire, so extract it here and serializeHello carries it instead.
+    std::string joinKey;
+    {
+        auto q = serverUrl.find('?');
+        if (q != std::string::npos) {
+            std::string query = serverUrl.substr(q + 1);
+            size_t k = 0;
+            while (k != std::string::npos) {
+                if (query.compare(k, 4, "key=") == 0) {
+                    joinKey = query.substr(k + 4, query.find('&', k) - (k + 4));
+                    break;
+                }
+                k = query.find('&', k);
+                if (k != std::string::npos) ++k;
+            }
+        }
+    }
 //MARK: SETUP
     // --- Setup (runs once) ---
     const int screenWidth = 1000;
@@ -538,7 +576,7 @@ int main(int argc, char** argv) {
                 // would send the slot-0 default "PLAYER 1" for EVERY client and
                 // clobber the server's correct per-slot default ("PLAYER 2", ...);
                 // an empty name leaves the server's default in place.
-                net.send(serializeHello(namePristine ? std::string() : playerName));
+                net.send(serializeHello(namePristine ? std::string() : playerName, joinKey));
                 lastHelloTime = nowT;
             }
             // UDP keepalive: the client only streams input during PLAYING, so on
