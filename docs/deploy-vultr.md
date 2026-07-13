@@ -248,7 +248,10 @@ route `/ws` to the game server. Plain-http/LAN pages keep the old
 ```
 apt install -y caddy
 systemctl stop nginx && systemctl disable nginx   # Caddy takes over :80/:443
+ufw allow 443/tcp                                 # step 5 never opened https
 ```
+
+(If a Vultr cloud firewall is attached, add an inbound TCP 443 rule there too.)
 
 `/etc/caddy/Caddyfile` (replace `yourdomain.com`; that's the whole config —
 certificates are automatic):
