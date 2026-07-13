@@ -253,10 +253,13 @@ ufw allow 443/tcp                                 # step 5 never opened https
 
 (If a Vultr cloud firewall is attached, add an inbound TCP 443 rule there too.)
 
-`/etc/caddy/Caddyfile` (replace `yourdomain.com`; that's the whole config —
-certificates are automatic):
+The apt package ships an example `/etc/caddy/Caddyfile` (comment header plus a
+`:80` site block) — **replace the whole file**, don't add to it. This is the
+complete config, nothing else needed; certificates are automatic. Swap in your
+domain and run:
 
-```
+```bash
+cat >/etc/caddy/Caddyfile <<'EOF'
 yourdomain.com {
     encode zstd gzip          # the ~13 MB .wasm/.data payload is the whole first load
     root * /var/www/platformz
@@ -264,6 +267,7 @@ yourdomain.com {
 
     reverse_proxy /ws localhost:9000
 }
+EOF
 ```
 
 Deploy the web build to `/var/www/platformz`
