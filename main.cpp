@@ -151,7 +151,6 @@ int main(int argc, char** argv) {
                   "assets/sounds/move_through_platform_2.wav",
                   "assets/sounds/move_through_platform_3.wav" },
                 0.3f, true, false, 0.08f),                                             // FX_PLATFORM_PASSTHROUGH (4 round-robin variation files, gated below)
-        audioFX("assets/sounds/message_recieved.wav", 1.0f, true, false, 1),           // FX_MESSAGE_RECEIVED (local only)
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
         audioFX("assets/sounds/warning.wav",             0.25f, true, false, 2),       // FX_WARNING (local only)
@@ -162,6 +161,24 @@ int main(int argc, char** argv) {
     // variation files still round-robin freely).
     fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
+
+    // MARK: MUSIC FILES
+    // list of music cues
+    MusicCue musicCueTable[] = {
+        // filename, volume, loop, loopStart, loopEnd, num_of_loops
+        MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, true),
+        MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, false),
+        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, true)
+    };
+    // load all cues
+    for (MusicCue& mc : musicCueTable) mc.load();
+    // set a pointer to the current music cue (start on title)
+    MusicCue* currentMusic = &musicCueTable[MUSIC_TITLE];
+    // The in-loop music switch only fires on a screen *transition*, and the
+    // game boots already on the title screen - start the first cue by hand.
+    currentMusic->play();
+
+    
 
     // MARK: RENDER TEXTURE 2D
     // The 3D scene is rendered into this off-screen target each frame so the
@@ -457,7 +474,11 @@ int main(int argc, char** argv) {
         int k = GetKeyPressed();
         return (k != 0 && k != KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     };
-//MARK: MAIN LOOP
+
+    // Remember the previous screen so we can detect a transition and change music.
+    GameScreen previousScreen = screen;
+
+    //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
 
@@ -465,6 +486,23 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        // MUSIC STREAM
+        if (screen != previousScreen) {
+            currentMusic->stop(); // outgoing cue: don't leave it holding a stale position
+            if (screen == GameScreen::TITLE) {
+                currentMusic = &musicCueTable[MUSIC_TITLE];
+            } else if (screen == GameScreen::COUNTDOWN) {
+                currentMusic = &musicCueTable[MUSIC_COUNTDOWN];
+            } else if (screen == GameScreen::PLAYING) {
+                currentMusic = &musicCueTable[MUSIC_GAMEPLAY];
+            } else if (screen == GameScreen::GAME_OVER) {
+                currentMusic = &musicCueTable[MUSIC_TITLE];
+            }
+            previousScreen = screen;
+            currentMusic->play();
+        }
+        currentMusic->update();
 
         // Connection maintenance (networked). Transport-agnostic, but it's what
         // makes the connectionless UDP path work: resend hello until the server
@@ -546,9 +584,16 @@ int main(int argc, char** argv) {
                 // Name entry (local-only for now).
                 UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
                 Rectangle nameBox = {350, 240, 300, 40};
+                // Let the name fill the space the UI allots but never overflow
+                // it. The tightest renderer is the lobby roster row below:
+                // "%d. NAME (YOU)" at font 18 inside the 300px players panel.
+                // Convert its leftover width to the field's font size (20) and
+                // let UiTextField reject chars past that budget.
+                int nameBudget = (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * 20 / 18;
                 // Push every edit to the server so the latest typed name wins
                 // (the welcome already sent a baseline before this field changed).
-                if (UiTextField(nameBox, playerName, nameFocused, 16, 20, &namePristine) &&
+                if (UiTextField(nameBox, playerName, nameFocused, PLAYER_NAME_MAX_CHARS, 20,
+                                &namePristine, nameBudget) &&
                     networked && net.isOpen())
                     net.send(serializeName(playerName));
 
@@ -1076,7 +1121,7 @@ int main(int argc, char** argv) {
         // first server packet (the connecting-screen guard below handles that
         // frame), and nothing has queued a sound yet anyway.
         if (localPlayer != nullptr)
-            audioQueue.flush(localPlayer ? *localPlayer : gameSpace.getPlayers()[0]);
+            audioQueue.flush(*localPlayer);
 
         // MARK: MESSAGE CUE DRAIN
         // messages from the gameSpace are pushed into the local player queue.
@@ -1217,9 +1262,12 @@ int main(int argc, char** argv) {
             }
 
             // MARK: Message Queue Draw
-            int msg_index = 0;
-            for (Message& msg : messageQueue.getMessages()) {
-                
+            // Index-based loop (not range-for): remove() erases from the vector,
+            // which invalidates a range-for's cached end() iterator.
+            std::vector<Message>& messages = messageQueue.getMessages();
+            for (int msg_index = 0; msg_index < (int)messages.size(); ) {
+                Message& msg = messages[msg_index];
+
                 std::string pa;
                 std::string pb;
                 // replace the local player's name with "YOU" for clarity in the
@@ -1302,8 +1350,10 @@ int main(int argc, char** argv) {
         // Loop repeats. raylib handles vsync/frame pacing via SetTargetFPS.
     }
 
+    // MARK: TEARDOWN
     // --- Teardown (runs once, after the loop exits) ---
     for (audioFX& fx : fxTable) fx.unload();
+    for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();
     UnloadRenderTexture(sceneTarget);
     UnloadShader(grayscaleShader);

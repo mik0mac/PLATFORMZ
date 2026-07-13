@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for working in this repo. PLATFORMZ is a raylib-based 3D **vector**
-first-person shooter written in C++17: fly around an 80×80×80 boundary cube,
+first-person shooter written in C++17: fly around a bounded cube arena,
 shoot drifting asteroids with rockets, dodge them, manage jetpack fuel.
 
 ## Build & run
@@ -50,14 +50,16 @@ only `main.cpp` and `collisions.cpp` as translation units.
   `generate()` populates the level; `updatePositions(dt)` ticks everything;
   `updateActiveObjects()` erase-removes destroyed/finished objects; `draw()`
   renders; accessors return the vectors **by reference** for collision/systems
-  to mutate. Boundary cube is `halfSize = 40` (so 80³), centered on origin.
+  to mutate. Boundary cube is centered on origin; default `halfSize = 60`
+  (`GAMESPACE_HALF_SIZE`), overridden per match by the SMALL/MEDIUM/LARGE
+  `mapSizePresets` in `constants.h` (halfSize 60/90/120).
 - `shapes.h` — all rendering. Low-level primitives (`DrawShadedWireBox`,
-  `DrawShadedSphere`, `DrawWirePyramid`, `DrawGridRoom`) and one
+  `DrawShadedSphere`, `DrawGridRoom`) and one
   `Draw<Type>(const T&)` per element. No game state is mutated here.
 - `collisions.h` / `collisions.cpp` — collision detection **and** response.
   Spatial-grid broad phase + narrow-phase geometry + game-rule reactions.
 - `camera.h` — `CameraFromPlayer(player, eyeHeight)` builds the first-person
-  `Camera3D` from player state each frame. `FlyCam` is a debug free-fly camera.
+  `Camera3D` from player state each frame.
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
 - `WireframeTests/` — **gitignored** scratch dir of prototypes (2D/3D wireframe
   experiments, Godot tests) that much of this code was pulled from. Not built.
@@ -98,9 +100,10 @@ only `main.cpp` and `collisions.cpp` as translation units.
   `rlDisableDepthMask` → draw fill → flush → `rlEnableDepthMask`). Wireframes
   keep writing depth.
 - **Player is authoritative; the camera derives from it**, never the reverse.
-- **Units:** 1 unit = 1 meter. Gravity constants live in `main.cpp`
-  (`MOON_GRAVITY = 1.62`, `EARTH_GRAVITY = 9.81`); hold Left Shift for earth
-  gravity. Gravity is applied once, in `Player::updateVelocity`.
+- **Units:** 1 unit = 1 meter. Gravity constants live in `constants.h`
+  (`MOON_GRAVITY = 3.25`, `EARTH_GRAVITY = 19.61` — tuned up from the real
+  1.62/9.81 for game feel); hold Left Shift for earth gravity. Gravity is
+  applied once, in `Player::updateVelocity`.
 - Files are sectioned with `//MARK:` comments.
 - raylib/raymath helpers are preferred for color/vector math (e.g.
   `ColorBrightness` preserves alpha; `Fade`/`ColorAlpha` *set* alpha from 0–1;

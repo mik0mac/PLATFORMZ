@@ -220,11 +220,6 @@ public:
         }
     }
 
-    // visibility check.  Removes messages that are not visible to the local player.
-    void filterForPlayer(const std::string& localPlayerName) {
-    // TBD
-    }
-
     // MARK: get messages
     std::vector<Message>& getMessages() { return queue; }
 

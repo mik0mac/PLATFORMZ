@@ -72,14 +72,31 @@ WEB_CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(RAYLIB_WEB_INC)
 # `Module.HEAPF32.buffer` in its Web Audio callback, but emscripten 6.x no longer
 # attaches HEAPF32 to Module by default - without this export it's undefined and
 # the audio callback throws every frame (silent game). See miniaudio.h ScriptNode.
+# --preload-file assets: assets/ ships WHOLESALE into platformz.data, so keep
+# only runtime files in it - audio masters/WIP/retired live in audio-src/, which
+# is never built or deployed. The one exclusion is .DS_Store (macOS recreates it).
 WEB_LDFLAGS  := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY \
                 -sEXPORTED_RUNTIME_METHODS=HEAPF32 \
                 -lwebsocket.js \
                 --preload-file assets \
-                --exclude-file "*audio_WIP*" \
+                --exclude-file "*.DS_Store" \
                 --shell-file shell.html
 
+# Download-size budget for the preloaded assets. assets/ ships wholesale (see
+# WEB_LDFLAGS above), so a misplaced audio master would silently bloat every
+# player's platformz.data - fail the build instead of shipping it.
+WEB_ASSET_BUDGET_MB := 20
+
 web: $(SRCS) $(HDRS) shell.html | webdir
+	@size=$$(du -sm assets | cut -f1); \
+	if [ $$size -gt $(WEB_ASSET_BUDGET_MB) ]; then \
+	  echo "ERROR: assets/ is $${size}MB, over the $(WEB_ASSET_BUDGET_MB)MB web-download budget."; \
+	  echo "assets/ ships wholesale into platformz.data. Largest files:"; \
+	  find assets -type f -size +1M -exec du -h {} + | sort -rh | head; \
+	  echo "Move non-runtime audio (masters/WIP/retired) to audio-src/, or raise WEB_ASSET_BUDGET_MB."; \
+	  exit 1; \
+	fi; \
+	echo "assets/ -> platformz.data: $${size}MB (budget $(WEB_ASSET_BUDGET_MB)MB)"
 	$(EMCC) $(WEB_CXXFLAGS) $(SRCS) $(RAYLIB_WEB_LIB) -o $(WEB_OUT) $(WEB_LDFLAGS)
 
 webdir:

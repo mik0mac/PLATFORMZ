@@ -220,6 +220,12 @@ inline ServerMessage applyBinaryWelcome(const std::string& buf, GameSpace& gs) {
         p.size     = { r.f32(), r.f32(), r.f32() };
         platforms.push_back(p);
     }
+
+    // Truncated datagram: past-the-end reads decoded as zeros (Reader bounds-
+    // checks rather than crashing). Report Unknown so the caller doesn't treat
+    // a half-built welcome as joined - the UDP hello-retry loop fetches a fresh
+    // one, and its platform rebuild-from-scratch replaces anything half-decoded.
+    if (r.overran) msg.type = ServerMessage::Type::Unknown;
     return msg;
 }
 
@@ -324,6 +330,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             a->velocity    = vel;
             a->size        = size;
             a->health      = hp;
+            a->syncFillAlpha(); // fill alpha tracks health; clients never run takeDamage
             a->flashTimer  = flash;
             a->isDestroyed = false; // server never sends destroyed; they vanish from the set
         }
@@ -394,6 +401,11 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
         }
     }
 
+    // Truncated datagram: the fields above decoded as zeros past the cut
+    // (Reader bounds-checks rather than crashing). State packets are absolute,
+    // so the next tick repairs the world either way - but report Unknown so
+    // the caller doesn't act on this packet's phase/countdown/options.
+    if (r.overran) msg.type = ServerMessage::Type::Unknown;
     return msg;
 }
 
@@ -521,6 +533,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 a.velocity    = vec3(jo, "vx", "vy", "vz");
                 a.size        = jo.value("size", a.size);
                 a.health      = jo.value("hp", a.health);
+                a.syncFillAlpha(); // fill alpha tracks health; clients never run takeDamage
                 a.flashTimer  = jo.value("flash", 0.0f); // server-driven hot-glow damage flash
                 a.isDestroyed = jo.value("dead", false);
             });

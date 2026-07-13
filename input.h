@@ -125,7 +125,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             Rocket rocket;
             rocket.id = (player.id << 24) | (player.rocketCounter++);
 
-            rocket.owner = &player; // track which player fired this rocket
+            rocket.ownerId = player.id; // track which player fired this rocket
             Vector3 eyePos = player.position; // eye is at the sphere center
             Vector3 aim = player.Forward();
             // Push the muzzle past the body surface so the rocket spawns fully

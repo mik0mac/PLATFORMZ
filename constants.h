@@ -18,7 +18,6 @@ enum AudioFXId {
     FX_WALL_BOUNCE_PLAYER,
     FX_ROCKET_THROUGH_WALL,
     FX_PLATFORM_PASSTHROUGH,
-    FX_MESSAGE_RECEIVED,
     FX_PLAYER_ELIMINATION_SCORE,
     FX_PLAYER_LOCAL_DAMAGE,
     FX_WARNING,
@@ -28,6 +27,17 @@ enum AudioFXId {
 
 const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  The distance at which the sound is the softest.
 const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
+
+// MARK: MUSIC
+
+enum MusicId {
+    MUSIC_TITLE = 0,
+    MUSIC_COUNTDOWN,
+    MUSIC_GAMEPLAY,
+    MUSIC_COUNT
+};
+
+const float DEFAULT_MUSIC_VOLUME = 0.25f; // default music volume for all tracks
 
 //MARK: Message events
 enum MessageType {
@@ -62,9 +72,9 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {60.0f, 32, 6}}, // 8 platforms, 4 asteroids
-    {"MEDIUM", {90.0f, 64, 12}}, // 32 platforms, 12 asteroids
-    {"LARGE",  {120.0f, 128, 24}}  // 128 platforms, 24 asteroids
+    {"SMALL",  {60.0f, 32, 6}},
+    {"MEDIUM", {90.0f, 64, 12}},
+    {"LARGE",  {120.0f, 128, 24}}
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
@@ -103,6 +113,12 @@ const float PLAYER_BASE_RADIUS = 1.0f;   // body/collider radius in units, befor
 const float PLAYER_RADIUS = PLAYER_BASE_RADIUS * PLAYER_SCALE; // == 2.0 (preserves current size)
 
 const int PLAYER_DAMAGE = 10; // Damage dealt to other players or asteroids when colliding.
+
+// Hard cap on display-name length, enforced on the client (name entry field)
+// and the server (incoming "name"/"hello" messages, so a modified client can't
+// overflow other players' UI). The entry field also limits by rendered pixel
+// width, so this is the backstop for very narrow glyphs.
+const size_t PLAYER_NAME_MAX_CHARS = 32;
 
 //MARK: Reticle Constants
 // The reticle is a purely visual in-world object (no collision): the player's

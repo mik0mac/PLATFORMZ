@@ -3,6 +3,9 @@ platformz
 build/
 net_smoke
 server/gameserver
- audio_WIP
- old
 .DS_Store
+# Audio working material (audio-src/ is never built or deployed; only notes/ is
+# tracked). Masters + WIP are large and live in Dropbox, not git history.
+audio-src/masters/
+audio-src/wip/
+audio-src/retired/

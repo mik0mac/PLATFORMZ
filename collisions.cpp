@@ -121,11 +121,20 @@ bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 box
 
 //MARK: Spawn Explosion
 // avoid repeated code in CheckRocketAsteroidCollisions, CheckRocketPlatformCollisions, and CheckRocketWallCollisions
-Explosion spawnExplosion(Vector3 position, Player* owner) {
+Explosion spawnExplosion(Vector3 position, uint32_t ownerId) {
     Explosion explosion;
-    explosion.owner = owner; // track which player fired this rocket
+    explosion.ownerId = ownerId; // track which player fired this rocket
     explosion.position = position;
     return explosion;
+}
+
+// Resolve an owner id back to the player, or nullptr if 0/gone. Rockets and
+// explosions store the id, not a Player*, so a players-vector reallocation
+// between spawn and use can never leave a dangling pointer.
+Player* findPlayerById(GameSpace& space, uint32_t id) {
+    if (id == 0) return nullptr;
+    for (Player& p : space.getPlayers()) if (p.id == id) return &p;
+    return nullptr;
 }
 
 //MARK: Awards
@@ -188,9 +197,9 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // double-damaging the asteroid this hit produced.
                     rocket.isDestroyed = true;
 
-                    Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
+                    Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId);
                     explosions.push_back(explosion);
-                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
                     hit = true;
                     break;
@@ -231,9 +240,9 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 // Detonate at the entry point on the platform, not past it.
                 Vector3 impact = Vector3Lerp(rocket.prevPosition, rocket.position, tHit);
-                Explosion explosion = spawnExplosion(impact, rocket.owner);
+                Explosion explosion = spawnExplosion(impact, rocket.ownerId);
                 explosions.push_back(explosion);
-                space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
                 break; // rocket already detonated this frame
             }
@@ -260,7 +269,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
         if (!hitWall) continue;
 
         if (!space.wallsStopRockets) {
-            space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.owner ? rocket.owner->id : 0);
+            space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.ownerId);
             rocket.isOutOfBounds = true; // mark the rocket as out of bounds so it starts to fade.
             continue; // rocket flies through the wall, no detonation
         }
@@ -271,9 +280,9 @@ void CheckRocketWallCollisions(GameSpace& space) {
         rocket.position.z = Clamp(rocket.position.z, -halfSize, halfSize);
         rocket.isDestroyed = true;
 
-        Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
+        Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId);
         explosions.push_back(explosion);
-        space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
+        space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
     }
 }
 
@@ -307,16 +316,16 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
             for (int playerIndex : cell->playerIndices) {
                 Player& player = players[playerIndex];
                 if (!player.isAlive) continue;
-                if (&player == rocket.owner) continue; // don't detonate on the shooter
+                if (player.id == rocket.ownerId) continue; // don't detonate on the shooter
 
                 // Rocket and player are both spheres (the player collider is a
                 // sphere matching the dodecahedron body).
                 if (SphereIntersectsSphere(rocket.position, rocket.size, player.position, player.radius)) {
                     rocket.isDestroyed = true;
 
-                    Explosion explosion = spawnExplosion(rocket.position, rocket.owner);
+                    Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId);
                     explosions.push_back(explosion);
-                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
                     hit = true;
                     break;
@@ -363,8 +372,8 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                     float dist = Vector3Length(offset);
                     if (dist > 1e-4f) {
                         Vector3 normal = Vector3Scale(offset, 1.0f / dist);
-                        asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), 1.0f); // asteroid bounces off the player, same elasticity as the walls
-                        player.velocity = Vector3Scale(Vector3Reflect(player.velocity, normal), 1.0f); // player bounces off the asteroid, same elasticity as the walls
+                        asteroid.velocity = Vector3Reflect(asteroid.velocity, normal); // asteroid bounces off the player, same elasticity as the walls
+                        player.velocity = Vector3Reflect(player.velocity, normal); // player bounces off the asteroid, same elasticity as the walls
                         // push clear of the overlap
                         float overlap = (asteroid.size + player.radius) - dist;
                         asteroid.position = Vector3Subtract(asteroid.position, Vector3Scale(normal, overlap *0.5f));
@@ -537,7 +546,10 @@ void CheckPlayerWallCollisions(GameSpace& space) {
         if (!player.isAlive) continue;
 
         bool hitWall = false;
-        float volumeScale = 1.0f;
+        // Bounce volume follows impact speed: take the max across axes so a
+        // fast hit on one wall isn't reported as the speed of a slower graze
+        // on a later-checked axis.
+        float volumeScale = 0.0f;
 
         // Inset each bound by the player's sphere radius so the whole body stays
         // inside the cube, not just its center. The eye is at the sphere center,
@@ -552,19 +564,19 @@ void CheckPlayerWallCollisions(GameSpace& space) {
             player.position.x = Clamp(player.position.x, xMin, xMax);
             player.velocity.x = -player.velocity.x * walls.elasticityPlayer;
             hitWall = true;
-            volumeScale = std::abs(player.velocity.x) / PLAYER_SPEED_JETPACK; // as a ref for "going fast."
+            volumeScale = std::max(volumeScale, std::abs(player.velocity.x) / PLAYER_SPEED_JETPACK); // as a ref for "going fast."
         }
         if (player.position.y < yMin || player.position.y > yMax) {
             player.position.y = Clamp(player.position.y, yMin, yMax);
             player.velocity.y = -player.velocity.y * walls.elasticityPlayer;
             hitWall = true;
-            volumeScale = std::abs(player.velocity.y) / PLAYER_SPEED_JETPACK; // as a ref for "going fast."
+            volumeScale = std::max(volumeScale, std::abs(player.velocity.y) / PLAYER_SPEED_JETPACK); // as a ref for "going fast."
         }
         if (player.position.z < zMin || player.position.z > zMax) {
             player.position.z = Clamp(player.position.z, zMin, zMax);
             player.velocity.z = -player.velocity.z * walls.elasticityPlayer;
             hitWall = true;
-            volumeScale = std::abs(player.velocity.z) / PLAYER_SPEED_JETPACK; // as a ref for "going fast."
+            volumeScale = std::max(volumeScale, std::abs(player.velocity.z) / PLAYER_SPEED_JETPACK); // as a ref for "going fast."
         }
 
         if (hitWall) {
@@ -578,7 +590,7 @@ void CheckPlayerWallCollisions(GameSpace& space) {
 }
 
 //MARK: Player vs Player
-void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
+void CheckPlayerPlayerCollisions(GameSpace& space) {
     auto& players = space.getPlayers();
 
     for (int i = 0; i < (int)players.size(); i++) {
@@ -642,8 +654,8 @@ void CheckPlayerPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                     playerB.position = Vector3Subtract(playerB.position, Vector3Scale(normal, overlap * 0.5f));
 
                     // Bounce apart, same elasticity as the walls (matches the asteroid-vs-player bounce).
-                    playerA.velocity = Vector3Scale(Vector3Reflect(playerA.velocity, normal), 1.0f);
-                    playerB.velocity = Vector3Scale(Vector3Reflect(playerB.velocity, normal), 1.0f);
+                    playerA.velocity = Vector3Reflect(playerA.velocity, normal);
+                    playerB.velocity = Vector3Reflect(playerB.velocity, normal);
                 }
             }
         }
@@ -704,12 +716,17 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
         if (explosion.hasAppliedDamage) continue;
         explosion.hasAppliedDamage = true; // mark immediately - one blast, applied once
 
+        // Resolve the owning player once per blast (nullptr if none/gone);
+        // identity checks below compare ids, not pointers.
+        Player* owner = findPlayerById(space, explosion.ownerId);
+
         for (Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) continue;
 
             float dist = Vector3Distance(explosion.position, asteroid.position);
-            // subract asteroid radius.
-            dist -= asteroid.size;
+            // Surface distance: subtract the radius, clamped at 0 so a blast
+            // inside the body caps falloff at 1 (never more than full damage).
+            dist = std::max(dist - asteroid.size, 0.0f);
             if (dist >= explosion.damageRadius) continue;
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
@@ -727,14 +744,14 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 
             // check if the asteroid has been destroyed by the splash damage.
             if (asteroid.isDestroyed) {
-                awardPoints(explosion.owner, asteroid.scoreAward); // award points to the player who caused the explosion.
-                awardFuel(explosion.owner, asteroid.fuelAward); // award fuel to the player who caused the explosion.
-                awardAmmo(explosion.owner, asteroid.ammoAward); // award ammo to the player who caused the explosion.
-                awardHealth(explosion.owner, asteroid.healthAward); // award health to the player who caused the explosion.
+                awardPoints(owner, asteroid.scoreAward); // award points to the player who caused the explosion.
+                awardFuel(owner, asteroid.fuelAward); // award fuel to the player who caused the explosion.
+                awardAmmo(owner, asteroid.ammoAward); // award ammo to the player who caused the explosion.
+                awardHealth(owner, asteroid.healthAward); // award health to the player who caused the explosion.
 
-                space.emitAudio(FX_ASTEROID_BONUS, explosion.position, explosion.owner ? explosion.owner->id : 0);
-                if (explosion.owner) {
-                    Message msg(MSG_TYPE_ASTEROID_BONUS, explosion.owner->name, "", explosion.owner->id, 0);
+                space.emitAudio(FX_ASTEROID_BONUS, explosion.position, explosion.ownerId);
+                if (owner) {
+                    Message msg(MSG_TYPE_ASTEROID_BONUS, owner->name, "", owner->id, 0);
                     space.emitMessage(msg);
                 }
                 // spawn debris from the destroyed asteroid and add it to the game space.  FUTURE.
@@ -747,8 +764,9 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             if (!player.isAlive) continue;
 
             float dist = Vector3Distance(explosion.position, player.position);
-            // subtract the player's sphere collider radius (matches the body).
-            dist -= player.radius;
+            // Surface distance: subtract the sphere collider radius, clamped at
+            // 0 so a blast inside the body caps falloff at 1 (full damage max).
+            dist = std::max(dist - player.radius, 0.0f);
             if (dist >= explosion.damageRadius) continue;
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
@@ -757,26 +775,26 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
             // self-DAMAGE (the pushback below still applies, so rocket-jumping
             // survives). All the damage + hit/elimination bookkeeping is skipped
             // for the self-blast; other players are always damaged.
-            if (space.friendlyFire || explosion.owner != &player) {
+            if (space.friendlyFire || explosion.ownerId != player.id) {
                 player.takeDamage(splashDamage);
                 if (player.isAlive) {
                     space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
-                    if (explosion.owner != &player) {
+                    if (explosion.ownerId != player.id) {
                         // don't play the sound if the player hit themself.
-                        space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.owner ? explosion.owner->id : 0);
+                        space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.ownerId);
                     }
 
-                    if (explosion.owner) {
-                        Message msg(MSG_TYPE_EXPLOSION_HIT, explosion.owner->name, player.name, explosion.owner->id, player.id);
+                    if (owner) {
+                        Message msg(MSG_TYPE_EXPLOSION_HIT, owner->name, player.name, owner->id, player.id);
                         space.emitMessage(msg);
                     }
                 }
                 // check if player has been eliminated.
                 if (!player.isAlive) {
-                    awardPoints(explosion.owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
-                    space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.owner ? explosion.owner->id : 0);
-                    if (explosion.owner) {
-                        Message msg(MSG_TYPE_ELIMINATION, explosion.owner->name, player.name, explosion.owner->id, player.id);
+                    awardPoints(owner, player.eliminationScoreAward); // award points to the player who caused the explosion.
+                    space.emitAudio(FX_PLAYER_ELIMINATION_SCORE, explosion.position, explosion.ownerId);
+                    if (owner) {
+                        Message msg(MSG_TYPE_ELIMINATION, owner->name, player.name, owner->id, player.id);
                         space.emitMessage(msg);
                     }
                     // could add fuel/ammo/health awards for eliminating a player, if desired.
@@ -803,7 +821,7 @@ void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
     CheckRocketPlayerCollisions(space, grid);
     ApplyExplosionSplashDamage(space, grid); // after rocket detonation checks so this-frame explosions resolve immediately
     CheckAsteroidPlayerCollisions(space, grid);
-    CheckPlayerPlayerCollisions(space, grid);
+    CheckPlayerPlayerCollisions(space);
     CheckAsteroidPlatformCollisions(space, grid);
     CheckPlayerPlatformCollisions(space, grid);
     CheckPlayerWallCollisions(space);

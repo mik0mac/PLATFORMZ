@@ -59,34 +59,6 @@ inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Co
     else                   DrawSphereWires(position, radius, 16, 16, wireColor);
 }
 
-// A wireframe pyramid (ship/rocket-like silhouette), built manually with line
-// segments so we control exactly which edges draw - closer to how the
-// original vector hardware worked than using a filled primitive.
-inline void DrawWirePyramid(Vector3 pos, float rotY, float height, float baseSize, Color col) {
-    rlPushMatrix();
-    rlTranslatef(pos.x, pos.y, pos.z);
-    rlRotatef(rotY * RAD2DEG, 0, 1, 0);
-
-    Vector3 tip = {0, height, 0};
-    Vector3 a = {-baseSize, 0, -baseSize};
-    Vector3 b = { baseSize, 0, -baseSize};
-    Vector3 c = { baseSize, 0,  baseSize};
-    Vector3 d = {-baseSize, 0,  baseSize};
-
-    // base
-    DrawLine3D(a, b, col);
-    DrawLine3D(b, c, col);
-    DrawLine3D(c, d, col);
-    DrawLine3D(d, a, col);
-    // sides to tip
-    DrawLine3D(a, tip, col);
-    DrawLine3D(b, tip, col);
-    DrawLine3D(c, tip, col);
-    DrawLine3D(d, tip, col);
-
-    rlPopMatrix();
-}
-
 // Draws a vector-grid pattern across all 6 faces of a large bounding cube,
 // used for the play-space boundary walls (Walls::halfSize / color_outline).
 inline void DrawGridRoom(float halfSize, float spacing, Color col) {

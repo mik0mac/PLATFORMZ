@@ -91,7 +91,6 @@ public:
 
     // size, shape, and appearance
     float size = RETICLE_SIZE; // radius of the ring / bracket frame, units
-    float thickness = 0.1f; // Thickness of the reticle lines
     float rotation = 0.0f; // Rotation angle of the reticle in radians. AKA Roll.  Remains fixed, unlike pitch and yaw.  Represents the rotation around the forward axis (the direction the player is facing).
     float standoff = RETICLE_STANDOFF; // gap beyond the body surface, along the aim direction (so it clears the body)
 
@@ -476,19 +475,24 @@ public:
 
     void takeDamage(int damage) {
         health -= damage;
-        
+
         if (health < 0) health = 0; // Clamp health to zero
         if (health == 0) {
             isDestroyed = true; // Asteroid is destroyed if health reaches zero
         }
 
-        // Adjust the fill color's alpha based on the current health ratio
-        float health_ratio = (float)health / (float)starting_health; // Calculate health ratio.
-        float color_ratio = (float)starting_alpha / 255.0f; // Calculate ratio between current fill alpha and max alpha.
-        float ratio = health_ratio * color_ratio; // Final ratio to apply to alpha for current health.
-        color_fill = Fade(color_fill, ratio); // Fade fill color based on health ratio.
+        syncFillAlpha();
 
         flashTimer = ASTEROID_FLASH_DURATION * (damage / 25.0f); // trigger the hot-glow damage flash
+    }
+
+    // Fill alpha tracks health: starting_alpha at full health, draining to 0
+    // as health does (Fade *sets* alpha from a 0-1 ratio, so this is absolute,
+    // not compounding). Called from takeDamage locally; networked clients never
+    // run takeDamage, so wire.h calls this after applying a synced health.
+    void syncFillAlpha() {
+        float health_ratio = (float)health / (float)starting_health;
+        color_fill = Fade(color_fill, health_ratio * (float)starting_alpha / 255.0f);
     }
 
 private:
@@ -501,8 +505,10 @@ class Rocket {
 public:
     // ID
     uint32_t id = 0; // Unique identifier for the rocket
-    // ownership.  Which player fired this rocket?
-    Player* owner = nullptr;
+    // ownership. Which player fired this rocket? Stored as the player id (0 =
+    // none), not a Player*, so a players-vector reallocation can't dangle it;
+    // resolve with findPlayerById when the Player is needed.
+    uint32_t ownerId = 0;
     // position, velocity, direction, speed
     Vector3 position;
     Vector3 prevPosition{}; // position at the start of this frame's movement; the
@@ -565,7 +571,6 @@ public:
     // attributes
     // damage and explosion radius are properties of the resulting Explosion.
     bool isDestroyed = false; // Rocket is destroyed on collision or when it goes out of bounds
-    bool isExploding = false; // Rocket is in the process of exploding, can be used for visual effects
 
 private:
     bool firstStep = true; // see updatePos: preserves the spawn eye->muzzle segment
@@ -576,8 +581,9 @@ class Explosion {
 public:
     // ID
     uint32_t id = 0; // Unique identifier for the explosion
-    // ownership.  Which player fired the rocket that caused this explosion?
-    Player* owner = nullptr;
+    // ownership. Which player fired the rocket that caused this explosion?
+    // Player id (0 = none), not a Player* - see Rocket::ownerId.
+    uint32_t ownerId = 0;
     // position and size
     Vector3 position;
     float radius = 0.0f; // Current radius of the explosion effect
