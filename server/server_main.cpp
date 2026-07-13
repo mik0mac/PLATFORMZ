@@ -27,6 +27,7 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ip/udp.hpp>
+#include <boost/asio/strand.hpp>  // per-session strands (serialize each Session's handlers)
 
 #include <iostream>
 #include <memory>
@@ -39,6 +40,7 @@
 #include <chrono>
 #include <vector>
 #include <array>
+#include <deque>
 #include <sstream>
 #include <iomanip>
 
@@ -111,10 +113,11 @@ struct ConnectedClient {
     std::string name;
     bool nameDirty      = false;
 
-    // Transport + sink. WS uses `session` (valid while that Session lives); UDP
-    // uses `udpEndpoint` + `lastSeenSec` (last packet arrival, for idle reaping).
+    // Transport + sink. WS uses `session` (shared ownership, so a Send racing a
+    // disconnect can never touch a freed Session); UDP uses `udpEndpoint` +
+    // `lastSeenSec` (last packet arrival, for idle reaping).
     Transport     transport   = Transport::WS;
-    Session*      session      = nullptr;
+    std::shared_ptr<Session> session;
     udp::endpoint udpEndpoint;
     double        lastSeenSec  = 0.0;
 };
@@ -659,6 +662,17 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
 //MARK: Session
 // -------------------------------------------------------------------------
 // Session - one WebSocket connection, one player slot.
+//
+// Threading: the Listener accepts each socket onto its own strand, so every
+// async handler of this Session runs serialized. Send() (called from the sim
+// thread each tick) never touches the socket directly - it posts the message
+// onto the strand, where an outbox deque is drained by a single async_write
+// chain. This fixes two issues with the old synchronous ws_.write:
+//   1. A slow client's full TCP buffer blocked the sim thread (head-of-line:
+//      one stalled player lagged the whole match).
+//   2. Beast's websocket::stream is not thread-safe, and async_read internally
+//      WRITES pong replies to client pings - a sim-thread write could
+//      interleave with a pong mid-frame (corrupted frames / rare crash).
 // -------------------------------------------------------------------------
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -685,7 +699,7 @@ public:
                 ConnectedClient c;
                 c.playerId  = playerId;
                 c.transport = Transport::WS;
-                c.session   = self.get();
+                c.session   = self;
                 clients[self->connId_] = c;
                 // Note: no bot-slot refresh here. Bots exist only during a match
                 // (set at match start + reconciled each sim tick), so the lobby
@@ -699,23 +713,68 @@ public:
             // Send welcome with the assigned slot + the current platform layout
             // (empty in the lobby; the client renders from it instead of running
             // generate()). Re-sent to everyone when a match (re)starts.
-            beast::error_code wec;
-            self->ws_.write(net::buffer(buildWelcome(playerId)), wec);
+            self->Send(buildWelcome(playerId));
 
             self->Read();
         });
     }
 
+    // Queue one outbound frame. Safe from any thread: hops onto this session's
+    // strand and appends to the outbox; the async_write chain drains it there.
     void Send(const std::string& msg) {
-        beast::error_code ec;
-        ws_.write(net::buffer(msg), ec);
-        // Errors here mean the client disconnected; Read() will clean up.
+        net::post(ws_.get_executor(),
+            [self = shared_from_this(), m = msg]() mutable {
+                self->QueueWrite(std::move(m));
+            });
     }
 
 private:
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
     uint64_t connId_ = 0;   // this Session's key into `clients` (set in Start)
+
+    // Outbound queue - strand-only state (touched exclusively from handlers
+    // running on this session's strand, so no mutex).
+    std::deque<std::string> outbox_;
+    bool writing_ = false;   // an async_write is in flight (outbox_.front())
+
+    // Cap on queued frames per client. At 60 ticks/s, 64 frames is about one
+    // second of backlog - past that the client is stalled (backgrounded tab,
+    // congested link) and its queued state packets are stale anyway.
+    static constexpr size_t MAX_OUTBOX = 64;
+
+    // Strand-only. Append and kick the write chain if idle. When the cap is
+    // hit, drop the OLDEST frame not currently in flight: state packets are
+    // absolute, so the freshest ones are the ones worth keeping. (In theory
+    // that could shed a queued match-restart welcome, but a client a full
+    // second behind is effectively gone - and the hello/refresh path re-sends
+    // welcomes anyway.)
+    void QueueWrite(std::string msg) {
+        if (outbox_.size() >= MAX_OUTBOX)
+            outbox_.erase(outbox_.begin() + (writing_ ? 1 : 0));
+        outbox_.push_back(std::move(msg));
+        if (!writing_) {
+            writing_ = true;
+            DoWrite();
+        }
+    }
+
+    // Strand-only. Write outbox_.front(); on completion pop it and continue
+    // until the deque is empty. Exactly one async_write is ever outstanding.
+    void DoWrite() {
+        ws_.async_write(net::buffer(outbox_.front()),
+            [self = shared_from_this()](beast::error_code ec, std::size_t) {
+                if (ec) {
+                    // Client is gone; Read()'s error path does the cleanup.
+                    self->writing_ = false;
+                    self->outbox_.clear();
+                    return;
+                }
+                self->outbox_.pop_front();
+                if (!self->outbox_.empty()) self->DoWrite();
+                else                        self->writing_ = false;
+            });
+    }
 
     void Read() {
         ws_.async_read(buffer_,
@@ -757,7 +816,30 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
     } else if (g_udp) {
         std::lock_guard<std::mutex> lk(udpSendMutex);
         boost::system::error_code ec;
-        g_udp->send_to(net::buffer(msg), c.udpEndpoint, 0, ec);
+        if (msg.size() <= nb::UDP_SAFE_DATAGRAM) {
+            g_udp->send_to(net::buffer(msg), c.udpEndpoint, 0, ec);
+            return;
+        }
+        // Oversized (in practice: the LARGE-map welcome): split into chunked
+        // datagrams that each dodge IP fragmentation - some home routers drop
+        // fragmented UDP, which used to make big welcomes undeliverable (#30).
+        // Framing + reassembly rules live in netbin.h; the client reassembles
+        // in UdpTransport::poll. gen is guarded by udpSendMutex (held here).
+        static uint8_t chunkGen = 0;
+        uint8_t gen = ++chunkGen;
+        size_t count = (msg.size() + nb::CHUNK_PAYLOAD - 1) / nb::CHUNK_PAYLOAD;
+        if (count > 255) return; // >300 KB: not a message we ever produce
+        for (size_t i = 0; i < count; ++i) {
+            std::string chunk;
+            chunk.reserve(nb::UDP_SAFE_DATAGRAM);
+            nb::putU8(chunk, nb::CHUNK_VERSION);
+            nb::putU8(chunk, gen);
+            nb::putU8(chunk, (uint8_t)i);
+            nb::putU8(chunk, (uint8_t)count);
+            chunk += msg.substr(i * nb::CHUNK_PAYLOAD,
+                                std::min(nb::CHUNK_PAYLOAD, msg.size() - i * nb::CHUNK_PAYLOAD));
+            g_udp->send_to(net::buffer(chunk), c.udpEndpoint, 0, ec);
+        }
     }
 }
 
@@ -1173,7 +1255,7 @@ void SimulationLoop() {
 class Listener : public std::enable_shared_from_this<Listener> {
 public:
     Listener(net::io_context& ioc, tcp::endpoint endpoint)
-        : acceptor_(ioc) {
+        : ioc_(ioc), acceptor_(ioc) {
         beast::error_code ec;
         acceptor_.open(endpoint.protocol(), ec);
         acceptor_.set_option(net::socket_base::reuse_address(true), ec);
@@ -1183,9 +1265,13 @@ public:
     }
     void Run() { Accept(); }
 private:
+    net::io_context& ioc_;
     tcp::acceptor acceptor_;
     void Accept() {
-        acceptor_.async_accept(
+        // Accept each connection onto its own strand: with multiple io threads,
+        // this serializes all of a Session's handlers (reads, queued writes,
+        // pong replies) so they can never run concurrently - see Session.
+        acceptor_.async_accept(net::make_strand(ioc_),
             [self = shared_from_this()](beast::error_code ec, tcp::socket socket) {
                 if (!ec)
                     std::make_shared<Session>(std::move(socket))->Start();

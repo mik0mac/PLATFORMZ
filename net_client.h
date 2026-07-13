@@ -122,6 +122,8 @@ private:
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXNetSystem.h>
 
+#include "netbin.h"   // chunk framing constants (UDP reassembly in UdpTransport)
+
 #include <mutex>
 #include <atomic>
 #include <memory>
@@ -264,11 +266,19 @@ public:
     std::vector<std::string> poll() override {
         std::vector<std::string> out;
         if (fd_ < 0) return out;
-        char buf[65536];   // one datagram (IP-reassembled; server sends up to ~64KB)
+        char buf[65536];   // one datagram
         for (;;) {
             const ssize_t n = ::recv(fd_, buf, sizeof(buf), 0);
-            if (n > 0) { out.emplace_back(buf, buf + n); continue; }
-            break;         // EWOULDBLOCK (no more data) or a transient error
+            if (n <= 0) break; // EWOULDBLOCK (no more data) or a transient error
+            // Chunked message (server splits anything over the safe datagram
+            // size - in practice the LARGE-map welcome - to dodge IP
+            // fragmentation, which some routers drop; see netbin.h). Reassemble
+            // here so the rest of the client only ever sees whole messages.
+            if (n >= (ssize_t)nb::CHUNK_HEADER && (uint8_t)buf[0] == nb::CHUNK_VERSION) {
+                Reassemble(buf, (size_t)n, out);
+                continue;
+            }
+            out.emplace_back(buf, buf + n);
         }
         return out;
     }
@@ -284,6 +294,35 @@ private:
     int         fd_   = -1;
     bool        open_ = false;
     std::string lastError_;
+
+    // Chunk reassembly - one logical message at a time, keyed by the server's
+    // gen byte. A chunk from a different gen (or a different chunk count)
+    // discards the half-done buffer: chunks of one message never interleave
+    // with another's, and a lost chunk is recovered by the hello-retry loop
+    // requesting a fresh (new-gen) welcome, not by any per-chunk ack.
+    std::vector<std::string> parts_;
+    uint8_t chunkGen_  = 0;
+    size_t  partsHave_ = 0;
+
+    void Reassemble(const char* buf, size_t n, std::vector<std::string>& out) {
+        uint8_t gen   = (uint8_t)buf[1];
+        uint8_t index = (uint8_t)buf[2];
+        uint8_t count = (uint8_t)buf[3];
+        if (count == 0 || index >= count) return; // malformed
+        if (gen != chunkGen_ || parts_.size() != (size_t)count) {
+            parts_.assign(count, {});
+            partsHave_ = 0;
+            chunkGen_  = gen;
+        }
+        if (!parts_[index].empty()) return; // duplicate datagram
+        parts_[index].assign(buf + nb::CHUNK_HEADER, buf + n);
+        if (++partsHave_ < count) return;
+        std::string whole;
+        for (const std::string& p : parts_) whole += p;
+        out.push_back(std::move(whole));
+        parts_.clear();
+        partsHave_ = 0;
+    }
 };
 
 // --- Public client: picks the transport by URL scheme -----------------------

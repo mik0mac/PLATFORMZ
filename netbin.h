@@ -28,6 +28,24 @@ namespace nb {
 // layout ever changes incompatibly.
 static const uint8_t STATE_BIN_VERSION   = 0x01; // per-tick state packet
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
+static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
+
+// ---- chunking: oversized UDP messages ----
+// A datagram over ~1400 bytes IP-fragments, and some home routers/NATs drop
+// fragmented UDP outright - which made the LARGE-map welcome (128 platforms
+// ≈ 3.1 KB) undeliverable to those clients, hello-retry included. Any message
+// larger than UDP_SAFE_DATAGRAM is instead split into chunks that each fit one
+// unfragmented datagram:
+//   [u8 CHUNK_VERSION][u8 gen][u8 index][u8 count][payload slice]
+// `gen` identifies one logical message (server increments it per chunked
+// send), so the client's reassembler can't mix chunks of an old welcome with
+// a re-sent one; a chunk from a new gen discards any half-done buffer. There
+// are no per-chunk acks: if any chunk is lost the message just never
+// completes, and the existing hello-retry loop requests a fresh welcome.
+// Max message size: 255 chunks * CHUNK_PAYLOAD ≈ 300 KB.
+static const size_t UDP_SAFE_DATAGRAM = 1200;                 // fits every sane MTU
+static const size_t CHUNK_HEADER     = 4;
+static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 
 // ---- writers: append to a std::string byte buffer ----
 inline void putU8 (std::string& b, uint8_t  v) { b.push_back((char)v); }
