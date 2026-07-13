@@ -87,11 +87,18 @@ int main(int argc, char** argv) {
     (void)argc; (void)argv;
     networked = true;
     // e.g. platformz.html?server=ws://192.168.1.20:9000
-    // Falls back to the page's own host on :9000 if the param is absent.
+    // Default follows the page's own origin, scheme-aware: an https page must
+    // use wss:// (mixed-content rules silently block ws:// there, leaving the
+    // client stuck on CONNECTING), and TLS terminates at the reverse proxy on
+    // the standard port, which forwards /ws to the game server (see
+    // docs/deploy-vultr.md "HTTPS upgrade"). Plain http (LAN/dev) keeps
+    // talking straight to the game server on :9000.
     serverUrl = [] {
         const char* s = emscripten_run_script_string(
             "(new URLSearchParams(location.search).get('server')) || "
-            "('ws://' + location.hostname + ':9000')");
+            "(location.protocol === 'https:'"
+            " ? 'wss://' + location.host + '/ws'"
+            " : 'ws://' + location.hostname + ':9000')");
         return std::string(s ? s : "");
     }();
 #else

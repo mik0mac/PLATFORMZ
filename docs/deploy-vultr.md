@@ -194,11 +194,45 @@ filtered. `./platformz local` is the single-player escape hatch.
 
 ## HTTPS upgrade (later)
 
-Point an A record at `SERVER_IP`, then install **Caddy** — it auto-provisions Let's
-Encrypt TLS and reverse-proxies `wss://yourdomain/…` → `ws://localhost:9000` while
-serving `web/` over https. Native `udp://yourdomain:9000` keeps working directly
-(UDP bypasses the proxy). Your GitHub Pages client then works again via
-`?server=wss://yourdomain`.
+Point an A record at `SERVER_IP`, then install **Caddy** — it auto-provisions
+Let's Encrypt TLS, serves `web/` over https, and reverse-proxies the WebSocket.
+The web client's built-in default matches this layout: on an https page it
+connects to `wss://<the page's host>/ws` (see `main.cpp`), so the proxy must
+route `/ws` to the game server. Plain-http/LAN pages keep the old
+`ws://host:9000` default — nothing changes for local testing.
+
+```
+apt install -y caddy
+systemctl stop nginx && systemctl disable nginx   # Caddy takes over :80/:443
+```
+
+`/etc/caddy/Caddyfile` (replace `yourdomain.com`; that's the whole config —
+certificates are automatic):
+
+```
+yourdomain.com {
+    encode zstd gzip          # the ~13 MB .wasm/.data payload is the whole first load
+    root * /var/www/platformz
+    file_server
+
+    reverse_proxy /ws localhost:9000
+}
+```
+
+Deploy the web build to `/var/www/platformz` (or point `root` wherever rsync
+puts it), then `systemctl reload caddy`. Checks:
+
+- `https://yourdomain.com/platformz.html` loads and auto-connects (no
+  `?server=` needed — the default is scheme-aware).
+- Native handout builds can bake the domain instead of an IP
+  (`PLATFORMZ_DEFAULT_SERVER_HOST="yourdomain.com"`) — both transports resolve
+  hostnames. `udp://yourdomain.com:9000` bypasses the proxy entirely, as
+  before, and the ws:// fallback pivot also connects direct to :9000 (the
+  proxy only matters for browsers, which need wss on a secure page).
+- Your GitHub Pages client works again via `?server=wss://yourdomain.com/ws`.
+
+Remember the web bundle must be rebuilt (`make web`) whenever `main.cpp`
+changes — the scheme-aware default is baked into the wasm.
 
 ## See also
 - `docs/play-web-via-github.md` — the GitHub Actions + cloudflared tunnel setup.
