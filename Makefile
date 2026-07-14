@@ -23,7 +23,11 @@ CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR)
 # Extra compile flags for one-off/release builds without editing sources. Mainly
 # for baking a server address into a distribution binary (see docs/deploy-vultr.md):
 #   make EXTRA_CXXFLAGS='-DPLATFORMZ_DEFAULT_SERVER_HOST=\"203.0.113.10\"'
-CXXFLAGS += $(EXTRA_CXXFLAGS)
+# DIST_CXXFLAGS is a separate variable (not folded into EXTRA_CXXFLAGS) so the
+# `dist` target can pass it as a command-line override without blocking
+# secrets.mk's `EXTRA_CXXFLAGS +=` (command-line vars lock out further +=
+# assignment to that *same* variable name for the invocation).
+CXXFLAGS += $(EXTRA_CXXFLAGS) $(DIST_CXXFLAGS)
 LDFLAGS  := -L/opt/homebrew/lib -lraylib \
             -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo \
             -framework Security -framework CoreFoundation -lz
@@ -57,6 +61,25 @@ clean:
 # Also drops the cached IXWebSocket objects (slow to rebuild).
 clean-all: clean
 	rm -rf build
+
+# Distribution build: bakes a server address into the binary so recipients can
+# just run ./platformz with no URL (see docs/deploy-vultr.md). -B forces a
+# rebuild since the baked define isn't tracked as a make dependency, so a
+# stale dev build wouldn't otherwise be replaced. Composes automatically with a
+# secrets.mk join key (see the note at the top of this file) - HOST/PORT go
+# through DIST_CXXFLAGS, a separate variable from secrets.mk's EXTRA_CXXFLAGS,
+# so passing one on the command line doesn't block the other.
+# HOST is optional when secrets.mk already defines PLATFORMZ_DEFAULT_SERVER_HOST
+# (then plain `make dist` uses it); HOST= on the command line overrides it.
+#   make dist [HOST=203.0.113.10] [PORT=9000]
+SECRETS_HOST := $(findstring PLATFORMZ_DEFAULT_SERVER_HOST,$(EXTRA_CXXFLAGS))
+dist:
+	@if [ -z "$(HOST)" ] && [ -z "$(SECRETS_HOST)" ]; then \
+		echo "Usage: make dist HOST=<server-ip-or-domain> [PORT=<port>]"; \
+		echo "       (or define PLATFORMZ_DEFAULT_SERVER_HOST in secrets.mk)"; \
+		exit 1; \
+	fi
+	$(MAKE) -B DIST_CXXFLAGS='$(if $(HOST),-DPLATFORMZ_DEFAULT_SERVER_HOST=\"$(HOST)\")$(if $(PORT), -DPLATFORMZ_DEFAULT_SERVER_PORT=\"$(PORT)\")'
 
 # --- Web (Emscripten / WASM) build ----------------------------------------
 # Builds the browser client. Requires the emsdk toolchain (emcc on PATH) and a
@@ -114,4 +137,4 @@ webdir:
 clean-web:
 	rm -f web/platformz.html web/platformz.js web/platformz.wasm web/platformz.data
 
-.PHONY: all run clean clean-all web webdir clean-web
+.PHONY: all run clean clean-all dist web webdir clean-web

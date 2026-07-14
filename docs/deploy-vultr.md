@@ -189,24 +189,31 @@ mixed-content block.
 ## Hand out a native binary with the address baked in
 
 So recipients just run `./platformz` — no URL to type. The address is a **build-time**
-setting (`PLATFORMZ_DEFAULT_SERVER_HOST` in `constants.h`, default empty). The `-D`
-flag is what makes it a **distribution** build; a plain `make` with no flag stays a
-dev build.
+setting (`PLATFORMZ_DEFAULT_SERVER_HOST` in `constants.h`, default empty), baked in via
+the `dist` Makefile target; a plain `make` stays a dev build (unless `secrets.mk`
+defines the host — see below).
 
 | build command | `./platformz` (no arg) | `./platformz local` | `./platformz <url>` |
 | --- | --- | --- | --- |
-| `make` (dev, no `-D`) | local single-player | single-player | networked to `<url>` |
-| `make EXTRA_CXXFLAGS='-DPLATFORMZ_DEFAULT_SERVER_HOST=\"SERVER_IP\"'` (release) | auto-connect (UDP, pivots to WS) | single-player | networked to `<url>` (no pivot) |
+| `make` (dev) | local single-player | single-player | networked to `<url>` |
+| `make dist HOST=SERVER_IP` (release) | auto-connect (UDP, pivots to WS) | single-player | networked to `<url>` (no pivot) |
 
-**Build the distribution binary** (swap in your Vultr IP; the `\"` escaping matters —
-it's how the string survives `make` → shell → `g++`):
+**Build the distribution binary** (swap in your Vultr IP):
 ```bash
-make EXTRA_CXXFLAGS='-DPLATFORMZ_DEFAULT_SERVER_HOST=\"203.0.113.10\"'
+make dist HOST=203.0.113.10
 ```
-Equivalent alternative if you'd rather not deal with quoting: edit the
-`PLATFORMZ_DEFAULT_SERVER_HOST` default in `constants.h` to `"203.0.113.10"`, then a
-plain `make`. (Port defaults to 9000; override with
-`-DPLATFORMZ_DEFAULT_SERVER_PORT=\"9000\"` if you moved it.)
+This forces a full rebuild and passes `-DPLATFORMZ_DEFAULT_SERVER_HOST="203.0.113.10"`
+to `g++` under the hood (see the `dist` target in the `Makefile` if you want the raw
+`EXTRA_CXXFLAGS` form instead). Equivalent alternative if you'd rather not deal with
+the Makefile target at all: edit the `PLATFORMZ_DEFAULT_SERVER_HOST` default in
+`constants.h` to `"203.0.113.10"`, then a plain `make`. (Port defaults to 9000;
+override with `make dist HOST=203.0.113.10 PORT=9000` if you moved it.)
+
+If you also have a `secrets.mk` defining `PLATFORMZ_DEFAULT_SERVER_KEY` (see the
+note at the top of the repo `Makefile`), `make dist` bakes that in automatically
+alongside the host/port — no extra flags needed. The same goes for
+`PLATFORMZ_DEFAULT_SERVER_HOST`: with the host in `secrets.mk`, a plain `make dist`
+(no `HOST=`) is all you need; passing `HOST=` on the command line overrides it.
 
 **What the baked binary does:** connects over **UDP** first, and if the UDP handshake
 gets no reply within ~3s (a network blocking UDP), it logs `falling back to
