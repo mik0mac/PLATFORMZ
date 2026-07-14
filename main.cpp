@@ -213,7 +213,8 @@ int main(int argc, char** argv) {
         // filename, volume, loop, loopStart, loopEnd, num_of_loops
         MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, true),
         MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, false),
-        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, true)
+        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, true),
+        MusicCue("assets/music/gameover.ogg", DEFAULT_MUSIC_VOLUME, true)
     };
     // load all cues
     for (MusicCue& mc : musicCueTable) mc.load();
@@ -542,7 +543,7 @@ int main(int argc, char** argv) {
             } else if (screen == GameScreen::PLAYING) {
                 currentMusic = &musicCueTable[MUSIC_GAMEPLAY];
             } else if (screen == GameScreen::GAME_OVER) {
-                currentMusic = &musicCueTable[MUSIC_TITLE];
+                currentMusic = &musicCueTable[MUSIC_GAMEOVER];
             }
             previousScreen = screen;
             currentMusic->play();

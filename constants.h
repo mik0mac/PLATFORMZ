@@ -34,6 +34,7 @@ enum MusicId {
     MUSIC_TITLE = 0,
     MUSIC_COUNTDOWN,
     MUSIC_GAMEPLAY,
+    MUSIC_GAMEOVER,
     MUSIC_COUNT
 };
 
