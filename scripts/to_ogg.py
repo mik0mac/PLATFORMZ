@@ -33,12 +33,15 @@ def main(path, compression):
         print('No audio files found.')
         return
 
-    print('new files created:')
+    try:
+        print('new files created:')
 
-    for file in orig_files:
-        output_path = Path(file).with_suffix('.ogg')
-        convert_to_ogg(file, output_path, compression)
-        print(output_path.name)
+        for file in orig_files:
+            output_path = Path(file).with_suffix('.ogg')
+            convert_to_ogg(file, output_path, compression)
+            print(output_path.name)
+    except Exception as e:
+        print(f'Error occurred: {e}')
 
     
 
