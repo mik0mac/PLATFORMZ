@@ -157,26 +157,47 @@ private:
     std::vector<AudioEvent> queue;
 };
 
+
+//MARK: Music Cue
+// Each cue (ogg file in the assets/music) will get its own instance with its own loop points, fade-in/out, etc..
+// Volume can be individualized as well.  Pan will likely remain centered.
+// Usage: Create a MusicCue instance for each cue, load() it.  Use fadeIn() and fadeOut() instead of play() and stop().
 class MusicCue {
 public:
     std::string filename;
     float volume;
     float pan = 0.5f;
+    bool isPlaying() { return IsMusicStreamPlaying(music); }
     
-    bool loop;
+    bool loop = true; // default: loop the whole track (raylib's built-in looping).  If false, play once and stop.
     float loopStart = 0.0f; // in seconds
     float loopEnd = -1.0f;   // negative means "end of track" (resolved in load() once the music's length is known)
     int num_of_loops = -1; // number of REPEATS (seek-backs to loopStart): 0 = play the section once, 1 = twice, etc. -1 = loop forever
     int loopCount = 0; // number of times the music has looped (incremented each time it loops)
 
-    MusicCue (const std::string& filename, float volume = 1.0f, bool loop = true,
-              float loopStart = 0.0f, float loopEnd = -1.0f, int num_of_loops = -1)
-        : filename(filename), volume(volume), loop(loop), loopStart(loopStart), loopEnd(loopEnd), num_of_loops(num_of_loops) {}
+    float fadeInDuration = 0.0f; // in seconds
+    float fadeOutDuration = 0.5f; // in seconds
+    bool isFadingIn = false;
+    bool isFadingOut = false;
+    float fadeTimer = 0.0f; // in seconds
+
+    MusicCue (const std::string& filename, float volume = 1.0f, float fadeInDuration = 0.0f, float fadeOutDuration = 0.5f,
+              bool loop = true, float loopStart = 0.0f, float loopEnd = -1.0f, int num_of_loops = -1)
+        : filename(filename), volume(volume), fadeInDuration(fadeInDuration), fadeOutDuration(fadeOutDuration),
+          loop(loop), loopStart(loopStart), loopEnd(loopEnd), num_of_loops(num_of_loops) {}
 
     void load() {
         music = LoadMusicStream(filename.c_str());
         // A failed load yields an invalid Music; every raylib call on it is
         // skipped, so a missing file just means silence.
+        if (!IsMusicValid(music)) return;
+        if (loopEnd < 0.0f) loopEnd = GetMusicTimeLength(music);
+        SetMusicVolume(music, volume);
+        // raylib defaults Music.looping to true - a non-looping cue must opt out.
+        music.looping = loop;
+    }
+
+    void reset() {
         if (!IsMusicValid(music)) return;
         if (loopEnd < 0.0f) loopEnd = GetMusicTimeLength(music);
         SetMusicVolume(music, volume);
@@ -200,20 +221,58 @@ public:
         if (IsMusicValid(music)) StopMusicStream(music);
     }
 
+    void fadeIn() {
+        isFadingIn = true;
+        isFadingOut = false;
+        fadeTimer = 0.0f;
+        SetMusicVolume(music, 0.0f);
+    }
+
+    void fadeOut() {
+        isFadingOut = true;
+        isFadingIn = false;
+        fadeTimer = 0.0f;
+    }
+
     // Per-frame: feed the stream and handle the custom loop points. While the
     // cue is looping, music.looping stays true as a safety net - if a frame
     // hiccup skips past a loopEnd at the very end of the track, raylib wraps
     // to 0 instead of going silent.
-    void update() {
+    void update(float dt) {
         if (!IsMusicValid(music)) return;
         UpdateMusicStream(music);
-        if (!loop) return;
-        if (GetMusicTimePlayed(music) >= loopEnd) {
-            if (num_of_loops < 0 || loopCount < num_of_loops) {
-                SeekMusicStream(music, loopStart);
-                loopCount++;
+        if (loop) {
+            if (GetMusicTimePlayed(music) >= loopEnd) {
+                if (num_of_loops < 0 || loopCount < num_of_loops) {
+                    SeekMusicStream(music, loopStart);
+                    loopCount++;
+                } else {
+                    music.looping = false; // quota used up: play out to the end, stop
+                }
+            }
+        }
+        if (isFadingIn) {
+            // start playback using the built-in function, which checks for a valid Music
+            // and restarts the music from the beginning.
+            if (IsMusicStreamPlaying(music) == false) play();
+            fadeTimer += dt;
+            // duration <= 0 means instant: skip the divide (0/0 would be NaN)
+            float fadeProgress = (fadeInDuration > 0.0f) ? fadeTimer / fadeInDuration : 1.0f;
+            if (fadeProgress >= 1.0f) {
+                isFadingIn = false;
+                SetMusicVolume(music, volume);
             } else {
-                music.looping = false; // quota used up: play out to the end, stop
+                SetMusicVolume(music, volume * fadeProgress);
+            }
+        } else if (isFadingOut) {
+            fadeTimer += dt;
+            float fadeProgress = (fadeOutDuration > 0.0f) ? fadeTimer / fadeOutDuration : 1.0f;
+            if (fadeProgress >= 1.0f) {
+                isFadingOut = false;
+                stop();
+                reset(); // reset the music to its initial state for the next play
+            } else {
+                SetMusicVolume(music, volume * (1.0f - fadeProgress));
             }
         }
     }

@@ -2,6 +2,7 @@
 
 #include <unordered_map> // mapSizePresets
 #include <string>        // mapSizePresets key
+#include <vector>        // HUMAN_PLAYER_COLORS
 
 //MARK: Audio events (shared client+server wire contract)
 // Small-int ids so the headless server can tag/serialize events without any

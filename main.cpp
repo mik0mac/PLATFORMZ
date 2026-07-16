@@ -210,19 +210,19 @@ int main(int argc, char** argv) {
     // MARK: MUSIC FILES
     // list of music cues
     MusicCue musicCueTable[] = {
-        // filename, volume, loop, loopStart, loopEnd, num_of_loops
-        MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, true),
-        MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, false),
-        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, true),
-        MusicCue("assets/music/gameover.ogg", DEFAULT_MUSIC_VOLUME, true)
+        // filename, volume, fadeInDuration, fadeOutDuration, loop, loopStart, loopEnd (-1.0f = end of file), num_of_loops (-1 = infinite)
+        MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.0f, true, 0.0f, -1.0f, -1),
+        MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, 0.0f, 4.0f, true, 0.0f, -1.0f, -1),
+        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1),
+        MusicCue("assets/music/gameover.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.5f, true, 0.0f, -1.0f, -1)
     };
     // load all cues
     for (MusicCue& mc : musicCueTable) mc.load();
     // set a pointer to the current music cue (start on title)
-    MusicCue* currentMusic = &musicCueTable[MUSIC_TITLE];
+    // MusicCue* currentMusic = &musicCueTable[MUSIC_TITLE];
     // The in-loop music switch only fires on a screen *transition*, and the
     // game boots already on the title screen - start the first cue by hand.
-    currentMusic->play();
+    musicCueTable[MUSIC_TITLE].fadeIn();
 
     
 
@@ -533,22 +533,27 @@ int main(int argc, char** argv) {
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
 
-        // MUSIC STREAM
+        // MARK: MUSIC STREAM
         if (screen != previousScreen) {
-            currentMusic->stop(); // outgoing cue: don't leave it holding a stale position
+            for (MusicCue& mc : musicCueTable) {
+                if (mc.isPlaying()) mc.fadeOut();
+            }
+            // currentMusic->fadeOut(); // outgoing cue: don't leave it holding a stale position
             if (screen == GameScreen::TITLE) {
-                currentMusic = &musicCueTable[MUSIC_TITLE];
+                musicCueTable[MUSIC_TITLE].fadeIn();
             } else if (screen == GameScreen::COUNTDOWN) {
-                currentMusic = &musicCueTable[MUSIC_COUNTDOWN];
+                musicCueTable[MUSIC_COUNTDOWN].fadeIn();
             } else if (screen == GameScreen::PLAYING) {
-                currentMusic = &musicCueTable[MUSIC_GAMEPLAY];
+                musicCueTable[MUSIC_GAMEPLAY].fadeIn();
             } else if (screen == GameScreen::GAME_OVER) {
-                currentMusic = &musicCueTable[MUSIC_GAMEOVER];
+                musicCueTable[MUSIC_GAMEOVER].fadeIn();
             }
             previousScreen = screen;
-            currentMusic->play();
+            
+            // currentMusic->fadeIn();
         }
-        currentMusic->update();
+        // currentMusic->update(dt);
+        for (MusicCue& mc : musicCueTable) mc.update(dt);
 
         // Connection maintenance (networked). Transport-agnostic, but it's what
         // makes the connectionless UDP path work: resend hello until the server
