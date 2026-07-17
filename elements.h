@@ -8,6 +8,7 @@
 #include <vector>
 #include <cmath>
 #include <string>
+#include <algorithm> // std::max/min over initializer lists (out-of-bounds check)
 
 #include "random.h"
 #include "constants.h"
@@ -141,6 +142,10 @@ public:
 
     bool isBot = false; // Whether the player is a bot or a human player.
 
+    bool isOutOfBounds = false; // Whether the player is currently out of bounds.
+    float outOfBoundsTimer = 0.0; // Timer for how long the player has been out of bounds.
+    bool outOfBoundsWarned = false; // Whether the player has been warned about being out of bounds.
+
     bool isSpectating = false; // Whether the player is currently spectating (not actively playing).  Set in gameSpace.
     float countdownToSpectating = 5.0f; // Countdown length for the player to enter spectating mode after death.
     float SpectatingTimer = countdownToSpectating; // Timer for the player to enter spectating mode after death.
@@ -268,9 +273,31 @@ public:
         if (!isUsingJetpack || !canJetpack()) velocity.y -= gravity * dt;
     }
 
-    void updatePos(float dt) {
+    // boundsHalfSize is the current map's walls.halfSize (set per match by
+    // GameSpace::configureMap), not the compile-time default.
+    void updatePos(float dt, float boundsHalfSize) {
         position = Vector3Add(position, Vector3Scale(velocity, dt));
         // gravity is applied in updateVelocity.
+
+        // check out of bounds.
+        if (std::max({position.x, position.y, position.z}) > boundsHalfSize * GAMESPACE_OUT_OF_BOUNDS_FACTOR ||
+            std::min({position.x, position.y, position.z}) < -boundsHalfSize * GAMESPACE_OUT_OF_BOUNDS_FACTOR) {
+            if (!isOutOfBounds) {
+                isOutOfBounds = true;
+                outOfBoundsTimer = OUT_OF_BOUNDS_TIMER; // reset timer when player goes out of bounds
+            } else {
+                outOfBoundsTimer -= dt; // decrement timer while player is out of bounds
+            }
+        } else {
+            isOutOfBounds = false; // player is back in bounds
+            outOfBoundsWarned = false; // reset warning flag when player is back in bounds
+            outOfBoundsTimer = OUT_OF_BOUNDS_TIMER; // reset timer when player is back in bounds
+        }
+
+        if (outOfBoundsTimer <= 0.0f && isOutOfBounds) {
+            isAlive = false; // eliminate player if timer runs out
+        }
+
 
         // Decay the damage-flash here since this runs every frame for the
         // player (gamespace.h) - mirrors how Asteroid decays its own flash.

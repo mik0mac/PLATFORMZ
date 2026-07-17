@@ -64,6 +64,8 @@ enum MessageType {
     MSG_TYPE_ASTEROID_COLLISION,
     MSG_TYPE_ELIMINATION,
     MSG_TYPE_ASTEROID_BONUS,
+    MSG_TYPE_OUT_OF_BOUNDS,
+    MSG_TYPE_LOST_IN_SPACE,
     COUNT
 };
 
@@ -74,6 +76,8 @@ const float EARTH_GRAVITY = 19.6133f; //9.81f; // earth gravity, m/s^2 * 2
 //MARK: GameSpace Constants
 // these only used as class defaults and are overwritten by the mapSizePresets in main.cpp.
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
+const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game space is considered out of bounds
+const float OUT_OF_BOUNDS_TIMER = 5.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 4; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)

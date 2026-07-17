@@ -244,7 +244,22 @@ public:
 
         // Update players
         for (Player& player : players) {
-            player.updatePos(dt);
+            bool wasAlive = player.isAlive;
+            player.updatePos(dt, walls.halfSize);
+            if (player.isOutOfBounds && player.isAlive && !player.outOfBoundsWarned) {
+                Message msg(MSG_TYPE_OUT_OF_BOUNDS, player.name, player.name, player.id, player.id);
+                emitMessage(msg);
+                emitAudio(FX_WARNING, player.position, player.id);
+                player.outOfBoundsWarned = true; // Set the warning flag to true
+            }
+            // updatePos only kills via the out-of-bounds timer, so this
+            // transition is always a lost-in-space elimination. The death
+            // burst + FX_PLAYER_DEATH fire in updateActiveObjects like any
+            // other death.
+            if (wasAlive && !player.isAlive) {
+                Message msg(MSG_TYPE_LOST_IN_SPACE, player.name, player.name, player.id, player.id);
+                emitMessage(msg);
+            }
         }
 
         // Update asteroids

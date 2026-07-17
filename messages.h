@@ -183,6 +183,16 @@ class Message {
                 color = GREEN;
                 visibility.set(VIS_PLAYER_A); // only the player who destroyed the asteroid sees this message
                 break;
+            case MSG_TYPE_OUT_OF_BOUNDS:
+                text = "YOU ARE OUT OF BOUNDS!";
+                color = RED;
+                visibility.set(VIS_PLAYER_A); // only the player who is out of bounds sees this message
+                break;
+            case MSG_TYPE_LOST_IN_SPACE:
+                text = pa + " WAS LOST IN SPACE.";
+                color = BLUE;
+                visibility.set(VIS_ALL); // all players see this message, like an elimination
+                break;
             default:
                 text = "Unknown message type.";
                 color = RED;
