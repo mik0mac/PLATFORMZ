@@ -31,12 +31,25 @@ const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation. 
 
 // MARK: MUSIC
 
+// One id per music file (shared client+server wire contract): the server's
+// jukebox sends a MusicId, the client indexes musicCueTable with it.
+// MUSIC_COUNT doubles as the "no track" sentinel (see Jukebox::getCurrentTrack).
 enum MusicId {
     MUSIC_TITLE = 0,
     MUSIC_COUNTDOWN,
     MUSIC_GAMEPLAY,
+    MUSIC_PLACEHOLDER1,
+    MUSIC_PLACEHOLDER2,
     MUSIC_GAMEOVER,
     MUSIC_COUNT
+};
+
+enum ScreenId {
+    SCREEN_TITLE = 0,
+    SCREEN_COUNTDOWN,
+    SCREEN_GAMEPLAY,
+    SCREEN_GAMEOVER,
+    SCREEN_COUNT
 };
 
 const float DEFAULT_MUSIC_VOLUME = 0.25f; // default music volume for all tracks
