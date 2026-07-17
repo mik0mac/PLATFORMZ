@@ -9,6 +9,7 @@
 #include "input.h"
 #include "ui.h"        // immediate-mode menu widgets (title screen)
 #include "audio.h"     // sound FX que, load/unload, trigger
+#include "jukebox.h"
 #include "net_client.h" // multiplayer: WebSocket client
 #include "wire.h"       // multiplayer: input serialize / state apply
 #include "bot_logic.h"   // bot AI decision tree
@@ -208,23 +209,37 @@ int main(int argc, char** argv) {
     for (audioFX& fx : fxTable) fx.load();
 
     // MARK: MUSIC FILES
-    // list of music cues
-    MusicCue musicCueTable[] = {
+    // Client side: one MusicCue per MusicId, in enum order. The client owns and
+    // loads every cue; *which* one plays is decided by the per-screen jukeboxes
+    // below (locally here; over the wire the server will send the MusicId).
+    MusicCue musicCueTable[MUSIC_COUNT] = {
         // filename, volume, fadeInDuration, fadeOutDuration, loop, loopStart, loopEnd (-1.0f = end of file), num_of_loops (-1 = infinite)
-        MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.0f, true, 0.0f, -1.0f, -1),
-        MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, 0.0f, 4.0f, true, 0.0f, -1.0f, -1),
-        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1),
-        MusicCue("assets/music/gameover.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.5f, true, 0.0f, -1.0f, -1)
+        MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.0f, true, 0.0f, -1.0f, -1),         // MUSIC_TITLE
+        MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, 0.0f, 4.0f, true, 0.0f, -1.0f, -1),     // MUSIC_COUNTDOWN
+        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1),     // MUSIC_GAMEPLAY
+        MusicCue("assets/music/placeholder1.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1), // MUSIC_PLACEHOLDER1
+        MusicCue("assets/music/placeholder2.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1), // MUSIC_PLACEHOLDER2
+        MusicCue("assets/music/gameover.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.5f, true, 0.0f, -1.0f, -1)       // MUSIC_GAMEOVER
     };
     // load all cues
     for (MusicCue& mc : musicCueTable) mc.load();
-    // set a pointer to the current music cue (start on title)
-    // MusicCue* currentMusic = &musicCueTable[MUSIC_TITLE];
+
+    // Server side (this process, in local play): one jukebox per screen holds
+    // that screen's MusicIds and picks the current one. Persists across games
+    // so multi-track screens cycle through their list.
+    Jukebox jukebox[SCREEN_COUNT];
+    jukebox[SCREEN_TITLE].addTrack(MUSIC_TITLE);
+    jukebox[SCREEN_COUNTDOWN].addTrack(MUSIC_COUNTDOWN);
+    jukebox[SCREEN_GAMEPLAY].addTrack(MUSIC_GAMEPLAY);
+    jukebox[SCREEN_GAMEPLAY].addTrack(MUSIC_PLACEHOLDER1);
+    jukebox[SCREEN_GAMEPLAY].addTrack(MUSIC_PLACEHOLDER2);
+    jukebox[SCREEN_GAMEPLAY].shuffle();
+    jukebox[SCREEN_GAMEOVER].addTrack(MUSIC_GAMEOVER);
+
     // The in-loop music switch only fires on a screen *transition*, and the
     // game boots already on the title screen - start the first cue by hand.
-    musicCueTable[MUSIC_TITLE].fadeIn();
+    musicCueTable[jukebox[SCREEN_TITLE].getCurrentTrack()].fadeIn();
 
-    
 
     // MARK: RENDER TEXTURE 2D
     // The 3D scene is rendered into this off-screen target each frame so the
@@ -524,6 +539,17 @@ int main(int argc, char** argv) {
     // Remember the previous screen so we can detect a transition and change music.
     GameScreen previousScreen = screen;
 
+    // Map the client's screen state onto the jukebox array's ScreenId index.
+    auto screenIdOf = [](GameScreen s) {
+        switch (s) {
+            case GameScreen::TITLE:     return SCREEN_TITLE;
+            case GameScreen::COUNTDOWN: return SCREEN_COUNTDOWN;
+            case GameScreen::PLAYING:   return SCREEN_GAMEPLAY;
+            case GameScreen::GAME_OVER: return SCREEN_GAMEOVER;
+        }
+        return SCREEN_TITLE;
+    };
+
     //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
@@ -538,21 +564,14 @@ int main(int argc, char** argv) {
             for (MusicCue& mc : musicCueTable) {
                 if (mc.isPlaying()) mc.fadeOut();
             }
-            // currentMusic->fadeOut(); // outgoing cue: don't leave it holding a stale position
-            if (screen == GameScreen::TITLE) {
-                musicCueTable[MUSIC_TITLE].fadeIn();
-            } else if (screen == GameScreen::COUNTDOWN) {
-                musicCueTable[MUSIC_COUNTDOWN].fadeIn();
-            } else if (screen == GameScreen::PLAYING) {
-                musicCueTable[MUSIC_GAMEPLAY].fadeIn();
-            } else if (screen == GameScreen::GAME_OVER) {
-                musicCueTable[MUSIC_GAMEOVER].fadeIn();
-            }
+            // Advance the jukebox of the screen we're leaving so the next visit
+            // gets a fresh track (no-op for single-track screens), then fade in
+            // whatever the new screen's jukebox currently points at.
+            jukebox[screenIdOf(previousScreen)].next();
+            MusicId id = jukebox[screenIdOf(screen)].getCurrentTrack();
+            if (id != MUSIC_COUNT) musicCueTable[id].fadeIn();
             previousScreen = screen;
-            
-            // currentMusic->fadeIn();
         }
-        // currentMusic->update(dt);
         for (MusicCue& mc : musicCueTable) mc.update(dt);
 
         // Connection maintenance (networked). Transport-agnostic, but it's what
