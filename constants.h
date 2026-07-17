@@ -2,6 +2,7 @@
 
 #include <unordered_map> // mapSizePresets
 #include <string>        // mapSizePresets key
+#include <vector>        // HUMAN_PLAYER_COLORS
 
 //MARK: Audio events (shared client+server wire contract)
 // Small-int ids so the headless server can tag/serialize events without any
@@ -199,7 +200,7 @@ const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bot
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
 const char* const BOT_NAME_STRINGS[] = {
-    "RoyBOT OVERLORD","Jeff","BOTtholomew","Geoff","Qeff","Djeff","Jeffrey","Jefferson","Jeffery","Geoffrey","Geofferson","Geff","Jef","Jeferson","Jefrey","Jeferson","Jefri","Jefrierson","Jefriani","Jefrianius","Jefrianius Maximus"
+    "RoyBOT OVERLORD","Jeff","Geoff","Qeff","Djeff","Geeff", "Jurf", "j3ff", "JEFF!"
 };
 const int BOT_NAME_COUNT = sizeof(BOT_NAME_STRINGS) / sizeof(BOT_NAME_STRINGS[0]);
 
