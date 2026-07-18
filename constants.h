@@ -64,6 +64,8 @@ enum MessageType {
     MSG_TYPE_ASTEROID_COLLISION,
     MSG_TYPE_ELIMINATION,
     MSG_TYPE_ASTEROID_BONUS,
+    MSG_TYPE_OUT_OF_BOUNDS,
+    MSG_TYPE_LOST_IN_SPACE,
     COUNT
 };
 
@@ -74,6 +76,8 @@ const float EARTH_GRAVITY = 19.6133f; //9.81f; // earth gravity, m/s^2 * 2
 //MARK: GameSpace Constants
 // these only used as class defaults and are overwritten by the mapSizePresets in main.cpp.
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
+const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game space is considered out of bounds
+const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 4; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
@@ -99,7 +103,7 @@ const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdo
 const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
-const bool WALLS_STOP_ROCKETS = false; // if true, rockets are destroyed on wall impact; if false, they fly through.
+const bool WALLS_ENABLED = true; // if true, the boundary walls are drawn and everything collides with them (rockets detonate). If false, nothing collides: rockets fade out past the boundary and players are subject to the out-of-bounds elimination rules.
 
 //MARK: Platform Constants
 const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
@@ -154,7 +158,7 @@ const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for no
 const float PLAYER_SPEED_WALK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 24.0f; // units/sec^2
+const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;

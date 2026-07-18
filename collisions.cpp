@@ -263,16 +263,23 @@ void CheckRocketWallCollisions(GameSpace& space) {
     for (Rocket& rocket : rockets) {
         if (rocket.isDestroyed) continue;
 
+        if (!space.wallsEnabled) {
+            // Open-space mode: no wall to hit. Rockets stay live through the
+            // same grace zone players get, then fade at the out-of-bounds line
+            // instead of flying forever.
+            float oobBound = halfSize * GAMESPACE_OUT_OF_BOUNDS_FACTOR;
+            if (fabsf(rocket.position.x) > oobBound ||
+                fabsf(rocket.position.y) > oobBound ||
+                fabsf(rocket.position.z) > oobBound) {
+                rocket.isOutOfBounds = true;
+            }
+            continue;
+        }
+
         bool hitWall = rocket.position.x > halfSize || rocket.position.x < -halfSize ||
                        rocket.position.y > halfSize || rocket.position.y < -halfSize ||
                        rocket.position.z > halfSize || rocket.position.z < -halfSize;
         if (!hitWall) continue;
-
-        if (!space.wallsStopRockets) {
-            space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.ownerId);
-            rocket.isOutOfBounds = true; // mark the rocket as out of bounds so it starts to fade.
-            continue; // rocket flies through the wall, no detonation
-        }
 
         // Clamp onto the wall so the explosion appears at the impact point.
         rocket.position.x = Clamp(rocket.position.x, -halfSize, halfSize);
@@ -371,9 +378,10 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                     Vector3 offset = Vector3Subtract(player.position, asteroid.position);
                     float dist = Vector3Length(offset);
                     if (dist > 1e-4f) {
+                        Walls& walls = space.getWalls();
                         Vector3 normal = Vector3Scale(offset, 1.0f / dist);
-                        asteroid.velocity = Vector3Reflect(asteroid.velocity, normal); // asteroid bounces off the player, same elasticity as the walls
-                        player.velocity = Vector3Reflect(player.velocity, normal); // player bounces off the asteroid, same elasticity as the walls
+                        asteroid.velocity = Vector3Scale(Vector3Reflect(asteroid.velocity, normal), walls.elasticityAsteroid); // asteroid bounces off the player, same elasticity as the walls
+                        player.velocity = Vector3Scale(Vector3Reflect(player.velocity, normal), walls.elasticityPlayer); // player bounces off the asteroid, same elasticity as the walls
                         // push clear of the overlap
                         float overlap = (asteroid.size + player.radius) - dist;
                         asteroid.position = Vector3Subtract(asteroid.position, Vector3Scale(normal, overlap *0.5f));
@@ -538,6 +546,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 // velocity and apply the walls' damage on impact, per the Walls element's
 // elasticity/damage fields (space.getWalls()).
 void CheckPlayerWallCollisions(GameSpace& space) {
+    if (!space.wallsEnabled) return; // open-space mode: out-of-bounds rules apply instead
     auto& players = space.getPlayers();
     Walls& walls = space.getWalls();
     float halfSize = walls.halfSize;
@@ -669,6 +678,27 @@ void CheckAsteroidWallCollisions(GameSpace& space) {
     auto& asteroids = space.getAsteroids();
     Walls& walls = space.getWalls();
     float halfSize = walls.halfSize;
+
+    if (!space.wallsEnabled) {
+        // Open-space mode: no bounce. An asteroid that crosses the out-of-bounds
+        // line is mirrored through the origin (-x,-y,-z) so it re-enters from the
+        // far side. Only wrap while it's moving AWAY from the arena: the mirrored
+        // point is exactly as far out as the original, so without the outbound
+        // test the check would fire again next frame and ping-pong the asteroid
+        // between the two points. After the mirror the velocity points inbound
+        // (dot flips sign), which is what disarms the retrigger.
+        float oobBound = halfSize * GAMESPACE_OUT_OF_BOUNDS_FACTOR;
+        for (Asteroid& asteroid : asteroids) {
+            if (asteroid.isDestroyed) continue;
+            bool outside = fabsf(asteroid.position.x) > oobBound ||
+                           fabsf(asteroid.position.y) > oobBound ||
+                           fabsf(asteroid.position.z) > oobBound;
+            if (!outside) continue;
+            if (Vector3DotProduct(asteroid.position, asteroid.velocity) <= 0.0f) continue; // inbound: already wrapped
+            asteroid.position = Vector3Negate(asteroid.position);
+        }
+        return;
+    }
 
     for (Asteroid& asteroid : asteroids) {
         if (asteroid.isDestroyed) continue;

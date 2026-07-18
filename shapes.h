@@ -338,7 +338,10 @@ inline void DrawReticle(const Player& player, DrawPass pass) {
 // - so it stays consistent frame to frame without storing any mesh on the
 // Asteroid class. Drawn shaded-wire to match the other elements: translucent
 // double-sided fill faces with bright edges on top.
-inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass) {
+// `fade` scales both alphas (1 = normal). Open-space mode passes the asteroid's
+// distance-based boundary fade so it dissolves on the way out to the
+// out-of-bounds line and re-materializes after wrapping to the far side.
+inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass, float fade = 1.0f) {
     // Per-asteroid seed from its (stable) starting position.
     const Vector3 seed = asteroid.startingPosition;
 
@@ -369,6 +372,10 @@ inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass) {
     float flash = asteroid.flashIntensity();
     Color fill    = ColorBrightness(asteroid.color_fill,    ASTEROID_FLASH_INTENSITY * flash);
     Color outline = ColorBrightness(asteroid.color_outline, ASTEROID_FLASH_INTENSITY * flash);
+    if (fade < 1.0f) {
+        fill.a    = (unsigned char)((float)fill.a    * fade);
+        outline.a = (unsigned char)((float)outline.a * fade);
+    }
 
     if (pass == PASS_FILL) {
         // Fill faces - drawn both windings so the translucent glow reads from any
@@ -394,8 +401,8 @@ inline void DrawAsteroidShape(const Asteroid& asteroid, DrawPass pass) {
 }
 
 //MARK: Wrappers
-inline void DrawAsteroid(const Asteroid& asteroid, DrawPass pass) {
-    DrawAsteroidShape(asteroid, pass);
+inline void DrawAsteroid(const Asteroid& asteroid, DrawPass pass, float fade = 1.0f) {
+    DrawAsteroidShape(asteroid, pass, fade);
 }
 
 // Stella octangula (stellated octahedron): two interpenetrating regular

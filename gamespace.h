@@ -41,7 +41,7 @@ public:
     // Player-selectable gameplay rules (set from the OPTIONS modal before a match;
     // networked play threads them via serializeStart -> server). Default to the
     // compile-time constants so an unconfigured GameSpace behaves as before.
-    bool wallsStopRockets = WALLS_STOP_ROCKETS;                                    // rockets detonate on the boundary wall vs fly through
+    bool wallsEnabled = WALLS_ENABLED;                                             // boundary walls drawn + collide; OFF = open space, out-of-bounds rules apply
     bool earthGravityPassThroughPlatforms = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // under earth gravity, fall through platforms vs land on them
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
     bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
@@ -244,7 +244,22 @@ public:
 
         // Update players
         for (Player& player : players) {
-            player.updatePos(dt);
+            bool wasAlive = player.isAlive;
+            player.updatePos(dt, walls.halfSize);
+            if (player.isOutOfBounds && player.isAlive && !player.outOfBoundsWarned) {
+                Message msg(MSG_TYPE_OUT_OF_BOUNDS, player.name, player.name, player.id, player.id);
+                emitMessage(msg);
+                emitAudio(FX_WARNING, player.position, player.id);
+                player.outOfBoundsWarned = true; // Set the warning flag to true
+            }
+            // updatePos only kills via the out-of-bounds timer, so this
+            // transition is always a lost-in-space elimination. The death
+            // burst + FX_PLAYER_DEATH fire in updateActiveObjects like any
+            // other death.
+            if (wasAlive && !player.isAlive) {
+                Message msg(MSG_TYPE_LOST_IN_SPACE, player.name, player.name, player.id, player.id);
+                emitMessage(msg);
+            }
         }
 
         // Update asteroids
@@ -335,6 +350,10 @@ public:
                 spawnEliminationBurst(player.position, player.color_outline);
                 emitAudio(FX_PLAYER_DEATH, player.position, player.id);
                 player.deathBurstSpawned = true;
+                // Stop the body: dead slots aren't driven through the input
+                // path anymore (no gravity), so leftover velocity would carry
+                // them in a straight line forever. Spectating restores control.
+                player.velocity = {0, 0, 0};
             }
         }
 
@@ -384,12 +403,26 @@ public:
     // builds the depth buffer - then all TRANSLUCENT fills in a single depth-mask-
     // off block. This collapses the per-object batch flushes (~56/frame, the main
     // framerate cost) down to the one flush pair around the fill pass.
+    // Open-space boundary fade for an asteroid: 1 inside the arena, easing to 0
+    // at the out-of-bounds line (where the wrap mirrors it to the far side, so
+    // the fade-out and the fade-back-in meet at fully invisible). Derived from
+    // position each frame - no state, so networked clients get it from the
+    // synced position for free. Always 1 with walls on (nothing gets out).
+    float asteroidBoundaryFade(const Asteroid& asteroid) const {
+        if (wallsEnabled) return 1.0f;
+        float maxAxis = std::max({fabsf(asteroid.position.x),
+                                  fabsf(asteroid.position.y),
+                                  fabsf(asteroid.position.z)});
+        float span = walls.halfSize * (GAMESPACE_OUT_OF_BOUNDS_FACTOR - 1.0f);
+        return 1.0f - Clamp((maxAxis - walls.halfSize) / span, 0.0f, 1.0f);
+    }
+
     void draw(int localPlayerIndex = -1) {
         // ---- Pass 1: opaque wireframes (write depth) ----
-        DrawWalls(walls);
+        if (wallsEnabled) DrawWalls(walls);
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
-        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE);
+        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
         for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE);
         for (Spark& spark : sparks)            DrawSpark(spark); // wire-only lines
@@ -398,7 +431,7 @@ public:
         BeginTranslucentFill();
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL);
         drawPlayersPass(localPlayerIndex, PASS_FILL);
-        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL);
+        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);
         for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL);
         EndTranslucentFill();
