@@ -397,7 +397,7 @@ int main(int argc, char** argv) {
     // OPTIONS toggles (bool gameplay rules; defaults from constants.h). Applied to
     // the GameSpace at match start - locally in startGame, remotely via serializeStart.
     bool  optWallsEnabled                  = WALLS_ENABLED;                         // ON => boundary walls drawn + collide; OFF => open space (out-of-bounds rules)
-    bool  optPassThroughPlatformsEarthGrav = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // ON => fall through platforms under earth gravity
+    bool  optHypedMode                     = HYPED_MODE;                            // ON => 2x jetpack horizontal boost, rocket speed, fuel regen
     bool  optRocketsObeyPhysics            = ROCKETS_OBEY_PHYSICS;                  // ON => rockets obey gravity + inherit shooter velocity
     bool  optFriendlyFire                  = FRIENDLY_FIRE;                         // OFF => a player's own blast deals no self-damage
     // Networked options sync (lobby): the server echoes the match-wide options in
@@ -407,7 +407,7 @@ int main(int argc, char** argv) {
     // accept a server toggle that differs from it - that keeps our own click from
     // being flipped back before the server's echo of it arrives.
     bool  optSentWalls = optWallsEnabled;
-    bool  optSentEgpt  = optPassThroughPlatformsEarthGrav;
+    bool  optSentHyped = optHypedMode;
     bool  optSentPhys  = optRocketsObeyPhysics;
     bool  optSentFf    = optFriendlyFire;
 
@@ -439,13 +439,13 @@ int main(int argc, char** argv) {
             // server applies them before generating the world (first press wins).
             if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
                                                       (int)optNumPlayers, optBotDifficulty,
-                                                      optWallsEnabled, optPassThroughPlatformsEarthGrav,
+                                                      optWallsEnabled, optHypedMode,
                                                       optRocketsObeyPhysics, optFriendlyFire));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.wallsEnabled = optWallsEnabled;                                 // OPTIONS: boundary walls on vs open space
-        gameSpace.earthGravityPassThroughPlatforms = optPassThroughPlatformsEarthGrav; // OPTIONS: fall through platforms under earth gravity
+        gameSpace.hypedMode = optHypedMode;                                       // OPTIONS: HYPED MODE (2x jetpack horizontal / rocket speed / fuel regen)
         gameSpace.rocketsObeyPhysics = optRocketsObeyPhysics;                     // OPTIONS: rockets obey gravity + inherit shooter velocity
         gameSpace.friendlyFire = optFriendlyFire;                                 // OPTIONS: own blast self-damage on/off
         gameSpace.setPlayerCount((int)optNumPlayers); // OPTIONS: 1 human + (N-1) bots
@@ -531,8 +531,11 @@ int main(int argc, char** argv) {
                     // walls option onto it (locally startGame does this) - otherwise
                     // an open-space match would still render the boundary walls.
                     gameSpace.wallsEnabled = m.optWalls;
+                    // Mirror HYPED MODE onto our gameSpace too (locally startGame
+                    // does this) so anything simulated client-side matches the server.
+                    gameSpace.hypedMode = m.optHyped;
                     if (m.optWalls != optSentWalls) { optWallsEnabled = m.optWalls; optSentWalls = m.optWalls; }
-                    if (m.optEgpt  != optSentEgpt)  { optPassThroughPlatformsEarthGrav = m.optEgpt; optSentEgpt = m.optEgpt; }
+                    if (m.optHyped != optSentHyped) { optHypedMode = m.optHyped; optSentHyped = m.optHyped; }
                     if (m.optPhys  != optSentPhys)  { optRocketsObeyPhysics = m.optPhys; optSentPhys = m.optPhys; }
                     if (m.optFf    != optSentFf)    { optFriendlyFire = m.optFf; optSentFf = m.optFf; }
                 }
@@ -900,9 +903,9 @@ int main(int argc, char** argv) {
                     }
 
                     int y4 = y3 + 70;
-                    DrawText("EARTH GRAV: PASS THROUGH PLATFORMS", (int)lx, y4, 18, RAYWHITE);
-                    if (UiToggle({lx, (float)(y4 + 26), 100, 24}, optPassThroughPlatformsEarthGrav)) {
-                        optChanged = true; optSentEgpt = optPassThroughPlatformsEarthGrav;
+                    DrawText("HYPED MODE", (int)lx, y4, 18, RAYWHITE);
+                    if (UiToggle({lx, (float)(y4 + 26), 100, 24}, optHypedMode)) {
+                        optChanged = true; optSentHyped = optHypedMode;
                     }
 
                     int y5 = y4 + 70;
@@ -920,7 +923,7 @@ int main(int argc, char** argv) {
                     // Push the change to the server (it re-broadcasts to all clients).
                     if (optChanged && networked && net.isOpen())
                         net.send(serializeOptions((int)optNumPlayers, optBotDifficulty,
-                                                  optWallsEnabled, optPassThroughPlatformsEarthGrav,
+                                                  optWallsEnabled, optHypedMode,
                                                   optRocketsObeyPhysics, optFriendlyFire));
 
                     if (UiModalClose(m, optionsWasOpen)) showOptions = false;

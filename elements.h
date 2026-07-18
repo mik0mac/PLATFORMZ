@@ -184,6 +184,7 @@ public:
     float accelerationJetpack = PLAYER_ACCELERATION_JETPACK; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
     bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
     bool earthGravityEnabled = false; // Last-applied gravity mode (mirrors this frame's input) so collision rules can read it after input is gone. Set in ApplyPlayerInput.
+    bool hypedMode = false; // Mirror of GameSpace::hypedMode (set in ApplyPlayerInput) so updateVelocity can scale horizontal jetpack thrust without a GameSpace dependency.
 
     // Full look-direction vector (includes pitch) - used for aiming/shooting.
     Vector3 Forward() const {
@@ -221,10 +222,11 @@ public:
     void updateVelocity(float dt, Vector2 moveInput, float gravity) {
         // targetSpeed/acceleration only drive the HORIZONTAL easing below; the
         // vertical jetpack block reads speedJetpack/accelerationJetpack directly,
-        // so the boost multiplier speeds up the flattened plane without touching
+        // so the HYPED MODE boost speeds up the flattened plane without touching
         // vertical thrust.
-        float targetSpeed = isUsingJetpack ? speedJetpack * JETPACK_HORIZONTAL_BOOST : speedWalk;
-        float acceleration = isUsingJetpack ? accelerationJetpack * JETPACK_HORIZONTAL_BOOST : accelerationWalk;
+        float boost = hypedMode ? HYPED_MODE_SCALE : 1.0f;
+        float targetSpeed = isUsingJetpack ? speedJetpack * boost : speedWalk;
+        float acceleration = isUsingJetpack ? accelerationJetpack * boost : accelerationWalk;
 
         if (fuel <= FUEL_REGEN_RATE * dt) {
             targetSpeed = speedWalk; // If out of fuel, player can only walk, not jetpack.

@@ -58,6 +58,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     player.updateLook(in.lookDelta);
     player.isUsingJetpack = in.jetpack;
     player.earthGravityEnabled = in.earthGravity; // mirror gravity mode onto the player for collision rules (main.cpp:664 / bot_controller.h derive `gravity` from the same flag)
+    player.hypedMode = gameSpace.hypedMode; // mirror HYPED MODE onto the player so updateVelocity can scale horizontal jetpack thrust
     player.updateVelocity(dt, in.moveAxis, gravity);
     player.updateFuel(dt, player.isUsingJetpack, gameSpace.fuelRegenScale());
 
@@ -143,6 +144,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             // (applied just below). Overrides the per-rocket constant defaults.
             rocket.gravityEnabled      = gameSpace.rocketsObeyPhysics;
             rocket.velocityInheritance = gameSpace.rocketsObeyPhysics;
+            if (gameSpace.hypedMode) rocket.speed *= HYPED_MODE_SCALE; // OPTIONS HYPED MODE: rockets fly twice as fast
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             if (rocket.velocityInheritance) {
                 rocket.velocity = Vector3Add(rocket.velocity, player.velocity); // inherit player's velocity

@@ -473,16 +473,17 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
         for (int platformIndex : candidates) {
             Platform& platform = platforms[platformIndex];
             if (SphereIntersectsBox(player.position, player.radius, platform.position, platform.size)) {
-                // OPTIONS: under earth gravity, optionally fall straight through
-                // platforms - skip all collision response for this platform so the
-                // player passes through instead of landing. (Toggle default: on.)
-                
+                // Under earth gravity, fall straight through platforms - skip all
+                // collision response for this platform so the player passes
+                // through instead of landing. (Always on; formerly an OPTIONS
+                // toggle, its menu slot now hosts HYPED MODE.)
+
                 // Only resolve when the player is moving down into the platform.
                 // This lets the player pass up through it from below, and -
                 // critically - stops the check from re-firing every frame while
                 // overlapping, which previously flipped velocity.y back and
                 // forth and killed the bounce.
-                bool earthGravityPassThrough = space.earthGravityPassThroughPlatforms && player.earthGravityEnabled;
+                bool earthGravityPassThrough = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS && player.earthGravityEnabled;
                 if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))
                                                 && !earthGravityPassThrough) {
                     // float platformTop = platform.position.y + (platform.size.y / 2.0f);

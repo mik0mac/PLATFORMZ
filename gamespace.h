@@ -43,11 +43,19 @@ public:
     // compile-time constants so an unconfigured GameSpace behaves as before.
     bool wallsEnabled = WALLS_ENABLED;                                             // boundary walls drawn + collide; OFF = open space, out-of-bounds rules apply
 
-    // Map-size fuel-regen multiplier: bigger arenas regenerate faster so
-    // crossing them by jetpack stays viable. 1x up through MEDIUM, 2x on XL
-    // (halfSize 360). Applied in Player::updateFuel via ApplyPlayerInput.
-    float fuelRegenScale() const { return fmaxf(1.0f, walls.halfSize / FUEL_REGEN_REF_HALF_SIZE); }
-    bool earthGravityPassThroughPlatforms = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // under earth gravity, fall through platforms vs land on them
+    // Fuel-regen multiplier: bigger arenas regenerate faster so crossing them
+    // by jetpack stays viable (1x up through MEDIUM, 2x on XL, halfSize 360),
+    // and HYPED MODE doubles regen on top. Applied in Player::updateFuel via
+    // ApplyPlayerInput.
+    float fuelRegenScale() const {
+        return fmaxf(1.0f, walls.halfSize / FUEL_REGEN_REF_HALF_SIZE)
+             * (hypedMode ? HYPED_MODE_SCALE : 1.0f);
+    }
+    // OPTIONS "HYPED MODE": scales jetpack horizontal speed/accel (mirrored onto
+    // each player in ApplyPlayerInput), rocket speed (at spawn in input.h), and
+    // fuel regen (above). Earth-gravity platform pass-through, formerly this
+    // OPTIONS slot, is now always on (EARTH_GRAVITY_PASS_THROUGH_PLATFORMS).
+    bool hypedMode = HYPED_MODE;
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
     bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
     

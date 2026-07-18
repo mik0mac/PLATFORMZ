@@ -124,7 +124,7 @@ const float PLATFORM_MAX_HEIGHT = 0.5f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
 const float PLATFORM_MAX_DEPTH = PLATFORM_MAX_WIDTH; // Maximum depth of the platform
 
-const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Default for the OPTIONS toggle.
+const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Always on for all games (its OPTIONS slot now hosts HYPED MODE).
 
 
 //MARK: Player Shape / Size
@@ -167,7 +167,12 @@ const float PLAYER_SPEED_WALK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
-const float JETPACK_HORIZONTAL_BOOST = 2.0f; // Multiplier on horizontal max speed AND acceleration while the jetpack is engaged with fuel (Player::updateVelocity). Vertical thrust is unaffected. x2 is a test value for the horizontal-boost experiment.
+//MARK: Hyped mode
+// OPTIONS "HYPED MODE" (replaces the old EARTH GRAV pass-through toggle, which
+// is now always on): one match-wide flag that scales jetpack horizontal speed +
+// acceleration (vertical thrust unchanged), rocket speed, and fuel regen.
+const bool  HYPED_MODE = false;      // Default for the OPTIONS toggle.
+const float HYPED_MODE_SCALE = 2.0f; // Multiplier applied to all three effects while HYPED MODE is on.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
