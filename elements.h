@@ -382,12 +382,14 @@ public:
         return shotFired;
     }
 
-    void updateFuel(float dt, bool isUsingJetpack) {
+    // regenScale: map-size fuel-regen multiplier (GameSpace::fuelRegenScale) -
+    // bigger arenas regenerate faster so traversal stays viable.
+    void updateFuel(float dt, bool isUsingJetpack, float regenScale = 1.0f) {
         if (isUsingJetpack && hasFuel()) {
             fuel -= dt * FUEL_CONSUMPTION_RATE; // Consume fuel based on time using jetpack
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
-            fuel += dt * FUEL_REGEN_RATE; // Regenerate fuel slowly when not using jetpack
+            fuel += dt * FUEL_REGEN_RATE * regenScale; // Regenerate fuel slowly when not using jetpack
             if (fuel > PLAYER_MAX_FUEL) fuel = PLAYER_MAX_FUEL; // Clamp fuel to max
         }
         if (!isAlive) {

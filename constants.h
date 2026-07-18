@@ -177,7 +177,8 @@ const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec.
-const float FUEL_REGEN_RATE = 0.5f; // Per sec.
+const float FUEL_REGEN_RATE = 0.5f; // Per sec. Base rate; scaled up on big maps (see FUEL_REGEN_REF_HALF_SIZE).
+const float FUEL_REGEN_REF_HALF_SIZE = 180.0f; // fuel regen scales as max(1, halfSize / this): 1x on SMALL/MEDIUM, ~1.33x on LARGE (240), 2x on XL (360). Bigger arenas need more jetpack time to cross.
 const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
 const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
 
