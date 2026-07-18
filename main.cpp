@@ -7,6 +7,7 @@
 #include "collisions.h"
 #include "camera.h"
 #include "starfield.h" // distant starry-vista background (client-only)
+#include <algorithm>   // std::nth_element (F3 perf overlay p95)
 #include "input.h"
 #include "ui.h"        // immediate-mode menu widgets (title screen)
 #include "audio.h"     // sound FX que, load/unload, trigger
@@ -85,6 +86,13 @@ int main(int argc, char** argv) {
     // browser and for an explicit URL arg (which honors whatever scheme was given).
     bool        autoFallback  = false;
     std::string fallbackWsUrl;
+    // "bench" CLI (native only): measurement-only launch that skips the title and
+    // starts a local match of arbitrary size with bots + the F3 perf overlay on.
+    bool  benchMode    = false;
+    float benchHalf    = mapSizePresets["LARGE"].halfSize;
+    int   benchPlat    = mapSizePresets["LARGE"].numPlatforms;
+    int   benchRoid    = mapSizePresets["LARGE"].numAsteroids;
+    int   benchPlayers = 4;
 #if defined(__EMSCRIPTEN__)
     (void)argc; (void)argv;
     networked = true;
@@ -120,6 +128,13 @@ int main(int argc, char** argv) {
     std::string defaultHost = PLATFORMZ_DEFAULT_SERVER_HOST;
     if (argc > 1 && std::string(argv[1]) == "local") {
         networked = false;                             // explicit single-player
+    } else if (argc > 1 && std::string(argv[1]) == "bench") {
+        // Usage: ./platformz bench <halfSize> <platforms> <asteroids> [players]
+        networked = false; benchMode = true;
+        if (argc > 2) benchHalf    = std::stof(argv[2]);
+        if (argc > 3) benchPlat    = std::stoi(argv[3]);
+        if (argc > 4) benchRoid    = std::stoi(argv[4]);
+        if (argc > 5) benchPlayers = std::stoi(argv[5]);
     } else if (argc > 1) {
         networked = true; serverUrl = argv[1];         // explicit URL: honor scheme, no auto-fallback
     } else if (!defaultHost.empty()) {                 // baked server: prefer UDP, allow a WS pivot
@@ -349,6 +364,15 @@ int main(int argc, char** argv) {
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
+
+    //MARK: Perf overlay
+    // F3 toggles a frame-time overlay (FPS, avg/p95/max over the last 120 frames,
+    // live object counts). While it's on, a greppable "PERF ..." line prints to
+    // stdout every 5s - the paper trail for map-size benchmark runs.
+    bool   perfOverlay = false;
+    float  perfFrames[120] = {0};
+    int    perfIdx = 0, perfCount = 0;
+    double perfLastLog = 0.0;
     float netCountdown       = 0.0f; // networked: latest countdown-seconds-left the server sent (drives the same screen)
     bool  netMatchOver  = false; // networked: latched once the server reports the match ended, so the gameOverTimer countdown survives packet-less frames
 
@@ -555,6 +579,18 @@ int main(int argc, char** argv) {
         return SCREEN_TITLE;
     };
 
+    //MARK: Bench launch
+    // Skip the title and stand up the requested world immediately. Reuses the
+    // exact production startGame path; interactive - you fly, the PERF lines
+    // are the record.
+    if (benchMode) {
+        optNumPlayers = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
+        perfOverlay = true;
+        SetTargetFPS(0); // uncap so frame times reflect true throughput, not vsync pacing
+        startGame(benchHalf, benchPlat, benchRoid);
+        countdownRemaining = 1.0f; // shorten the pre-match freeze
+    }
+
     //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
@@ -563,6 +599,14 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        // Perf ring: record every frame (cheap) so the F3 overlay has history
+        // the moment it's toggled on. F3 types no character, so the title
+        // screen's name field is unaffected.
+        perfFrames[perfIdx] = dt;
+        perfIdx = (perfIdx + 1) % 120;
+        if (perfCount < 120) perfCount++;
+        if (IsKeyPressed(KEY_F3)) perfOverlay = !perfOverlay;
 
         // MARK: MUSIC STREAM
         if (screen != previousScreen) {
@@ -756,12 +800,14 @@ int main(int argc, char** argv) {
                 float startY = playersBox.y + playersBox.height + 20.0f;
                 bool ready = !networked || (net.isOpen() && myIndex >= 0);
                 if (ready && amHost) {
-                    Rectangle bs = {210, startY, 180, 50};
-                    Rectangle bm = {410, startY, 180, 50};
-                    Rectangle bl = {610, startY, 180, 50};
+                    Rectangle bs  = {110, startY, 180, 50};
+                    Rectangle bm  = {310, startY, 180, 50};
+                    Rectangle bl  = {510, startY, 180, 50};
+                    Rectangle bxl = {710, startY, 180, 50};
                     if (uiEnabled && UiButton(bs, "SMALL"))  startGame(mapSizePresets["SMALL"].halfSize, mapSizePresets["SMALL"].numPlatforms, mapSizePresets["SMALL"].numAsteroids);
                     if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(mapSizePresets["MEDIUM"].halfSize, mapSizePresets["MEDIUM"].numPlatforms, mapSizePresets["MEDIUM"].numAsteroids);
                     if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
+                    if (uiEnabled && UiButton(bxl, "XL")) startGame(mapSizePresets["XL"].halfSize, mapSizePresets["XL"].numPlatforms, mapSizePresets["XL"].numAsteroids);
                 } else if (!ready) {
                     UiTextCentered(myIndex >= 0 ? "JOINING..." : "CONNECTING...",
                                    screenWidth, (int)startY + 14, 20, GRAY);
@@ -1250,6 +1296,12 @@ int main(int argc, char** argv) {
         // BeginDrawing - you can't nest the two, and the frame has to exist
         // before it can be distorted. gameSpace.draw() is unchanged; it just
         // renders into the target now instead of the back buffer.
+        // Far clip scales with the map so opposite-corner geometry never gets
+        // culled (raylib's default 1000 truncates the arena past halfSize ~289).
+        // rlSetClipPlanes just stores two doubles that BeginMode3D reads, so
+        // per-frame is free and needs no plumbing where halfSize changes.
+        rlSetClipPlanes(RL_CULL_DISTANCE_NEAR, fmax(1000.0, (double)gameSpace.getWalls().halfSize * 4.0));
+
         BeginTextureMode(sceneTarget);
             ClearBackground(BLACK);
             Camera3D sceneCam = CameraFromPlayer(player);
@@ -1343,6 +1395,43 @@ int main(int argc, char** argv) {
                 DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);
                 if (in.earthGravity) {
                     DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
+                }
+            }
+
+            //MARK: Perf overlay (F3)
+            // Gated only on the toggle (not isAlive) so it stays up while
+            // spectating - benchmark runs outlive the pilot.
+            if (perfOverlay) {
+                float avg = 0.0f, mx = 0.0f;
+                float sorted[120];
+                for (int i = 0; i < perfCount; i++) {
+                    sorted[i] = perfFrames[i];
+                    avg += perfFrames[i];
+                    mx = fmaxf(mx, perfFrames[i]);
+                }
+                avg /= (float)(perfCount > 0 ? perfCount : 1);
+                int p95i = (perfCount * 95) / 100;
+                std::nth_element(sorted, sorted + p95i, sorted + perfCount);
+                float p95 = sorted[p95i];
+
+                const char* l1 = TextFormat("FPS %.0f | avg %.2f ms | p95 %.2f | max %.2f",
+                    1.0f / fmaxf(avg, 1e-6f), avg * 1000.0f, p95 * 1000.0f, mx * 1000.0f);
+                const char* l2 = TextFormat("half %.0f | plat %d | roid %d | rock %d | spark %d | expl %d",
+                    gameSpace.getWalls().halfSize,
+                    (int)gameSpace.getPlatforms().size(), (int)gameSpace.getAsteroids().size(),
+                    (int)gameSpace.getRockets().size(), (int)gameSpace.getSparks().size(),
+                    (int)gameSpace.getExplosions().size());
+                DrawText(l1, screenWidth - MeasureText(l1, 14) - 10, 10, 14, RAYWHITE);
+                DrawText(l2, screenWidth - MeasureText(l2, 14) - 10, 28, 14, GRAY);
+
+                if (GetTime() - perfLastLog > 5.0) {
+                    perfLastLog = GetTime();
+                    printf("PERF half=%.0f plat=%d roid=%d rock=%d spark=%d avg=%.2f p95=%.2f max=%.2f\n",
+                        gameSpace.getWalls().halfSize,
+                        (int)gameSpace.getPlatforms().size(), (int)gameSpace.getAsteroids().size(),
+                        (int)gameSpace.getRockets().size(), (int)gameSpace.getSparks().size(),
+                        avg * 1000.0f, p95 * 1000.0f, mx * 1000.0f);
+                    fflush(stdout); // stdout is block-buffered when piped/redirected; each PERF row should land immediately
                 }
             }
 

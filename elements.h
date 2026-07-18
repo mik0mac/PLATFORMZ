@@ -24,7 +24,7 @@ class Walls {
 public:
     // Centered on origin; cube spans -halfSize..+halfSize on each axis.
     float halfSize = GAMESPACE_HALF_SIZE;
-    float gridSpacing = 2.0f;// GAMESPACE_HALF_SIZE / 20.0f;   // spacing of the wireframe grid lines
+    float gridSpacing = 2.0f; // MINIMUM spacing of the wireframe grid lines (the small-map look). DrawWalls scales the effective spacing up with halfSize (see WALL_GRID_REF_HALF_SIZE) so big maps don't drown in grid lines.
 
     float elasticityPlayer = WALL_ELASTICITY_PLAYER;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
     float elasticityAsteroid = WALL_ELASTICITY_ASTEROID;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)

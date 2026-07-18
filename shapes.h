@@ -91,7 +91,12 @@ inline void DrawGridRoom(float halfSize, float spacing, Color col) {
 // from the corresponding class in elements.h.
 
 inline void DrawWalls(const Walls& walls) {
-    DrawGridRoom(walls.halfSize, walls.gridSpacing, walls.color_outline);
+    // Spacing scales with map size (gridSpacing is the floor / small-map look),
+    // capping the grid's line count no matter how big the arena gets. Derived
+    // here at the draw site because the networked client sets walls.halfSize
+    // straight from the welcome packet, never through configureMap.
+    float spacing = fmaxf(walls.gridSpacing, walls.halfSize / WALL_GRID_REF_HALF_SIZE);
+    DrawGridRoom(walls.halfSize, spacing, walls.color_outline);
 }
 
 inline void DrawPlatform(const Platform& platform, DrawPass pass) {
