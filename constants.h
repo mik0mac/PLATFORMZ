@@ -91,9 +91,9 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {60.0f, 32, 6}},
-    {"MEDIUM", {90.0f, 64, 12}},
-    {"LARGE",  {120.0f, 128, 24}},
+    {"SMALL",  {90.0f, 64, 12}},
+    {"MEDIUM", {120.0f, 128, 18}},
+    {"LARGE",  {240.0f, 256, 24}},
     // XL: 27x LARGE volume; benched 2026-07 on Mike's Mac at p95 ~8ms with bots
     // and rocket fire (framerate was never the binding limit - even 480/1024
     // passed). Platforms scale with AREA, not volume (they're a traversal
