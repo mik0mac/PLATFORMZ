@@ -124,7 +124,7 @@ const float PLATFORM_MAX_HEIGHT = 0.5f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
 const float PLATFORM_MAX_DEPTH = PLATFORM_MAX_WIDTH; // Maximum depth of the platform
 
-const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Default for the OPTIONS toggle.
+const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Always on for all games (its OPTIONS slot now hosts HYPED MODE).
 
 
 //MARK: Player Shape / Size
@@ -167,6 +167,12 @@ const float PLAYER_SPEED_WALK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
+//MARK: Hyped mode
+// OPTIONS "HYPED MODE" (replaces the old EARTH GRAV pass-through toggle, which
+// is now always on): one match-wide flag that scales jetpack horizontal speed +
+// acceleration (vertical thrust unchanged) and rocket speed.
+const bool  HYPED_MODE = false;      // Default for the OPTIONS toggle.
+const float HYPED_MODE_SCALE = 2.0f; // Multiplier applied to both effects while HYPED MODE is on.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -176,9 +182,13 @@ const int PLAYER_STARTING_HEALTH = PLAYER_MAX_HEALTH;
 const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
-const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec.
-const float FUEL_REGEN_RATE = 0.5f; // Per sec. Base rate; scaled up on big maps (see FUEL_REGEN_REF_HALF_SIZE).
-const float FUEL_REGEN_REF_HALF_SIZE = 180.0f; // fuel regen scales as max(1, halfSize / this): 1x on SMALL/MEDIUM, ~1.33x on LARGE (240), 2x on XL (360). Bigger arenas need more jetpack time to cross.
+const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
+const float FUEL_REGEN_RATE = 0.5f; // Per sec, at neutral FUEL SCARCITY (0.5).
+// OPTIONS "FUEL SCARCITY" slider [0..1]. 0.5 is neutral (the rates above as-is);
+// the scarcity factor 2^(2s-1) doubles every +0.5 on the slider: at 1.0 fuel
+// burns 2x as fast and regenerates half as fast, at 0.0 the reverse. Replaces
+// the old map-size and HYPED MODE regen multipliers.
+const float FUEL_SCARCITY_DEFAULT = 0.5f;
 const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
 const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
 
@@ -262,7 +272,7 @@ const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets
 const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
 
 const float ROCKET_SPEED = 80.0f; // units/sec
-const float ROCKET_KICKBACK_FACTOR = 0.2f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
+const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
 // OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket

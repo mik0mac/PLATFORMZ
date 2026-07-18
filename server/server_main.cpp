@@ -194,9 +194,10 @@ std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
 // clients at consume) and bot difficulty center. Same io->sim handoff as above.
 std::atomic<int>   pendingPlayers{GAMESPACE_NUMBER_OF_PLAYERS};
 std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
+std::atomic<float> pendingScarcity{FUEL_SCARCITY_DEFAULT}; // OPTIONS FUEL SCARCITY slider (0.5 = neutral)
 // OPTIONS bool toggles carried by a start request; defaults from constants.h.
 std::atomic<bool>  pendingWallsEnabled{WALLS_ENABLED};
-std::atomic<bool>  pendingEgPassThrough{EARTH_GRAVITY_PASS_THROUGH_PLATFORMS};
+std::atomic<bool>  pendingHypedMode{HYPED_MODE};
 std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
 std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
 
@@ -586,8 +587,9 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     // client shows live on every client's OPTIONS modal + roster preview.
     s += ",\"opt\":{\"nplayers\":" + ji(pendingPlayers.load());
     s += ",\"diff\":"   + jf(pendingDiff.load());
+    s += ",\"scarcity\":" + jf(pendingScarcity.load());
     s += ",\"walls\":"  + jb(pendingWallsEnabled.load());
-    s += ",\"egpt\":"   + jb(pendingEgPassThrough.load());
+    s += ",\"hyped\":"  + jb(pendingHypedMode.load());
     s += ",\"phys\":"   + jb(pendingRocketsPhysics.load());
     s += ",\"ff\":"     + jb(pendingFriendlyFire.load());
     s += "}";
@@ -617,7 +619,8 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
     // Options (match-wide), same values buildStatePacket puts in "opt".
     nb::putU8(b, (uint8_t)pendingPlayers.load());
     nb::putF32(b, pendingDiff.load());
-    nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0) | (pendingEgPassThrough.load() ? 2 : 0)
+    nb::putF32(b, pendingScarcity.load());
+    nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0) | (pendingHypedMode.load() ? 2 : 0)
                           | (pendingRocketsPhysics.load() ? 4 : 0) | (pendingFriendlyFire.load() ? 8 : 0)));
 
     // Players (fixed roster; u8 count is plenty).
@@ -936,8 +939,9 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
         pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
+        pendingScarcity = parseFloat(msg, "scarcity", FUEL_SCARCITY_DEFAULT);
         pendingWallsEnabled = parseBool(msg, "walls", WALLS_ENABLED);
-        pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
+        pendingHypedMode = parseBool(msg, "hyped", HYPED_MODE);
         pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);
         pendingFriendlyFire = parseBool(msg, "ff", FRIENDLY_FIRE);
         startRequested = true; // release: set after the preset values above
@@ -967,8 +971,9 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
         pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
+        pendingScarcity = parseFloat(msg, "scarcity", pendingScarcity.load());
         pendingWallsEnabled = parseBool(msg, "walls", pendingWallsEnabled.load());
-        pendingEgPassThrough = parseBool(msg, "egpt", pendingEgPassThrough.load());
+        pendingHypedMode = parseBool(msg, "hyped", pendingHypedMode.load());
         pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
         pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
         return;
@@ -1119,7 +1124,8 @@ void SimulationLoop() {
                 // OPTIONS: apply the requesting client's gameplay toggles to the sim
                 // before the world is built (collisions read these off GameSpace).
                 gameSpace.wallsEnabled = pendingWallsEnabled.load();
-                gameSpace.earthGravityPassThroughPlatforms = pendingEgPassThrough.load();
+                gameSpace.hypedMode = pendingHypedMode.load();
+                gameSpace.fuelScarcity = pendingScarcity.load();
                 gameSpace.rocketsObeyPhysics = pendingRocketsPhysics.load();
                 gameSpace.friendlyFire = pendingFriendlyFire.load();
                 // Issue #5 order: platforms -> players (spread) -> asteroids

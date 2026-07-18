@@ -184,6 +184,7 @@ public:
     float accelerationJetpack = PLAYER_ACCELERATION_JETPACK; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
     bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
     bool earthGravityEnabled = false; // Last-applied gravity mode (mirrors this frame's input) so collision rules can read it after input is gone. Set in ApplyPlayerInput.
+    bool hypedMode = false; // Mirror of GameSpace::hypedMode (set in ApplyPlayerInput) so updateVelocity can scale horizontal jetpack thrust without a GameSpace dependency.
 
     // Full look-direction vector (includes pitch) - used for aiming/shooting.
     Vector3 Forward() const {
@@ -219,8 +220,13 @@ public:
     // both relative to current look direction (flattened), not world axes.
     // Vertical movement (jetpack up/down) is separate, not part of moveInput.
     void updateVelocity(float dt, Vector2 moveInput, float gravity) {
-        float targetSpeed = isUsingJetpack ? speedJetpack : speedWalk;
-        float acceleration = isUsingJetpack ? accelerationJetpack : accelerationWalk;
+        // targetSpeed/acceleration only drive the HORIZONTAL easing below; the
+        // vertical jetpack block reads speedJetpack/accelerationJetpack directly,
+        // so the HYPED MODE boost speeds up the flattened plane without touching
+        // vertical thrust.
+        float boost = hypedMode ? HYPED_MODE_SCALE : 1.0f;
+        float targetSpeed = isUsingJetpack ? speedJetpack * boost : speedWalk;
+        float acceleration = isUsingJetpack ? accelerationJetpack * boost : accelerationWalk;
 
         if (fuel <= FUEL_REGEN_RATE * dt) {
             targetSpeed = speedWalk; // If out of fuel, player can only walk, not jetpack.
@@ -382,14 +388,16 @@ public:
         return shotFired;
     }
 
-    // regenScale: map-size fuel-regen multiplier (GameSpace::fuelRegenScale) -
-    // bigger arenas regenerate faster so traversal stays viable.
-    void updateFuel(float dt, bool isUsingJetpack, float regenScale = 1.0f) {
+    // scarcityFactor: the OPTIONS FUEL SCARCITY factor (GameSpace::
+    // fuelScarcityFactor, 1.0 at the neutral slider position) - consumption is
+    // multiplied by it and regen divided by it, so scarce fuel both burns
+    // faster and comes back slower.
+    void updateFuel(float dt, bool isUsingJetpack, float scarcityFactor = 1.0f) {
         if (isUsingJetpack && hasFuel()) {
-            fuel -= dt * FUEL_CONSUMPTION_RATE; // Consume fuel based on time using jetpack
+            fuel -= dt * FUEL_CONSUMPTION_RATE * scarcityFactor; // Consume fuel based on time using jetpack
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
-            fuel += dt * FUEL_REGEN_RATE * regenScale; // Regenerate fuel slowly when not using jetpack
+            fuel += dt * FUEL_REGEN_RATE / scarcityFactor; // Regenerate fuel slowly when not using jetpack
             if (fuel > PLAYER_MAX_FUEL) fuel = PLAYER_MAX_FUEL; // Clamp fuel to max
         }
         if (!isAlive) {

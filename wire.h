@@ -66,8 +66,9 @@ struct ServerMessage {
     bool  hasOptions  = false;
     int   optNPlayers = 0;      // match size
     float optDiff     = 0.0f;   // bot difficulty
+    float optScarcity = 0.5f;   // FUEL SCARCITY slider (0.5 = neutral burn/regen rates)
     bool  optWalls    = true;   // boundary walls on (drawn + collide) vs open space
-    bool  optEgpt     = false;  // fall through platforms under earth gravity
+    bool  optHyped    = false;  // HYPED MODE: 2x jetpack horizontal boost, rocket speed, fuel regen
     bool  optPhys     = false;  // rockets obey gravity + inherit shooter velocity
     bool  optFf       = false;  // friendly fire (own blast can self-damage)
 };
@@ -130,15 +131,16 @@ inline std::string serializeKeepalive() {
 // stores it as the pending match config (WITHOUT starting) and echoes it back to
 // everyone in the next state packet, so all clients' OPTIONS modals stay in sync.
 // Map size isn't here - it's chosen at the START button press (serializeStart).
-inline std::string serializeOptions(int nplayers, float diff,
-                                    bool wallsEnabled, bool egPassThrough,
+inline std::string serializeOptions(int nplayers, float diff, float fuelScarcity,
+                                    bool wallsEnabled, bool hypedMode,
                                     bool rocketsPhysics, bool friendlyFire) {
     nlohmann::json j = {
         {"type", "options"},
         {"nplayers", nplayers},
         {"diff", diff},
+        {"scarcity", fuelScarcity},
         {"walls", wallsEnabled},
-        {"egpt", egPassThrough},
+        {"hyped", hypedMode},
         {"phys", rocketsPhysics},
         {"ff", friendlyFire}
     };
@@ -146,8 +148,8 @@ inline std::string serializeOptions(int nplayers, float diff,
 }
 
 inline std::string serializeStart(float half, int platforms, int asteroids,
-                                  int nplayers, float diff,
-                                  bool wallsEnabled, bool egPassThrough,
+                                  int nplayers, float diff, float fuelScarcity,
+                                  bool wallsEnabled, bool hypedMode,
                                   bool rocketsPhysics, bool friendlyFire) {
     nlohmann::json j = {
         {"type", "start"},
@@ -156,8 +158,9 @@ inline std::string serializeStart(float half, int platforms, int asteroids,
         {"roid", asteroids},
         {"nplayers", nplayers},        // requested match size (server clamps to connected)
         {"diff", diff},                // bot difficulty center [0..BOT_DIFFICULTY]
+        {"scarcity", fuelScarcity},    // OPTIONS: FUEL SCARCITY slider (0.5 = neutral)
         {"walls", wallsEnabled},       // OPTIONS: boundary walls on vs open space
-        {"egpt", egPassThrough},       // OPTIONS: fall through platforms under earth gravity
+        {"hyped", hypedMode},          // OPTIONS: HYPED MODE (2x jetpack horizontal boost + rocket speed)
         {"phys", rocketsPhysics},      // OPTIONS: rockets obey gravity + inherit shooter velocity
         {"ff", friendlyFire}           // OPTIONS: a player's own blast can self-damage
     };
@@ -260,9 +263,10 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     msg.hasOptions  = true;
     msg.optNPlayers = r.u8();
     msg.optDiff     = r.f32();
+    msg.optScarcity = r.f32();
     uint8_t optFlags = r.u8();
     msg.optWalls = (optFlags & 1) != 0;
-    msg.optEgpt  = (optFlags & 2) != 0;
+    msg.optHyped = (optFlags & 2) != 0;
     msg.optPhys  = (optFlags & 4) != 0;
     msg.optFf    = (optFlags & 8) != 0;
 
@@ -479,8 +483,9 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.hasOptions  = true;
         msg.optNPlayers = o.value("nplayers", 0);
         msg.optDiff     = o.value("diff", 0.0f);
+        msg.optScarcity = o.value("scarcity", FUEL_SCARCITY_DEFAULT);
         msg.optWalls    = o.value("walls", true);
-        msg.optEgpt     = o.value("egpt", false);
+        msg.optHyped    = o.value("hyped", false);
         msg.optPhys     = o.value("phys", false);
         msg.optFf       = o.value("ff", false);
     }
