@@ -108,7 +108,7 @@ const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-o
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.
 
 //MARK: Wall Constants
-const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+const float WALL_ELASTICITY_PLAYER = 0.5f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
 const float WALL_GRID_REF_HALF_SIZE = 60.0f; // grid spacing scales as halfSize / this (min Walls::gridSpacing), capping the wall-grid line count on big maps
@@ -184,7 +184,7 @@ const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
-const float FUEL_REGEN_RATE = 0.5f; // Per sec, at neutral FUEL SCARCITY (0.5).
+const float FUEL_REGEN_RATE = 1.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
 // OPTIONS "FUEL SCARCITY" slider [0..1]. 0.5 is neutral (the rates above as-is);
 // the scarcity factor 2^(2s-1) doubles every +0.5 on the slider: at 1.0 fuel
 // burns 2x as fast and regenerates half as fast, at 0.0 the reverse. Replaces
@@ -197,7 +197,7 @@ const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cue
 const int   WARN_HEALTH_THRESHOLD   = 25;    // health at/below this pulses the warning alarm
 const float WARN_FUEL_THRESHOLD     = 20.0f; // fuel at/below this pulses the warning alarm
 const int   WARN_AMMO_THRESHOLD     = 10;    // ammo at/below this pulses the warning alarm
-const float WARNING_SFX_INTERVAL    = 1.5f;  // min seconds between warning pulses while a resource stays low
+const float WARNING_SFX_INTERVAL    = 15.0f;  // min seconds between warning pulses while a resource stays low
 const float EARTH_GRAV_SFX_INTERVAL = 0.5f;  // min seconds between earth-gravity engage cues (guards rapid taps)
 const float PLAYER_FIRE_RATE = 3.0f; // shots per second.
 

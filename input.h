@@ -71,7 +71,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
         player.noFuelSfxCooldown = NO_FUEL_SFX_INTERVAL;
     }
 
-    // Low-resource alarm: any of health/fuel/ammo at or below its warning
+    // Low-resource alarm and message: any of health/fuel/ammo at or below its warning
     // threshold pulses one shared cue (FX_WARNING), throttled by
     // WARNING_SFX_INTERVAL so a sustained low state beeps rather than spamming
     // every frame. Guarded on isAlive since death zeroes these resources.
@@ -81,31 +81,20 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
                            player.ammo   <= WARN_AMMO_THRESHOLD;
         if (lowResource && player.warningSfxCooldown <= 0.0f) {
             gameSpace.emitAudio(FX_WARNING, player.position, player.id);
+            if (player.health <= WARN_HEALTH_THRESHOLD) {
+                Message m(MSG_TYPE_LOW_HEALTH, player.name, "", player.id, 0);
+                gameSpace.emitMessage(m);
+            }
+            if (player.fuel   <= WARN_FUEL_THRESHOLD) {
+                Message m(MSG_TYPE_LOW_FUEL, player.name, "", player.id, 0);
+                gameSpace.emitMessage(m);
+            }
+            if (player.ammo   <= WARN_AMMO_THRESHOLD) {
+                Message m(MSG_TYPE_LOW_AMMO, player.name, "", player.id, 0);
+                gameSpace.emitMessage(m);
+            }
             player.warningSfxCooldown = WARNING_SFX_INTERVAL;
         }
-
-        // Low-resource MESSAGES: fire once on the edge into a low state, re-armed
-        // when the resource recovers. Unlike the throttled FX_WARNING beep, a
-        // repeating identical kill-feed line would just stack, so these are
-        // one-shot per dip. Visible only to the affected player.
-        bool lowHealth = player.health <= WARN_HEALTH_THRESHOLD;
-        bool lowFuel   = player.fuel   <= WARN_FUEL_THRESHOLD;
-        bool lowAmmo   = player.ammo   <= WARN_AMMO_THRESHOLD;
-        if (lowHealth && !player.lowHealthWarned) {
-            Message m(MSG_TYPE_LOW_HEALTH, player.name, "", player.id, 0);
-            gameSpace.emitMessage(m);
-        }
-        if (lowFuel && !player.lowFuelWarned) {
-            Message m(MSG_TYPE_LOW_FUEL, player.name, "", player.id, 0);
-            gameSpace.emitMessage(m);
-        }
-        if (lowAmmo && !player.lowAmmoWarned) {
-            Message m(MSG_TYPE_LOW_AMMO, player.name, "", player.id, 0);
-            gameSpace.emitMessage(m);
-        }
-        player.lowHealthWarned = lowHealth;
-        player.lowFuelWarned   = lowFuel;
-        player.lowAmmoWarned   = lowAmmo;
     }
 
     // "Earth gravity engaged" cue: fire once on the rising edge of the gravity
