@@ -167,6 +167,14 @@ inline std::string serializeStart(float half, int platforms, int asteroids,
     return j.dump();
 }
 
+// Host pressed the end-match key (M): ask the server to end the current match.
+// Carries nothing - the server verifies the sender is the host (isHostConn) and
+// flips the phase to GAMEOVER, which reaches everyone in the next state packet.
+inline std::string serializeEndMatch() {
+    nlohmann::json j = { {"type", "endmatch"} };
+    return j.dump();
+}
+
 namespace wire_detail {
 
 using nlohmann::json;

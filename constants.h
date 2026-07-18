@@ -119,7 +119,7 @@ const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1
 const float PLATFORM_ELASTICITY_ASTEROID = 0.99f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
 
 const float PLATFORM_MIN_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 12.0f; // 5.0f; // Minimum width of the platform
-const float PLATFORM_MAX_WIDTH = 18.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
+const float PLATFORM_MAX_WIDTH = 24.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
 const float PLATFORM_MIN_HEIGHT = 0.5f; // Minimum height of the platform
 const float PLATFORM_MAX_HEIGHT = 0.5f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
@@ -184,7 +184,7 @@ const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
-const float FUEL_REGEN_RATE = 1.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
+const float FUEL_REGEN_RATE = 2.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
 // OPTIONS "FUEL SCARCITY" slider [0..1]. 0.5 is neutral (the rates above as-is);
 // the scarcity factor 2^(2s-1) doubles every +0.5 on the slider: at 1.0 fuel
 // burns 2x as fast and regenerates half as fast, at 0.0 the reverse. Replaces

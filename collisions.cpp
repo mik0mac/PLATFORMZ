@@ -792,6 +792,7 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 
             float falloff = 1.0f - (dist / explosion.damageRadius);
             int splashDamage = (int)(explosion.damage * falloff);
+            int points = splashDamage; // could try this in the future: (int)(PLAYER_ELIMINATION_SCORE_AWARD * falloff)
             // OPTIONS "FRIENDLY FIRE": when off, a player's own blast deals no
             // self-DAMAGE (the pushback below still applies, so rocket-jumping
             // survives). All the damage + hit/elimination bookkeeping is skipped
@@ -803,6 +804,8 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
                     if (explosion.ownerId != player.id) {
                         // don't play the sound if the player hit themself.
                         space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.ownerId);
+                        // award points (but not on a self-hit)
+                        awardPoints(owner, points);
                     }
 
                     if (owner) {

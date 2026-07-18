@@ -857,6 +857,7 @@ int main(int argc, char** argv) {
                         "Left click    fire rocket",
                         "Space         jetpack (up)",
                         "Left Shift    stronger (earth) gravity",
+                        "M             end match (player 1 / host only)",
                         "Esc           toggle cursor capture",
                     };
                     int ly = (int)m.y + 80;
@@ -1022,7 +1023,8 @@ int main(int argc, char** argv) {
             // baked in from the capture pass) - unconditional is simplest.
             DrawStarfieldBackdrop((float)GetTime());
 
-            Color scoreColor = BLUE;
+            Color scoreColor = WHITE;
+            Color pressKeyColor = RED;
             std::vector<Player>& players = gameSpace.getPlayers();
             int localIndex = networked ? myIndex : 0;
             // Outcome banner for the local player.
@@ -1031,6 +1033,7 @@ int main(int argc, char** argv) {
                     DrawCentered("GAME OVER", 240, 80, BLUE);
                     DrawCentered("You survived!", 360, 20, BLUE);
                     scoreColor = GRAY;
+                    pressKeyColor = BLUE;
                 }
                 else {
                     // Greyscale blit of the last rendered world frame (sceneTarget
@@ -1055,7 +1058,7 @@ int main(int argc, char** argv) {
                                 440 + scoreRow * 20, 20, scoreColor);
                 ++scoreRow;
             }
-            DrawCentered("Press any key to return to title.", 440 + scoreRow * 20 + 10, 20, BLUE);
+            DrawCentered("Press any key to return to title.", 440 + scoreRow * 20 + 10, 20, pressKeyColor);
             
             EndDrawing();
             continue;
@@ -1398,6 +1401,7 @@ int main(int argc, char** argv) {
                 if (in.earthGravity) {
                     DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
                 }
+                DrawText(TextFormat("Score: %d", player.score), screenWidth - 80, textHeight * 1, 14, WHITE);
             }
 
             //MARK: Perf overlay (F3)
@@ -1469,8 +1473,24 @@ int main(int argc, char** argv) {
 
         
         if (networked) {
+            // Manual end (M), networked: only the host - "player 1", the lowest
+            // connected human slot, same rule as the START/OPTIONS gating - may
+            // end the match, for everyone. This just REQUESTS the end; the
+            // actual phase flip comes back from the server like any other match
+            // end (isHostConn is the server-side backstop), so all clients run
+            // the same game-over sequence below.
+            if (IsCursorHidden() && IsKeyPressed(KEY_M) && net.isOpen()) {
+                auto& ps = gameSpace.getPlayers();
+                int hostSlot = -1;
+                for (int i = 0; i < (int)ps.size(); i++)
+                    if (ps[i].isConnected && !ps[i].isBot) { hostSlot = i; break; }
+                if (myIndex >= 0 && myIndex == hostSlot)
+                    net.send(serializeEndMatch());
+            }
+
             // Networked: the SERVER decides when the match ends (last-player-
-            // standing). Mirror the local death-FX delay - count down before the
+            // standing, or the host's end-match request above). Mirror the local
+            // death-FX delay - count down before the
             // menu so the frozen end state (greyscale/glitch) is visible first.
             if (netPhase == ServerMessage::Phase::Playing) {
                 // match (re)started or still live - cancel any pending countdown
@@ -1486,6 +1506,17 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
+            // Manual end: M sends the match straight to the GAME_OVER screen
+            // (no death-FX delay - this is a deliberate quit, not a death).
+            // The networked equivalent (host-only request, branch above) goes
+            // through the server instead. Gated on cursor capture like all
+            // other game input. Chosen key is far from the WASD cluster so it
+            // can't be fat-fingered mid-flight.
+            if (IsCursorHidden() && IsKeyPressed(KEY_M)) {
+                EnableCursor(); // free the cursor for the game-over menu
+                screen = GameScreen::GAME_OVER;
+            }
+
             int remaining_players = 0;
             int remaining_humans = 0;
             int remaining_bots = 0;

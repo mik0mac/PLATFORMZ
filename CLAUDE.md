@@ -112,7 +112,9 @@ only `main.cpp` and `collisions.cpp` as translation units.
 
 ## Controls
 WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
-Left Shift for stronger (earth) gravity · Esc toggle cursor capture.
+Left Shift for stronger (earth) gravity · M end match (player 1 only — the
+host, i.e. lowest connected human slot, in networked play) · Esc toggle
+cursor capture.
 
 ## Web build (Emscripten / WASM) — gotchas
 `make web RAYLIB_WEB_DIR=$HOME/raylib` builds the browser client; the shell is

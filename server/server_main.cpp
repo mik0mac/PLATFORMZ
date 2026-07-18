@@ -979,6 +979,21 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         return;
     }
 
+    //MARK: Msg: endmatch
+    // Control message: the host pressed the end-match key (M). Host-only
+    // (isHostConn - the lowest connected slot, "player 1"), like start/options.
+    // PLAYING-only so a stray press can't disturb the lobby or countdown. The
+    // phase flip reaches every client in the next tick's state broadcast, and
+    // each runs its normal game-over sequence.
+    if (msg.find("\"type\":\"endmatch\"") != std::string::npos) {
+        if (!isHostConn(connId)) return; // host-only; matches the client's gating
+        if (gamePhase.load() == Phase::PLAYING) {
+            gamePhase = Phase::GAMEOVER;
+            std::cout << "Match ended by host request\n";
+        }
+        return;
+    }
+
     //MARK: Msg: ping
     // Keepalive heartbeat (UDP). It carries nothing - its whole job is to prove
     // the client is still alive, and OnDatagram already stamped lastSeenSec before

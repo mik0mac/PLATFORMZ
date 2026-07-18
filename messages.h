@@ -169,7 +169,7 @@ class Message {
             case MSG_TYPE_ELIMINATION: {
                 std::string victim = (!pb.empty()) ? pb : "SOMEONE";
                 text = pa + " ELIMINATED " + victim + ".";
-                color = BLUE;
+                color = GREEN;
                 visibility.set(VIS_ALL); // all players see this message
                 break;
             }
@@ -189,12 +189,12 @@ class Message {
             // pa = "YOU" for the local player (main.cpp), which takes "WERE".
             case MSG_TYPE_LOST_IN_SPACE:
                 text = pa + (pa == "YOU" ? " WERE" : " WAS") + " LOST IN SPACE.";
-                color = BLUE;
+                color = GRAY;
                 visibility.set(VIS_ALL); // all players see this message, like an elimination
                 break;
             case MSG_TYPE_ASTEROID_ELIMINATION:
                 text = pa + (pa == "YOU" ? " WERE" : " WAS") + " ELIMINATED BY AN ASTEROID.";
-                color = BLUE;
+                color = GRAY;
                 visibility.set(VIS_ALL); // all players see this message, like an elimination
                 break;
             default:
