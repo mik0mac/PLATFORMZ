@@ -292,6 +292,22 @@ const int   ASTEROID_BURST_COUNT = 240;        // sparks per elimination burst (
 const float ASTEROID_BURST_SPEED_MIN = 12.0f;
 const float ASTEROID_BURST_SPEED_MAX = 48.0f;
 
+//MARK: Starfield
+// Distant starry-vista background (starfield.h): a camera-centered shell of
+// short line dashes, drawn depth-mask-off before all geometry so everything
+// occludes it. Purely visual, client-only; these are the tuning knobs.
+const int   STARFIELD_STAR_COUNT      = 350;
+const float STARFIELD_RADIUS          = 500.0f;  // shell radius; must stay inside raylib's default 1000 far clip
+const float STARFIELD_STAR_LENGTH     = 2.2f;    // dash length at the shell, ~3 px at 720p / fovy 60
+const float STARFIELD_HERO_FRACTION   = 0.08f;   // fraction of stars drawn as brighter + crosses
+const float STARFIELD_HERO_SCALE      = 1.8f;    // hero dash length multiplier
+const float STARFIELD_TWINKLE_AMOUNT  = 0.35f;   // peak-to-trough brightness swing, fraction of base
+const float STARFIELD_TWINKLE_SPEED_MIN = 0.4f;  // rad/s
+const float STARFIELD_TWINKLE_SPEED_MAX = 1.8f;  // rad/s
+const float STARFIELD_BACKDROP_YAW_SPEED = 1.5f; // deg/s camera drift on the 2D screens (title/countdown/game over)
+const Color STARFIELD_COLOR_COOL = {200, 215, 255, 255}; // per-star color lerps between these two
+const Color STARFIELD_COLOR_WARM = {255, 240, 215, 255};
+
 //MARK: ID-related Constants
 const uint32_t ID_NONE = 0; // uninitialized/invalid sentinel
 

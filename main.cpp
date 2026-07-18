@@ -6,6 +6,7 @@
 #include "shapes.h"
 #include "collisions.h"
 #include "camera.h"
+#include "starfield.h" // distant starry-vista background (client-only)
 #include "input.h"
 #include "ui.h"        // immediate-mode menu widgets (title screen)
 #include "audio.h"     // sound FX que, load/unload, trigger
@@ -653,6 +654,7 @@ int main(int argc, char** argv) {
 
             BeginDrawing();
                 ClearBackground(BLACK);
+                DrawStarfieldBackdrop((float)GetTime()); // slow-drifting stars behind the UI
                 UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE);
 
                 // Name entry (local-only for now).
@@ -924,6 +926,7 @@ int main(int argc, char** argv) {
 
             BeginDrawing();
                 ClearBackground(BLACK);
+                DrawStarfieldBackdrop((float)GetTime()); // slow-drifting stars behind the UI
                 UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE); // keep the title
                 UiTextCentered("GAME STARTING IN...", screenWidth, 260, 30, ui::OUTLINE);
                 UiTextCentered(TextFormat("%d", countNum), screenWidth, 300, 90, RAYWHITE);
@@ -950,7 +953,11 @@ int main(int argc, char** argv) {
             if (startPressed()) returnToTitle();
             BeginDrawing();
             ClearBackground(BLACK);
-            
+            // Stars behind the scoreboard. On the eliminated path the frozen
+            // greyscale frame blitted below covers this (and already has stars
+            // baked in from the capture pass) - unconditional is simplest.
+            DrawStarfieldBackdrop((float)GetTime());
+
             Color scoreColor = BLUE;
             std::vector<Player>& players = gameSpace.getPlayers();
             int localIndex = networked ? myIndex : 0;
@@ -1245,7 +1252,11 @@ int main(int argc, char** argv) {
         // renders into the target now instead of the back buffer.
         BeginTextureMode(sceneTarget);
             ClearBackground(BLACK);
-            BeginMode3D(CameraFromPlayer(player));
+            Camera3D sceneCam = CameraFromPlayer(player);
+            BeginMode3D(sceneCam);
+                // Stars first, centered on the camera (no parallax), depth-mask
+                // off inside - everything after paints straight over them.
+                DrawStarfield(sceneCam.position, (float)GetTime());
                 gameSpace.draw(localIndex); // skip drawing our own body (first-person)
             EndMode3D();
         EndTextureMode();
