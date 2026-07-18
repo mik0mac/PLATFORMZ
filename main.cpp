@@ -371,7 +371,7 @@ int main(int argc, char** argv) {
     bool  sliderDiffActive    = false; // drag latch for the difficulty slider
     // OPTIONS toggles (bool gameplay rules; defaults from constants.h). Applied to
     // the GameSpace at match start - locally in startGame, remotely via serializeStart.
-    bool  optRocketsExplodeOnWalls         = WALLS_STOP_ROCKETS;                    // ON => rockets detonate on the boundary wall
+    bool  optWallsEnabled                  = WALLS_ENABLED;                         // ON => boundary walls drawn + collide; OFF => open space (out-of-bounds rules)
     bool  optPassThroughPlatformsEarthGrav = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // ON => fall through platforms under earth gravity
     bool  optRocketsObeyPhysics            = ROCKETS_OBEY_PHYSICS;                  // ON => rockets obey gravity + inherit shooter velocity
     bool  optFriendlyFire                  = FRIENDLY_FIRE;                         // OFF => a player's own blast deals no self-damage
@@ -381,7 +381,7 @@ int main(int argc, char** argv) {
     // toggles have no such latch, so we remember the value we last sent and only
     // accept a server toggle that differs from it - that keeps our own click from
     // being flipped back before the server's echo of it arrives.
-    bool  optSentRexpl = optRocketsExplodeOnWalls;
+    bool  optSentWalls = optWallsEnabled;
     bool  optSentEgpt  = optPassThroughPlatformsEarthGrav;
     bool  optSentPhys  = optRocketsObeyPhysics;
     bool  optSentFf    = optFriendlyFire;
@@ -414,12 +414,12 @@ int main(int argc, char** argv) {
             // server applies them before generating the world (first press wins).
             if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
                                                       (int)optNumPlayers, optBotDifficulty,
-                                                      optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav,
+                                                      optWallsEnabled, optPassThroughPlatformsEarthGrav,
                                                       optRocketsObeyPhysics, optFriendlyFire));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
-        gameSpace.wallsStopRockets = optRocketsExplodeOnWalls;                    // OPTIONS: rockets detonate on walls vs fly through
+        gameSpace.wallsEnabled = optWallsEnabled;                                 // OPTIONS: boundary walls on vs open space
         gameSpace.earthGravityPassThroughPlatforms = optPassThroughPlatformsEarthGrav; // OPTIONS: fall through platforms under earth gravity
         gameSpace.rocketsObeyPhysics = optRocketsObeyPhysics;                     // OPTIONS: rockets obey gravity + inherit shooter velocity
         gameSpace.friendlyFire = optFriendlyFire;                                 // OPTIONS: own blast self-damage on/off
@@ -502,7 +502,7 @@ int main(int argc, char** argv) {
                 if (m.hasOptions) {
                     if (!sliderPlayersActive) optNumPlayers    = (float)m.optNPlayers;
                     if (!sliderDiffActive)    optBotDifficulty = m.optDiff;
-                    if (m.optRexpl != optSentRexpl) { optRocketsExplodeOnWalls = m.optRexpl; optSentRexpl = m.optRexpl; }
+                    if (m.optWalls != optSentWalls) { optWallsEnabled = m.optWalls; optSentWalls = m.optWalls; }
                     if (m.optEgpt  != optSentEgpt)  { optPassThroughPlatformsEarthGrav = m.optEgpt; optSentEgpt = m.optEgpt; }
                     if (m.optPhys  != optSentPhys)  { optRocketsObeyPhysics = m.optPhys; optSentPhys = m.optPhys; }
                     if (m.optFf    != optSentFf)    { optFriendlyFire = m.optFf; optSentFf = m.optFf; }
@@ -842,9 +842,9 @@ int main(int argc, char** argv) {
                     // defaults to its constants.h value; applied at match start. The
                     // sliders use an 85px rhythm; the toggles are tighter at 70px.
                     int y3 = y2 + 85;
-                    DrawText("ROCKETS EXPLODE ON BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
-                    if (UiToggle({lx, (float)(y3 + 26), 100, 24}, optRocketsExplodeOnWalls)) {
-                        optChanged = true; optSentRexpl = optRocketsExplodeOnWalls;
+                    DrawText("BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
+                    if (UiToggle({lx, (float)(y3 + 26), 100, 24}, optWallsEnabled)) {
+                        optChanged = true; optSentWalls = optWallsEnabled;
                     }
 
                     int y4 = y3 + 70;
@@ -868,7 +868,7 @@ int main(int argc, char** argv) {
                     // Push the change to the server (it re-broadcasts to all clients).
                     if (optChanged && networked && net.isOpen())
                         net.send(serializeOptions((int)optNumPlayers, optBotDifficulty,
-                                                  optRocketsExplodeOnWalls, optPassThroughPlatformsEarthGrav,
+                                                  optWallsEnabled, optPassThroughPlatformsEarthGrav,
                                                   optRocketsObeyPhysics, optFriendlyFire));
 
                     if (UiModalClose(m, optionsWasOpen)) showOptions = false;

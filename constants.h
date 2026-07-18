@@ -103,7 +103,7 @@ const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdo
 const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
-const bool WALLS_STOP_ROCKETS = false; // if true, rockets are destroyed on wall impact; if false, they fly through.
+const bool WALLS_ENABLED = true; // if true, the boundary walls are drawn and everything collides with them (rockets detonate). If false, nothing collides: rockets fade out past the boundary and players are subject to the out-of-bounds elimination rules.
 
 //MARK: Platform Constants
 const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)

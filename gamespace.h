@@ -41,7 +41,7 @@ public:
     // Player-selectable gameplay rules (set from the OPTIONS modal before a match;
     // networked play threads them via serializeStart -> server). Default to the
     // compile-time constants so an unconfigured GameSpace behaves as before.
-    bool wallsStopRockets = WALLS_STOP_ROCKETS;                                    // rockets detonate on the boundary wall vs fly through
+    bool wallsEnabled = WALLS_ENABLED;                                             // boundary walls drawn + collide; OFF = open space, out-of-bounds rules apply
     bool earthGravityPassThroughPlatforms = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS;  // under earth gravity, fall through platforms vs land on them
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
     bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
@@ -401,7 +401,7 @@ public:
     // framerate cost) down to the one flush pair around the fill pass.
     void draw(int localPlayerIndex = -1) {
         // ---- Pass 1: opaque wireframes (write depth) ----
-        DrawWalls(walls);
+        if (wallsEnabled) DrawWalls(walls);
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE);

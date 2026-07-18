@@ -195,7 +195,7 @@ std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
 std::atomic<int>   pendingPlayers{GAMESPACE_NUMBER_OF_PLAYERS};
 std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
 // OPTIONS bool toggles carried by a start request; defaults from constants.h.
-std::atomic<bool>  pendingRocketsExplode{WALLS_STOP_ROCKETS};
+std::atomic<bool>  pendingWallsEnabled{WALLS_ENABLED};
 std::atomic<bool>  pendingEgPassThrough{EARTH_GRAVITY_PASS_THROUGH_PLATFORMS};
 std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
 std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
@@ -586,7 +586,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     // client shows live on every client's OPTIONS modal + roster preview.
     s += ",\"opt\":{\"nplayers\":" + ji(pendingPlayers.load());
     s += ",\"diff\":"   + jf(pendingDiff.load());
-    s += ",\"rexpl\":"  + jb(pendingRocketsExplode.load());
+    s += ",\"walls\":"  + jb(pendingWallsEnabled.load());
     s += ",\"egpt\":"   + jb(pendingEgPassThrough.load());
     s += ",\"phys\":"   + jb(pendingRocketsPhysics.load());
     s += ",\"ff\":"     + jb(pendingFriendlyFire.load());
@@ -617,7 +617,7 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
     // Options (match-wide), same values buildStatePacket puts in "opt".
     nb::putU8(b, (uint8_t)pendingPlayers.load());
     nb::putF32(b, pendingDiff.load());
-    nb::putU8(b, (uint8_t)((pendingRocketsExplode.load() ? 1 : 0) | (pendingEgPassThrough.load() ? 2 : 0)
+    nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0) | (pendingEgPassThrough.load() ? 2 : 0)
                           | (pendingRocketsPhysics.load() ? 4 : 0) | (pendingFriendlyFire.load() ? 8 : 0)));
 
     // Players (fixed roster; u8 count is plenty).
@@ -936,7 +936,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
         pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
-        pendingRocketsExplode = parseBool(msg, "rexpl", WALLS_STOP_ROCKETS);
+        pendingWallsEnabled = parseBool(msg, "walls", WALLS_ENABLED);
         pendingEgPassThrough = parseBool(msg, "egpt", EARTH_GRAVITY_PASS_THROUGH_PLATFORMS);
         pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);
         pendingFriendlyFire = parseBool(msg, "ff", FRIENDLY_FIRE);
@@ -967,7 +967,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
         pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
-        pendingRocketsExplode = parseBool(msg, "rexpl", pendingRocketsExplode.load());
+        pendingWallsEnabled = parseBool(msg, "walls", pendingWallsEnabled.load());
         pendingEgPassThrough = parseBool(msg, "egpt", pendingEgPassThrough.load());
         pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
         pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
@@ -1106,7 +1106,7 @@ void SimulationLoop() {
                 gameSpace.setPlayerCount(want);
                 // OPTIONS: apply the requesting client's gameplay toggles to the sim
                 // before the world is built (collisions read these off GameSpace).
-                gameSpace.wallsStopRockets = pendingRocketsExplode.load();
+                gameSpace.wallsEnabled = pendingWallsEnabled.load();
                 gameSpace.earthGravityPassThroughPlatforms = pendingEgPassThrough.load();
                 gameSpace.rocketsObeyPhysics = pendingRocketsPhysics.load();
                 gameSpace.friendlyFire = pendingFriendlyFire.load();

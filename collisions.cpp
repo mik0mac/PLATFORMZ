@@ -263,16 +263,23 @@ void CheckRocketWallCollisions(GameSpace& space) {
     for (Rocket& rocket : rockets) {
         if (rocket.isDestroyed) continue;
 
+        if (!space.wallsEnabled) {
+            // Open-space mode: no wall to hit. Rockets stay live through the
+            // same grace zone players get, then fade at the out-of-bounds line
+            // instead of flying forever.
+            float oobBound = halfSize * GAMESPACE_OUT_OF_BOUNDS_FACTOR;
+            if (fabsf(rocket.position.x) > oobBound ||
+                fabsf(rocket.position.y) > oobBound ||
+                fabsf(rocket.position.z) > oobBound) {
+                rocket.isOutOfBounds = true;
+            }
+            continue;
+        }
+
         bool hitWall = rocket.position.x > halfSize || rocket.position.x < -halfSize ||
                        rocket.position.y > halfSize || rocket.position.y < -halfSize ||
                        rocket.position.z > halfSize || rocket.position.z < -halfSize;
         if (!hitWall) continue;
-
-        if (!space.wallsStopRockets) {
-            space.emitAudio(FX_ROCKET_THROUGH_WALL, rocket.position, rocket.ownerId);
-            rocket.isOutOfBounds = true; // mark the rocket as out of bounds so it starts to fade.
-            continue; // rocket flies through the wall, no detonation
-        }
 
         // Clamp onto the wall so the explosion appears at the impact point.
         rocket.position.x = Clamp(rocket.position.x, -halfSize, halfSize);
@@ -538,6 +545,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 // velocity and apply the walls' damage on impact, per the Walls element's
 // elasticity/damage fields (space.getWalls()).
 void CheckPlayerWallCollisions(GameSpace& space) {
+    if (!space.wallsEnabled) return; // open-space mode: out-of-bounds rules apply instead
     auto& players = space.getPlayers();
     Walls& walls = space.getWalls();
     float halfSize = walls.halfSize;
@@ -666,6 +674,7 @@ void CheckPlayerPlayerCollisions(GameSpace& space) {
 // Same boundary cube as CheckPlayerWallCollisions, reusing the walls'
 // elasticity. Asteroids take no wall damage (they're not the player).
 void CheckAsteroidWallCollisions(GameSpace& space) {
+    if (!space.wallsEnabled) return; // open-space mode: asteroids drift out (respawn behavior TBD)
     auto& asteroids = space.getAsteroids();
     Walls& walls = space.getWalls();
     float halfSize = walls.halfSize;

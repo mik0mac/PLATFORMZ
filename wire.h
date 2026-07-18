@@ -66,7 +66,7 @@ struct ServerMessage {
     bool  hasOptions  = false;
     int   optNPlayers = 0;      // match size
     float optDiff     = 0.0f;   // bot difficulty
-    bool  optRexpl    = false;  // rockets detonate on boundary wall
+    bool  optWalls    = true;   // boundary walls on (drawn + collide) vs open space
     bool  optEgpt     = false;  // fall through platforms under earth gravity
     bool  optPhys     = false;  // rockets obey gravity + inherit shooter velocity
     bool  optFf       = false;  // friendly fire (own blast can self-damage)
@@ -131,13 +131,13 @@ inline std::string serializeKeepalive() {
 // everyone in the next state packet, so all clients' OPTIONS modals stay in sync.
 // Map size isn't here - it's chosen at the START button press (serializeStart).
 inline std::string serializeOptions(int nplayers, float diff,
-                                    bool rocketsExplode, bool egPassThrough,
+                                    bool wallsEnabled, bool egPassThrough,
                                     bool rocketsPhysics, bool friendlyFire) {
     nlohmann::json j = {
         {"type", "options"},
         {"nplayers", nplayers},
         {"diff", diff},
-        {"rexpl", rocketsExplode},
+        {"walls", wallsEnabled},
         {"egpt", egPassThrough},
         {"phys", rocketsPhysics},
         {"ff", friendlyFire}
@@ -147,7 +147,7 @@ inline std::string serializeOptions(int nplayers, float diff,
 
 inline std::string serializeStart(float half, int platforms, int asteroids,
                                   int nplayers, float diff,
-                                  bool rocketsExplode, bool egPassThrough,
+                                  bool wallsEnabled, bool egPassThrough,
                                   bool rocketsPhysics, bool friendlyFire) {
     nlohmann::json j = {
         {"type", "start"},
@@ -156,7 +156,7 @@ inline std::string serializeStart(float half, int platforms, int asteroids,
         {"roid", asteroids},
         {"nplayers", nplayers},        // requested match size (server clamps to connected)
         {"diff", diff},                // bot difficulty center [0..BOT_DIFFICULTY]
-        {"rexpl", rocketsExplode},     // OPTIONS: rockets detonate on the boundary wall
+        {"walls", wallsEnabled},       // OPTIONS: boundary walls on vs open space
         {"egpt", egPassThrough},       // OPTIONS: fall through platforms under earth gravity
         {"phys", rocketsPhysics},      // OPTIONS: rockets obey gravity + inherit shooter velocity
         {"ff", friendlyFire}           // OPTIONS: a player's own blast can self-damage
@@ -261,7 +261,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     msg.optNPlayers = r.u8();
     msg.optDiff     = r.f32();
     uint8_t optFlags = r.u8();
-    msg.optRexpl = (optFlags & 1) != 0;
+    msg.optWalls = (optFlags & 1) != 0;
     msg.optEgpt  = (optFlags & 2) != 0;
     msg.optPhys  = (optFlags & 4) != 0;
     msg.optFf    = (optFlags & 8) != 0;
@@ -479,7 +479,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.hasOptions  = true;
         msg.optNPlayers = o.value("nplayers", 0);
         msg.optDiff     = o.value("diff", 0.0f);
-        msg.optRexpl    = o.value("rexpl", false);
+        msg.optWalls    = o.value("walls", true);
         msg.optEgpt     = o.value("egpt", false);
         msg.optPhys     = o.value("phys", false);
         msg.optFf       = o.value("ff", false);
