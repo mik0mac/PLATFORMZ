@@ -167,6 +167,7 @@ const float PLAYER_SPEED_WALK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
+const float JETPACK_HORIZONTAL_BOOST = 2.0f; // Multiplier on horizontal max speed AND acceleration while the jetpack is engaged with fuel (Player::updateVelocity). Vertical thrust is unaffected. x2 is a test value for the horizontal-boost experiment.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;

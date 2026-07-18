@@ -219,8 +219,12 @@ public:
     // both relative to current look direction (flattened), not world axes.
     // Vertical movement (jetpack up/down) is separate, not part of moveInput.
     void updateVelocity(float dt, Vector2 moveInput, float gravity) {
-        float targetSpeed = isUsingJetpack ? speedJetpack : speedWalk;
-        float acceleration = isUsingJetpack ? accelerationJetpack : accelerationWalk;
+        // targetSpeed/acceleration only drive the HORIZONTAL easing below; the
+        // vertical jetpack block reads speedJetpack/accelerationJetpack directly,
+        // so the boost multiplier speeds up the flattened plane without touching
+        // vertical thrust.
+        float targetSpeed = isUsingJetpack ? speedJetpack * JETPACK_HORIZONTAL_BOOST : speedWalk;
+        float acceleration = isUsingJetpack ? accelerationJetpack * JETPACK_HORIZONTAL_BOOST : accelerationWalk;
 
         if (fuel <= FUEL_REGEN_RATE * dt) {
             targetSpeed = speedWalk; // If out of fuel, player can only walk, not jetpack.
