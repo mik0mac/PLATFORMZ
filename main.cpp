@@ -392,8 +392,10 @@ int main(int argc, char** argv) {
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
     std::vector<int> botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
-    bool  sliderPlayersActive = false; // drag latch for the players slider
-    bool  sliderDiffActive    = false; // drag latch for the difficulty slider
+    bool  sliderPlayersActive  = false; // drag latch for the players slider
+    bool  sliderDiffActive     = false; // drag latch for the difficulty slider
+    bool  sliderScarcityActive = false; // drag latch for the fuel-scarcity slider
+    float optFuelScarcity = FUEL_SCARCITY_DEFAULT; // OPTIONS FUEL SCARCITY slider [0..1]; 0.5 = neutral, 1.0 = 2x burn + half regen
     // OPTIONS toggles (bool gameplay rules; defaults from constants.h). Applied to
     // the GameSpace at match start - locally in startGame, remotely via serializeStart.
     bool  optWallsEnabled                  = WALLS_ENABLED;                         // ON => boundary walls drawn + collide; OFF => open space (out-of-bounds rules)
@@ -438,14 +440,15 @@ int main(int argc, char** argv) {
             // Send the chosen map preset + OPTIONS (match size, bot difficulty); the
             // server applies them before generating the world (first press wins).
             if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
-                                                      (int)optNumPlayers, optBotDifficulty,
+                                                      (int)optNumPlayers, optBotDifficulty, optFuelScarcity,
                                                       optWallsEnabled, optHypedMode,
                                                       optRocketsObeyPhysics, optFriendlyFire));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
         gameSpace.wallsEnabled = optWallsEnabled;                                 // OPTIONS: boundary walls on vs open space
-        gameSpace.hypedMode = optHypedMode;                                       // OPTIONS: HYPED MODE (2x jetpack horizontal / rocket speed / fuel regen)
+        gameSpace.hypedMode = optHypedMode;                                       // OPTIONS: HYPED MODE (2x jetpack horizontal boost + rocket speed)
+        gameSpace.fuelScarcity = optFuelScarcity;                                 // OPTIONS: FUEL SCARCITY slider (0.5 = neutral)
         gameSpace.rocketsObeyPhysics = optRocketsObeyPhysics;                     // OPTIONS: rockets obey gravity + inherit shooter velocity
         gameSpace.friendlyFire = optFriendlyFire;                                 // OPTIONS: own blast self-damage on/off
         gameSpace.setPlayerCount((int)optNumPlayers); // OPTIONS: 1 human + (N-1) bots
@@ -525,8 +528,12 @@ int main(int argc, char** argv) {
                 // a server value that differs from the one we last sent (so our
                 // own click isn't flipped back before its echo returns).
                 if (m.hasOptions) {
-                    if (!sliderPlayersActive) optNumPlayers    = (float)m.optNPlayers;
-                    if (!sliderDiffActive)    optBotDifficulty = m.optDiff;
+                    if (!sliderPlayersActive)  optNumPlayers    = (float)m.optNPlayers;
+                    if (!sliderDiffActive)     optBotDifficulty = m.optDiff;
+                    if (!sliderScarcityActive) optFuelScarcity  = m.optScarcity;
+                    // Mirror onto our gameSpace (locally startGame does this) so
+                    // anything simulated client-side matches the server.
+                    gameSpace.fuelScarcity = m.optScarcity;
                     // Networked draw runs off OUR gameSpace, so mirror the server's
                     // walls option onto it (locally startGame does this) - otherwise
                     // an open-space match would still render the boundary walls.
@@ -862,7 +869,7 @@ int main(int argc, char** argv) {
                 // local play directly and ride the start request to the server for
                 // networked play. Taller + raised so four toggles fit the 700px window.
                 if (showOptions) {
-                    Rectangle m = {250, 40, 500, 600}; // two sliders + four toggles + CLOSE
+                    Rectangle m = {250, 10, 500, 680}; // three sliders + four toggles + CLOSE
                     UiModalChrome(m, "OPTIONS");
 
                     float lx = m.x + 40, sw = m.width - 80;
@@ -892,11 +899,19 @@ int main(int argc, char** argv) {
                     if (UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
                              0.0f, BOT_DIFFICULTY, sliderDiffActive)) optChanged = true;
 
+                    // FUEL SCARCITY (continuous, 0.0..1.0; 0.5 = neutral burn/regen,
+                    // 1.0 = 2x consumption + half regen, 0.0 the reverse).
+                    int y2b = y2 + 85;
+                    DrawText("FUEL SCARCITY", (int)lx, y2b, 18, RAYWHITE);
+                    valueRight(TextFormat("%.2f", optFuelScarcity), y2b);
+                    if (UiSlider({lx, (float)(y2b + 26), sw, 22}, optFuelScarcity,
+                             0.0f, 1.0f, sliderScarcityActive)) optChanged = true;
+
                     // Toggles: label on its own line, a compact ON/OFF control below
                     // (labels are long, so keep them off the control's line). Each
                     // defaults to its constants.h value; applied at match start. The
                     // sliders use an 85px rhythm; the toggles are tighter at 70px.
-                    int y3 = y2 + 85;
+                    int y3 = y2b + 85;
                     DrawText("BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
                     if (UiToggle({lx, (float)(y3 + 26), 100, 24}, optWallsEnabled)) {
                         optChanged = true; optSentWalls = optWallsEnabled;
@@ -922,7 +937,7 @@ int main(int argc, char** argv) {
 
                     // Push the change to the server (it re-broadcasts to all clients).
                     if (optChanged && networked && net.isOpen())
-                        net.send(serializeOptions((int)optNumPlayers, optBotDifficulty,
+                        net.send(serializeOptions((int)optNumPlayers, optBotDifficulty, optFuelScarcity,
                                                   optWallsEnabled, optHypedMode,
                                                   optRocketsObeyPhysics, optFriendlyFire));
 
