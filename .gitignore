@@ -11,3 +11,5 @@ audio-src/wip/
 audio-src/retired/
 # Local build secrets (join key etc.) - see the secrets.mk note in Makefile.
 secrets.mk
+# Handout packages (make dist-pack)
+dist/

@@ -28,7 +28,11 @@ CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR)
 # secrets.mk's `EXTRA_CXXFLAGS +=` (command-line vars lock out further +=
 # assignment to that *same* variable name for the invocation).
 CXXFLAGS += $(EXTRA_CXXFLAGS) $(DIST_CXXFLAGS)
-LDFLAGS  := -L/opt/homebrew/lib -lraylib \
+# How raylib is linked: the dev default is the Homebrew dylib; dist-pack
+# overrides this with the static archive (plus the audio frameworks the dylib
+# would otherwise pull in transitively) so handout builds don't need Homebrew.
+RAYLIB_LINK ?= -lraylib
+LDFLAGS  := -L/opt/homebrew/lib $(RAYLIB_LINK) \
             -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo \
             -framework Security -framework CoreFoundation -lz
 
@@ -80,6 +84,25 @@ dist:
 		exit 1; \
 	fi
 	$(MAKE) -B DIST_CXXFLAGS='$(if $(HOST),-DPLATFORMZ_DEFAULT_SERVER_HOST=\"$(HOST)\")$(if $(PORT), -DPLATFORMZ_DEFAULT_SERVER_PORT=\"$(PORT)\")'
+
+# Self-contained handout zip: static raylib (recipient needs NO Homebrew),
+# assets bundled beside the binary, and a double-clickable PLAY.command that
+# cd's next to itself first (the game loads assets/ by relative path). Apple
+# Silicon Macs only - the binary is arm64. Server host + join key are baked
+# from secrets.mk exactly like a normal build. Output: dist/PLATFORMZ-mac-arm64.zip
+RAYLIB_STATIC := /opt/homebrew/opt/raylib/lib/libraylib.a
+dist-pack:
+	rm -f $(TARGET)
+	$(MAKE) RAYLIB_LINK='$(RAYLIB_STATIC) -framework CoreAudio -framework AudioToolbox'
+	rm -rf dist/PLATFORMZ dist/PLATFORMZ-mac-arm64.zip
+	mkdir -p dist/PLATFORMZ
+	cp $(TARGET) dist/PLATFORMZ/
+	cp -R assets dist/PLATFORMZ/assets
+	printf '#!/bin/sh\ncd "$$(dirname "$$0")"\nexec ./platformz\n' > dist/PLATFORMZ/PLAY.command
+	chmod +x dist/PLATFORMZ/PLAY.command
+	printf 'PLATFORMZ (macOS, Apple Silicon)\n\nTo play: double-click PLAY.command.\n\nFirst launch: macOS may block it ("unidentified developer").\nRight-click PLAY.command -> Open -> Open. If the game itself is\nblocked too, run this once in Terminal from this folder:\n  xattr -dr com.apple.quarantine .\n\nKeep platformz and the assets folder together.\n' > dist/PLATFORMZ/README.txt
+	cd dist && zip -qr PLATFORMZ-mac-arm64.zip PLATFORMZ
+	@echo "==> dist/PLATFORMZ-mac-arm64.zip"
 
 # --- Web (Emscripten / WASM) build ----------------------------------------
 # Builds the browser client. Requires the emsdk toolchain (emcc on PATH) and a
