@@ -386,7 +386,7 @@ int main(int argc, char** argv) {
 
     // OPTIONS sliders (see the OPTIONS modal below). Stored as floats so UiSlider
     // can drive them; cast where an int is needed. Defaults match the constants.
-    float optNumPlayers    = (float)GAMESPACE_NUMBER_OF_PLAYERS; // 1..GAMESPACE_NUMBER_OF_PLAYERS
+    float optNumPlayers    = (float)GAMESPACE_DEFAULT_PLAYERS; // default 4; slider range 1..GAMESPACE_NUMBER_OF_PLAYERS
     float optBotDifficulty = BOT_DIFFICULTY_DEFAULT;            // starting value; slider range is 0.0..BOT_DIFFICULTY
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on

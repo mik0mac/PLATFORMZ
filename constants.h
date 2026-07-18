@@ -81,7 +81,8 @@ const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game s
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 4; // Number of players (index 0 is the local human; 1+ are wander-bots for testing)
+const int GAMESPACE_NUMBER_OF_PLAYERS = 6; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h).
+const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the OPTIONS slider and the server's pending config start at; the host can raise it up to the max above.
 
 struct mapSizePreset {
     float halfSize;
@@ -98,9 +99,10 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     // XL: 27x LARGE volume; benched 2026-07 on Mike's Mac at p95 ~8ms with bots
     // and rocket fire (framerate was never the binding limit - even 480/1024
     // passed). Platforms scale with AREA, not volume (they're a traversal
-    // surface; volume-scaling would blow the render batch). Asteroids hold at
-    // 24 - the UDP state packet (netbin.h UDP_SAFE_DATAGRAM) fits ~24-30
-    // asteroids + a full roster per tick; more means lossy chunked ticks.
+    // surface; volume-scaling would blow the render batch). Asteroid counts
+    // here are the LOCAL-play numbers; a networked start clamps them to the
+    // UDP state-packet budget for the roster size (nb::MaxAsteroidsForRoster,
+    // netbin.h) so a full tick fits one unfragmented datagram.
     {"XL",     {360.0f, 576, 24}}
 };
 
@@ -208,6 +210,8 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
     {0, 0, 255, 255},     // Blue
     {0, 255, 0, 255},     // Green
     {255, 0, 255, 255},   // Pink
+    {255, 255, 0, 255},   // Yellow
+    {0, 255, 255, 255},   // Cyan
 };
 
 //MARK: Bot Constants

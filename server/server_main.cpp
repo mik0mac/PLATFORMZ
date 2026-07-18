@@ -192,7 +192,7 @@ std::atomic<int>   pendingPlat{GAMESPACE_NUMBER_OF_PLATFORMS};
 std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
 // OPTIONS carried by a start request: requested match size (clamped to connected
 // clients at consume) and bot difficulty center. Same io->sim handoff as above.
-std::atomic<int>   pendingPlayers{GAMESPACE_NUMBER_OF_PLAYERS};
+std::atomic<int>   pendingPlayers{GAMESPACE_DEFAULT_PLAYERS};
 std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
 std::atomic<float> pendingScarcity{FUEL_SCARCITY_DEFAULT}; // OPTIONS FUEL SCARCITY slider (0.5 = neutral)
 // OPTIONS bool toggles carried by a start request; defaults from constants.h.
@@ -937,7 +937,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
         pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
         pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
-        pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_NUMBER_OF_PLAYERS);
+        pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_DEFAULT_PLAYERS);
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
         pendingScarcity = parseFloat(msg, "scarcity", FUEL_SCARCITY_DEFAULT);
         pendingWallsEnabled = parseBool(msg, "walls", WALLS_ENABLED);
@@ -1122,7 +1122,6 @@ void SimulationLoop() {
             // reset the existing player slots (ids stay stable so connected
             // clients keep their slot mapping across a restart), then begin.
             if (startRequested.exchange(false)) {
-                gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), pendingRoid.load());
                 // Resize the roster to the requested match size, but never below the
                 // highest connected client's slot (no connected player loses their
                 // body). Empty slots become bots via the per-tick reconcile. Do this
@@ -1135,6 +1134,14 @@ void SimulationLoop() {
                     for (auto& [cid, c] : clients) maxClaimed = std::max(maxClaimed, c.playerId + 1);
                 }
                 want = std::min(std::max(want, maxClaimed), GAMESPACE_NUMBER_OF_PLAYERS);
+                // Clamp the preset's asteroid count to the UDP state-packet
+                // budget for this roster, so a full tick fits one unfragmented
+                // datagram (oversized ticks chunk lossily - see netbin.h).
+                int roids = std::min(pendingRoid.load(), nb::MaxAsteroidsForRoster(want));
+                if (roids < pendingRoid.load())
+                    std::cout << "Asteroids clamped " << pendingRoid.load() << " -> " << roids
+                              << " (UDP packet budget, " << want << " player slots)\n";
+                gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
                 gameSpace.setPlayerCount(want);
                 // OPTIONS: apply the requesting client's gameplay toggles to the sim
                 // before the world is built (collisions read these off GameSpace).

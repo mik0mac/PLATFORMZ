@@ -47,6 +47,25 @@ static const size_t UDP_SAFE_DATAGRAM = 1200;                 // fits every sane
 static const size_t CHUNK_HEADER     = 4;
 static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 
+// ---- state-packet size budget ----
+// Approximate per-record sizes of the binary state packet (buildStateBinary in
+// server_main.cpp) - keep in sync if that layout changes. Used to clamp the
+// asteroid count at match start so a full tick fits ONE unfragmented datagram
+// (an oversized tick is chunked with no retransmit: one lost chunk drops the
+// whole tick).
+static const size_t STATE_OVERHEAD  = 33;  // version/tick/seq/phase/options + section counts
+static const size_t PLAYER_BYTES    = 65;  // 58 fixed + a typical name (1 + ~6)
+static const size_t ASTEROID_BYTES  = 38;  // id + pos + vel + size + health + flash
+static const size_t ACTION_HEADROOM = 120; // in-flight rockets (28 B) / explosions (17 B) / audio events (21 B)
+
+// Max asteroids that keep a full state tick under UDP_SAFE_DATAGRAM for a
+// roster of nPlayers. 4 players -> 20, 6 players -> 17.
+inline int MaxAsteroidsForRoster(int nPlayers) {
+    long budget = (long)UDP_SAFE_DATAGRAM - (long)STATE_OVERHEAD - (long)ACTION_HEADROOM
+                - (long)nPlayers * (long)PLAYER_BYTES;
+    return budget > 0 ? (int)(budget / (long)ASTEROID_BYTES) : 0;
+}
+
 // ---- writers: append to a std::string byte buffer ----
 inline void putU8 (std::string& b, uint8_t  v) { b.push_back((char)v); }
 inline void putU16(std::string& b, uint16_t v) { b.push_back((char)(v & 0xff)); b.push_back((char)((v >> 8) & 0xff)); }
