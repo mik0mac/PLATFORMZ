@@ -196,10 +196,10 @@ int main(int argc, char** argv) {
                   "assets/sounds/move_through_platform_1.wav",
                   "assets/sounds/move_through_platform_2.wav",
                   "assets/sounds/move_through_platform_3.wav" },
-                0.3f, true, false, 0.08f),                                             // FX_PLATFORM_PASSTHROUGH (4 round-robin variation files, gated below)
+                0.5f, true, false, 0.08f),                                             // FX_PLATFORM_PASSTHROUGH (4 round-robin variation files, gated below)
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
-        audioFX("assets/sounds/warning.wav",             0.25f, true, false, 2),       // FX_WARNING (local only)
+        audioFX("assets/sounds/warning.wav",             0.4f, true, false, 2),       // FX_WARNING (local only)
         audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)         // FX_ENGAGE_EARTH_GRAVITY
     };
     // Platform passthrough is suppressed while earth-gravity engage is ringing
