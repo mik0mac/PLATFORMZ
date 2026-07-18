@@ -59,7 +59,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     player.isUsingJetpack = in.jetpack;
     player.earthGravityEnabled = in.earthGravity; // mirror gravity mode onto the player for collision rules (main.cpp:664 / bot_controller.h derive `gravity` from the same flag)
     player.updateVelocity(dt, in.moveAxis, gravity);
-    player.updateFuel(dt, player.isUsingJetpack);
+    player.updateFuel(dt, player.isUsingJetpack, gameSpace.fuelRegenScale());
 
     // "Empty tank" cue: holding jetpack with no usable fuel (updateVelocity gates
     // thrust on canJetpack()). Mirrors the FX_NO_AMMO cue for firing on empty;

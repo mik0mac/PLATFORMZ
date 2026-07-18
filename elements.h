@@ -24,7 +24,7 @@ class Walls {
 public:
     // Centered on origin; cube spans -halfSize..+halfSize on each axis.
     float halfSize = GAMESPACE_HALF_SIZE;
-    float gridSpacing = 2.0f;// GAMESPACE_HALF_SIZE / 20.0f;   // spacing of the wireframe grid lines
+    float gridSpacing = 2.0f; // MINIMUM spacing of the wireframe grid lines (the small-map look). DrawWalls scales the effective spacing up with halfSize (see WALL_GRID_REF_HALF_SIZE) so big maps don't drown in grid lines.
 
     float elasticityPlayer = WALL_ELASTICITY_PLAYER;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
     float elasticityAsteroid = WALL_ELASTICITY_ASTEROID;  // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
@@ -382,12 +382,14 @@ public:
         return shotFired;
     }
 
-    void updateFuel(float dt, bool isUsingJetpack) {
+    // regenScale: map-size fuel-regen multiplier (GameSpace::fuelRegenScale) -
+    // bigger arenas regenerate faster so traversal stays viable.
+    void updateFuel(float dt, bool isUsingJetpack, float regenScale = 1.0f) {
         if (isUsingJetpack && hasFuel()) {
             fuel -= dt * FUEL_CONSUMPTION_RATE; // Consume fuel based on time using jetpack
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
-            fuel += dt * FUEL_REGEN_RATE; // Regenerate fuel slowly when not using jetpack
+            fuel += dt * FUEL_REGEN_RATE * regenScale; // Regenerate fuel slowly when not using jetpack
             if (fuel > PLAYER_MAX_FUEL) fuel = PLAYER_MAX_FUEL; // Clamp fuel to max
         }
         if (!isAlive) {

@@ -91,9 +91,16 @@ struct mapSizePreset {
 // inline: one definition shared across all TUs (constants.h is included by
 // main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
 inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {60.0f, 32, 6}},
-    {"MEDIUM", {90.0f, 64, 12}},
-    {"LARGE",  {120.0f, 128, 24}}
+    {"SMALL",  {90.0f, 64, 12}},
+    {"MEDIUM", {120.0f, 128, 18}},
+    {"LARGE",  {240.0f, 256, 24}},
+    // XL: 27x LARGE volume; benched 2026-07 on Mike's Mac at p95 ~8ms with bots
+    // and rocket fire (framerate was never the binding limit - even 480/1024
+    // passed). Platforms scale with AREA, not volume (they're a traversal
+    // surface; volume-scaling would blow the render batch). Asteroids hold at
+    // 24 - the UDP state packet (netbin.h UDP_SAFE_DATAGRAM) fits ~24-30
+    // asteroids + a full roster per tick; more means lossy chunked ticks.
+    {"XL",     {360.0f, 576, 24}}
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
@@ -103,6 +110,7 @@ const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdo
 const float WALL_ELASTICITY_PLAYER = 0.9f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
+const float WALL_GRID_REF_HALF_SIZE = 60.0f; // grid spacing scales as halfSize / this (min Walls::gridSpacing), capping the wall-grid line count on big maps
 const bool WALLS_ENABLED = true; // if true, the boundary walls are drawn and everything collides with them (rockets detonate). If false, nothing collides: rockets fade out past the boundary and players are subject to the out-of-bounds elimination rules.
 
 //MARK: Platform Constants
@@ -169,7 +177,8 @@ const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
 const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec.
-const float FUEL_REGEN_RATE = 0.5f; // Per sec.
+const float FUEL_REGEN_RATE = 0.5f; // Per sec. Base rate; scaled up on big maps (see FUEL_REGEN_REF_HALF_SIZE).
+const float FUEL_REGEN_REF_HALF_SIZE = 180.0f; // fuel regen scales as max(1, halfSize / this): 1x on SMALL/MEDIUM, ~1.33x on LARGE (240), 2x on XL (360). Bigger arenas need more jetpack time to cross.
 const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
 const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
 
@@ -297,7 +306,7 @@ const float ASTEROID_BURST_SPEED_MAX = 48.0f;
 // short line dashes, drawn depth-mask-off before all geometry so everything
 // occludes it. Purely visual, client-only; these are the tuning knobs.
 const int   STARFIELD_STAR_COUNT      = 350;
-const float STARFIELD_RADIUS          = 500.0f;  // shell radius; must stay inside raylib's default 1000 far clip
+const float STARFIELD_RADIUS          = 500.0f;  // shell radius; must stay inside the far clip, which main.cpp keeps >= 1000
 const float STARFIELD_STAR_LENGTH     = 2.2f;    // dash length at the shell, ~3 px at 720p / fovy 60
 const float STARFIELD_HERO_FRACTION   = 0.08f;   // fraction of stars drawn as brighter + crosses
 const float STARFIELD_HERO_SCALE      = 1.8f;    // hero dash length multiplier

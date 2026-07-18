@@ -1032,6 +1032,18 @@ void BroadcastState(uint32_t tick) {
         std::string packet = (client.transport == Transport::UDP)
             ? buildStateBinary(tick, client.lastSeq, connectedSlots)
             : buildStatePacket(tick, client.lastSeq, connectedSlots);
+        // Oversize warning (throttled): a binary state over UDP_SAFE_DATAGRAM
+        // gets chunked with no retransmit, so any lost chunk drops that whole
+        // tick. If this fires steadily, the map preset has too many objects.
+        if (client.transport == Transport::UDP && packet.size() > nb::UDP_SAFE_DATAGRAM) {
+            static double lastOversizeLog = 0.0;
+            double now = NowSec();
+            if (now - lastOversizeLog > 1.0) {
+                lastOversizeLog = now;
+                printf("[server] state packet %zu B > %d (chunking; lossy per-tick)\n",
+                       packet.size(), (int)nb::UDP_SAFE_DATAGRAM);
+            }
+        }
         SendToClient(client, packet);
     }
 }
