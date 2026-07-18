@@ -350,6 +350,10 @@ public:
                 spawnEliminationBurst(player.position, player.color_outline);
                 emitAudio(FX_PLAYER_DEATH, player.position, player.id);
                 player.deathBurstSpawned = true;
+                // Stop the body: dead slots aren't driven through the input
+                // path anymore (no gravity), so leftover velocity would carry
+                // them in a straight line forever. Spectating restores control.
+                player.velocity = {0, 0, 0};
             }
         }
 

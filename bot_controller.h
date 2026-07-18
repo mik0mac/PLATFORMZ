@@ -135,7 +135,14 @@ struct BotController {
         for (int i = 0; i < (int)players.size(); ++i) {
             if (!players[i].isBot || !players[i].isAlive) continue;
             int targetIdx = pickTarget(players, i);
-            if (targetIdx == i) continue; // no living target (bot is last alive) — idle
+            if (targetIdx == i) {
+                // No living target (bot is last alive): idle, but still run the
+                // physics half of the input path. Gravity lives in
+                // updateVelocity, so skipping entirely would freeze the bot's
+                // velocity and let it drift in a straight line forever.
+                ApplyPlayerInput(players[i], PlayerInput{}, dt, MOON_GRAVITY, gs);
+                continue;
+            }
             PlayerInput botIn = botInput(players[i], players[targetIdx], players,
                                          gs.getPlatforms(), gs.getAsteroids(), gs.getWalls(),
                                          botTree, dt, decisions[i], profiles[i]);

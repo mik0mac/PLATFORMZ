@@ -158,7 +158,7 @@ const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for no
 const float PLAYER_SPEED_WALK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 24.0f; // units/sec^2
+const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;

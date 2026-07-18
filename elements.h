@@ -269,8 +269,11 @@ public:
                 velocity.y = targetVerticalSpeed;
             }
         }
-        // Apply gravity (remove downward velocity when using jetpack to make the upward thrust feel more responsive).
-        if (!isUsingJetpack || !canJetpack()) velocity.y -= gravity * dt;
+        // Gravity always applies - the jetpack has to outwork it
+        // (accelerationJetpack > EARTH_GRAVITY, see constants.h). This also means
+        // excess upward velocity (rocket jump, bounce) decays under thrust+gravity
+        // together instead of being held while the jetpack key is down.
+        velocity.y -= gravity * dt;
     }
 
     // boundsHalfSize is the current map's walls.halfSize (set per match by
