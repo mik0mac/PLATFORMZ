@@ -501,10 +501,6 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 bool earthGravityPassThrough = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS && player.earthGravityEnabled;
                 if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))
                                                 && !earthGravityPassThrough) {
-                    // float platformTop = platform.position.y + (platform.size.y / 2.0f);
-                    // Pop the player out onto the surface first, so next frame
-                    // doesn't re-detect the overlap and cancel the response.
-                    // player.position.y = platformTop + player.radius;
                     if (platform.isBouncy) {
                         // player bounces off the platform.
                         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
@@ -529,24 +525,8 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                         space.emitAudio(FX_PLATFORM_PASSTHROUGH, player.position, player.id);
                     }
                 }
-                }
-
-
-
-                // un-comment to work on bouncing off the underside of a platform.
-                // else if (player.velocity.y > 0.0f && (player.position.y - player.radius) < (platform.position.y - (platform.size.y / 2.0f))) {
-                //     // If the player is moving up into the platform, the should cancel out y velocity.
-                //     float platformBottom = platform.position.y - (platform.size.y / 2.0f);
-                //     // Pop the player out below the platform to prevent re-detection next frame.
-                //     player.position.y = platformBottom - (player.radius);
-                //     if (platform.isBouncy) {
-                //         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce down
-                //     } else {
-                //         player.velocity.y = 0.0f; // cancel upward velocity when hitting the underside
-                //     }
-
-                // }
             }
+        }
 
         // Record this frame's height so next frame's crossing test has a
         // reference. Runs once per alive player, after all its platforms are
@@ -606,10 +586,8 @@ void CheckPlayerWallCollisions(GameSpace& space) {
 
         if (hitWall) {
             if (walls.damage > 0.0f) player.takeDamage(walls.damage);
-            // if (player.velocity.x > 0.5f || player.velocity.y > 0.5f || player.velocity.z > 0.5f) {
             volumeScale = Clamp(volumeScale, 0.0f, 1.0f);
             space.emitAudio(FX_WALL_BOUNCE_PLAYER, player.position, player.id, volumeScale);
-            // }
         }
     }
 }
@@ -800,9 +778,6 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
                     Message msg(MSG_TYPE_ASTEROID_BONUS, owner->name, "", owner->id, 0);
                     space.emitMessage(msg);
                 }
-                // spawn debris from the destroyed asteroid and add it to the game space.  FUTURE.
-                // DebrisEffect debris = spawnDebris(asteroid.position, asteroid.velocity); // spawn debris from the destroyed asteroid
-                // debrisEffects.push_back(debris); // add the debris to the game space
             }
         }
 

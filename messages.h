@@ -10,8 +10,6 @@
 
 const float DEFAULT_MSG_DURATION = 5.0f; // seconds
 const Color DEFAULT_MSG_COLOR = {255, 255, 255, 255}; // white text
-// const bool DISPLAY_PLAYER_NAMES_IN_ALT_COLOR = true; // if true, display player names in a different color for clarity in messages
-// const Color PLAYER_NAME_COLOR = GREEN; // color for player names in messages if bool above is true.
 
 // MARK: Visibility
 enum VIS_TYPE {
@@ -89,7 +87,6 @@ class Message {
             uint32_t playerA_id = 0, uint32_t playerB_id = 0) :
         type(type), playerA_Name(playerA_Name), playerB_Name(playerB_Name),
         playerA_id(playerA_id), playerB_id(playerB_id) {}
-    // int msg_id = 0; // unique identifier for the message
 
     MessageType type;
 

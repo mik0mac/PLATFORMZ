@@ -1344,15 +1344,8 @@ int main(int argc, char** argv) {
             
             // Glitch intensity ramps down to 0 at which point the player enters the spectating state.
             if (!player.isAlive && !player.isSpectating) {
-                hurt = player.SpectatingTimer / player.countdownToSpectating;
+                hurt = player.spectatingTimer / player.countdownToSpectating;
             }
-            // un-comment for fixed glitch intensity on death:
-            // On death: drive the glitch with a sustained intensity (flashIntensity
-            // would otherwise decay to 0 and the effect would fade out), and render
-            // the whole blit through the greyscale shader below.
-            // const float DEATH_GLITCH = 0.5f;
-            // if (!player.isAlive) hurt = DEATH_GLITCH;
-            
             if (!player.isAlive && grayscaleOK) BeginShaderMode(grayscaleShader);
             if (hurt <= 0.0f) {
                 // Clean path: one flipped full-screen blit.
@@ -1393,21 +1386,12 @@ int main(int argc, char** argv) {
                 }
             }
             if (!player.isAlive && grayscaleOK) EndShaderMode();
-            // TEMP diagnostic: watch the spectate fade values on death. Remove.
-            // if (!player.isAlive) {
-            //     DrawText(TextFormat("stmr=%.2f  cd=%.2f  spec=%d  hurt=%.2f",
-            //                         player.SpectatingTimer, player.countdownToSpectating,
-            //                         (int)player.isSpectating, hurt),
-            //              10, 30, 20, YELLOW);
-            // }
             // MARK: HUD
             // text size, x, y, color.
             // draw onscreen text HUD. (Death transitions to the GAME_OVER screen
             // below, which owns all death text, so the dead frame renders only its
             // glitched/greyscale frozen world here - no live HUD, no death text.)
             if (player.isAlive) {
-                // DrawFPS(10, 10); // uncomment to show FPS in the top-left corner
-                // DrawText("WASD move | mouse look | Click fire | Space/Ctrl jetpack up-down | Esc toggle cursor", 10, 30, 14, DARKGRAY);
                 DrawText(TextFormat("Rockets: %d", player.ammo), 10, textHeight * 1, 14, YELLOW);
                 DrawText(TextFormat("Fuel: %.1f", player.fuel), 10, textHeight * 2, 14, GREEN);
                 DrawText(TextFormat("Health: %d", player.health), 10, textHeight * 3, 14, RED);

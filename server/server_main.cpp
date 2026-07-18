@@ -485,7 +485,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"ammo\":"   + ji(p.ammo);
         s += ",\"alive\":"  + jb(p.isAlive);
         s += ",\"spec\":"   + jb(p.isSpectating);    // server-owned: dead player has become a free-fly spectator
-        s += ",\"stmr\":"   + jf(p.SpectatingTimer); // post-death spectate countdown (drives the client's greyscale ramp)
+        s += ",\"stmr\":"   + jf(p.spectatingTimer); // post-death spectate countdown (drives the client's greyscale ramp)
         s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (set for unoccupied slots during a match)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
         // A slot renders if a client occupies it OR a bot drives it; genuinely
@@ -636,7 +636,7 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
         nb::putF32(b, p.fuel);
         nb::putI16(b, (int16_t)p.ammo);
         nb::putF32(b, p.flashTimer);
-        nb::putF32(b, p.SpectatingTimer);
+        nb::putF32(b, p.spectatingTimer);
         nb::putI32(b, p.score);
         bool active = connectedSlots.count(i) > 0 || p.isBot; // occupied by a human or bot
         nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)));

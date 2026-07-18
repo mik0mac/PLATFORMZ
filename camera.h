@@ -9,8 +9,9 @@
 
 #include "elements.h"
 
-// Builds a first-person Camera3D directly from Player state - position +
-// eye-height offset, and Player's own yaw/pitch (via Forward()) for look
+// Builds a first-person Camera3D directly from Player state - the eye sits at
+// player.position (the sphere center; there is no separate eye height), and
+// Player's own yaw/pitch (via Forward()) give the look
 // direction. Player is the authoritative source; this is read-only,
 // called fresh each frame after player movement/look updates, never the
 // other way around (camera never drives player state).

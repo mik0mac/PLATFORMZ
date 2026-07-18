@@ -51,24 +51,24 @@ only `main.cpp` and `collisions.cpp` as translation units.
   `updateActiveObjects()` erase-removes destroyed/finished objects; `draw()`
   renders; accessors return the vectors **by reference** for collision/systems
   to mutate. Boundary cube is centered on origin; default `halfSize = 60`
-  (`GAMESPACE_HALF_SIZE`), overridden per match by the SMALL/MEDIUM/LARGE
-  `mapSizePresets` in `constants.h` (halfSize 60/90/120).
+  (`GAMESPACE_HALF_SIZE`), overridden per match by the SMALL/MEDIUM/LARGE/XL
+  `mapSizePresets` in `constants.h` (halfSize 90/120/240/360).
 - `shapes.h` — all rendering. Low-level primitives (`DrawShadedWireBox`,
   `DrawShadedSphere`, `DrawGridRoom`) and one
   `Draw<Type>(const T&)` per element. No game state is mutated here.
 - `collisions.h` / `collisions.cpp` — collision detection **and** response.
   Spatial-grid broad phase + narrow-phase geometry + game-rule reactions.
-- `camera.h` — `CameraFromPlayer(player, eyeHeight)` builds the first-person
-  `Camera3D` from player state each frame.
+- `camera.h` — `CameraFromPlayer(player)` builds the first-person `Camera3D`
+  from player state each frame (eye at the player-sphere center).
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
 - `WireframeTests/` — **gitignored** scratch dir of prototypes (2D/3D wireframe
   experiments, Godot tests) that much of this code was pulled from. Not built.
 
 ## Collision system (collisions.cpp)
 - `RunCollisionChecks()` runs once per frame (after positions update, before
-  active-object cleanup): rebuild grid → rocket-vs-{asteroid,platform,wall} →
-  apply explosion splash damage → asteroid-vs-{player,platform,wall} →
-  player-vs-{platform,wall}.
+  active-object cleanup): rebuild grid → rocket-vs-{asteroid,platform,wall,player}
+  → apply explosion splash damage → asteroid-vs-player → player-vs-player →
+  asteroid-vs-platform → player-vs-{platform,wall} → asteroid-vs-wall.
 - **Broad phase:** `CollisionGrid` buckets only the *dynamic* objects
   (asteroids, rockets, players) into a 3D spatial hash, rebuilt each frame.
   Narrow phase only tests objects in the same cell or its 26 neighbors.
@@ -78,13 +78,14 @@ only `main.cpp` and `collisions.cpp` as translation units.
   candidates via `CollisionGrid::GatherPlatformNeighbors`. Explosions are **not**
   bucketed (few active at once) — they're brute-forced; the `grid` param is kept
   for signature consistency where unused.
-- **Narrow phase:** `SphereIntersectsSphere` (asteroid/rocket pairs) and
-  `SphereIntersectsBox` (sphere vs axis-aligned box for player/platform).
-  Boxes are AABBs — no rotation. Asteroids/rockets are spheres (`size` = radius);
-  players/platforms are boxes (`size` = full w/h/d).
+- **Narrow phase:** `SphereIntersectsSphere` (sphere pairs) and
+  `SphereIntersectsBox` (sphere vs axis-aligned box, for anything-vs-platform).
+  Boxes are AABBs — no rotation. Asteroids/rockets (`size` = radius) and players
+  (`radius`) are spheres; platforms are boxes (`size` = full w/h/d).
 - **Response** lives next to detection on purpose (this scale: tightly coupled).
-  Walls reflect velocity scaled by `space.wall_elasticity`; bounds are inset by
-  the object's extent so the whole body (and the player's eye height) stays
+  Walls reflect velocity scaled by the Walls element's per-type elasticity
+  (`walls.elasticityPlayer` / `elasticityAsteroid`); bounds are inset by the
+  object's extent so the whole body (and thus the first-person eye) stays
   inside the cube. Rocket hits spawn an `Explosion`; all rocket damage is dealt
   via `ApplyExplosionSplashDamage` (distance falloff), not a direct hit — even
   the directly-hit asteroid is damaged by the blast it spawns.

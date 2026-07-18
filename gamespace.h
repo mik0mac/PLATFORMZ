@@ -237,7 +237,7 @@ public:
             p.coolDownTime  = 0.0f;
             p.isUsingJetpack = false;
             p.isSpectating   = false;                 // fresh match: no one is spectating yet
-            p.SpectatingTimer = p.countdownToSpectating; // re-arm the post-death spectate delay
+            p.spectatingTimer = p.countdownToSpectating; // re-arm the post-death spectate delay
         }
         placePlayersSpread(); // reposition all slots spread across the new platforms (issue #5)
         rockets.clear();

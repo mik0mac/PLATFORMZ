@@ -304,7 +304,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             p->fuel          = fuel;
             p->ammo          = ammo;
             p->flashTimer    = flash;
-            p->SpectatingTimer = stmr;
+            p->spectatingTimer = stmr;
             p->score         = score;
             p->isAlive       = (flags & 1) != 0;
             p->isBot         = (flags & 2) != 0;
@@ -510,7 +510,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.ammo     = jo.value("ammo", 0);
                 p.isAlive  = jo.value("alive", true);
                 p.isSpectating    = jo.value("spec", false); // server-owned: dead player is now a free-fly spectator
-                p.SpectatingTimer = jo.value("stmr", p.SpectatingTimer); // drives the client-side greyscale ramp
+                p.spectatingTimer = jo.value("stmr", p.spectatingTimer); // drives the client-side greyscale ramp
                 p.isBot    = jo.value("bot", false); // server-owned: which slots are bots (absent on older packets)
                 p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
                 p.isConnected = jo.value("active", true); // hide empty slots client-side

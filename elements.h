@@ -43,11 +43,10 @@ public:
     // position
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the platform.
-    // Vector3 velocity; // For moving platforms, future use: position += velocity * dt;
-    // float speed = 0.0f; // For moving platforms, future use: speed = length(velocity);
 
+    // No-op today: platforms are static. Kept so GameSpace can tick every
+    // element uniformly, and as the hook for moving platforms (isMoving below).
     void updatePos(float dt) {
-    // For moving platforms, future use: position = position + velocity * dt;
     }
 
     // size
@@ -68,23 +67,13 @@ public:
     bool isBouncy = true; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
     float elasticityPlayer = PLATFORM_ELASTICITY_PLAYER; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
     float elasticityAsteroid = PLATFORM_ELASTICITY_ASTEROID; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
-
-private:
-    // static constexpr (not per-instance const) so Platform stays copy-assignable.
-    // static constexpr float max_height = 0.5f;
-    // static constexpr float min_height = 0.1f;
-    // static constexpr float max_width = 20.0f;
-    // static constexpr float min_width = 5.0f;
-    // static constexpr float max_depth = max_width;
-    // static constexpr float min_depth = min_width;
 };
 
 
 //MARK: Reticle
 class Reticle {
 public:
-    Vector3 position; // 3D world position of the reticle, recomputed each frame (post-collision) from the anchor + aim.
-    // eyeHeight is decomissoned, so Reticle::position is based on the player's center point.
+    Vector3 position; // 3D world position of the reticle, recomputed each frame (post-collision) from the anchor + aim. Anchored to the player's center (there is no separate eye height).
     Vector3 anchor{};               // smoothed player center the reticle hangs off of (eased toward player.position)
     bool anchorInitialized = false; // seeds the anchor on the first update so it doesn't glide in from the origin
     float yaw = 0.0f;
@@ -148,15 +137,13 @@ public:
 
     bool isSpectating = false; // Whether the player is currently spectating (not actively playing).  Set in gameSpace.
     float countdownToSpectating = 5.0f; // Countdown length for the player to enter spectating mode after death.
-    float SpectatingTimer = countdownToSpectating; // Timer for the player to enter spectating mode after death.
-
-    uint32_t rocketCounter = 0; // Counter for rockets fired by this player, used to generate unique rocket IDs
+    float spectatingTimer = countdownToSpectating; // Timer for the player to enter spectating mode after death.
 
     // Reticle
     Reticle reticle; // Each player has their own reticle, which is updated based on the player's position and aim direction.
 
     //MARK: Player Move & Pos
-    Vector3 position = {0.0f, 0.0f, 0.0f}; // Center starting position.  Replaced.
+    Vector3 position = {0.0f, 0.0f, 0.0f}; // Player center: the sphere-collider center and the first-person eye. Set at spawn (gamespace.h).
     Vector3 startingPosition; // store the initial position of the player, set during game space generation.
     Vector3 velocity = {0.0f, 0.0f, 0.0f}; // Player velocity, updated by movement input and gravity
 
@@ -324,8 +311,8 @@ public:
         // (authoritative; the flag/timer are synced to clients), on the client for
         // local play. Bots are excluded so a dead AI slot doesn't fly around.
         if (!isAlive && !isBot && !isSpectating) {
-            SpectatingTimer -= dt;
-            if (SpectatingTimer < 0.0f) isSpectating = true;
+            spectatingTimer -= dt;
+            if (spectatingTimer < 0.0f) isSpectating = true;
         }
     }
 
@@ -349,7 +336,7 @@ public:
         return flash_duration > 0.0f ? Clamp(flashTimer / flash_duration, 0.0f, 1.0f) : 0.0f;
     }
 
-    //MARK: Health, fuel, ammo
+    //MARK: Player Health & Ammo
     int health = PLAYER_STARTING_HEALTH;
     int maxHealth = PLAYER_MAX_HEALTH; // Player's maximum health, can be increased by pickups
     bool isAlive = true; // Player is alive if health > 0.
@@ -360,18 +347,17 @@ public:
     int maxAmmo = PLAYER_MAX_AMMO; // Player's maximum ammo, can be increased by pickups
     float fireRate = PLAYER_FIRE_RATE; // Shots per second, can be increased by pickups
     float coolDownTime = 0.0f; // Time remaining until the player can shoot again, based on fire rate
-    float noFuelSfxCooldown = 0.0f; // Throttle for the "empty tank" cue while jetpack is held on empty (ticked in updatePos)
-    float warningSfxCooldown = 0.0f; // Throttle for the low-resource warning alarm (ticked in updatePos)
-    float earthGravSfxCooldown = 0.0f; // Guard against rapid re-triggers of the earth-gravity engage cue (ticked in updatePos)
+    uint32_t rocketCounter = 0; // Counter for rockets fired by this player, used to generate unique rocket IDs
+
+    //MARK: Player SFX throttles (all ticked in updatePos)
+    float noFuelSfxCooldown = 0.0f; // Throttle for the "empty tank" cue while jetpack is held on empty
+    float warningSfxCooldown = 0.0f; // Throttle for the low-resource warning beep + messages (see input.h)
+    float earthGravSfxCooldown = 0.0f; // Guard against rapid re-triggers of the earth-gravity engage cue
     bool  earthGravWasEngaged = false; // Prev-frame earth-gravity state, for rising-edge detection of the engage cue
-    bool  lowHealthWarned = false; // Was-low latch so the low-health message fires once per dip, not every frame (re-armed on recovery)
-    bool  lowFuelWarned = false;   // Was-low latch for the low-fuel message
-    bool  lowAmmoWarned = false;   // Was-low latch for the low-ammo message
-    // bool canShoot = true; // Player can shoot if they have ammo, set to false when ammo reaches zero.
+
+    //MARK: Player Fuel
     float fuel = PLAYER_STARTING_FUEL; // Player starts with this much fuel, can be increased by pickups
     float maxFuel = PLAYER_MAX_FUEL; // Player's maximum fuel, can be increased by pickups
-    // float fuelConsumptionRate = FUEL_CONSUMPTION_RATE; // Per sec.
-    // float fuelRegenRate = FUEL_REGEN_RATE; // Per sec.  Fuel regeneration rate when not using jetpack
     bool hasFuel() const { return fuel > 0.0f; }
     // Enough fuel for the jetpack to produce thrust (updateVelocity's gate).
     // Below JETPACK_MIN_FUEL the tank reads empty even though hasFuel() may be true.
@@ -398,13 +384,13 @@ public:
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
             fuel += dt * FUEL_REGEN_RATE / scarcityFactor; // Regenerate fuel slowly when not using jetpack
-            if (fuel > PLAYER_MAX_FUEL) fuel = PLAYER_MAX_FUEL; // Clamp fuel to max
+            if (fuel > maxFuel) fuel = maxFuel; // Clamp fuel to max
         }
         if (!isAlive) {
             fuel = 0.0f; // If player is dead, fuel is zero
         }
         if (isSpectating) {
-            fuel = PLAYER_MAX_FUEL; // If player is spectating, fuel is max.  Can move freely without jetpack restrictions.
+            fuel = maxFuel; // If player is spectating, fuel is max.  Can move freely without jetpack restrictions.
         }
     }
 
@@ -482,11 +468,8 @@ public:
         if (flashTimer > 0.0f) flashTimer -= dt;
     }
 
-    // shape and collision box
-    float size; // radius of the asteroid
-    // For rendering the asteroid, we can use a wireframe sphere or a simple 3D model.
-    // For collision detection, we will use the position as the center of the sphere,
-    // and size as the radius of the collision sphere.
+    // shape and collision
+    float size; // radius of both the rendered shape and the collision sphere (position = center)
 
     void generateSize() {
         size = RandomFloat(ASTEROID_MIN_SIZE, ASTEROID_MAX_SIZE);
@@ -578,18 +561,14 @@ public:
 
         //MARK: Rocket Out-of-Bounds
         if (isOutOfBounds) {
-            fadeTimer -= (dt / 1.0f);
+            fadeTimer -= dt;
             oobFade(1.0f - (fadeTimer / fadeLength)); // Fade from normal to OOB colors over fadeLength seconds
             if (fadeTimer <= 0.0f) isDestroyed = true;
         }
     }
 
-    // size and collision box
-    // Vector3 size = {0.2f, 0.2f, 0.8f}; // width, height, depth of the rocket's collision box (a small rectangular prism)
-    float size = ROCKET_RADIUS; // Radius.
-    // For rendering the rocket, we can use a wireframe rectangular prism or a simple 3D model.
-    // For collision detection, we will use the position as the center of the rocket,
-    // and size to define the extents of the collision box.
+    // size and collision
+    float size = ROCKET_RADIUS; // radius of the collision sphere, centered on position (the rendered shape is cosmetic)
 
     // appearance
     Color color_outline = ROCKET_OUTLINE_COLOR;
@@ -653,10 +632,6 @@ public:
             }
         }
     }
-
-
-
-private:
 };
 
 //MARK: Spark (VFX particle)

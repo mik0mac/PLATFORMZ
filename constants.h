@@ -75,7 +75,7 @@ const float MOON_GRAVITY = 3.25f; //1.62f; // moon gravity, m/s^2 (assuming 1 un
 const float EARTH_GRAVITY = 19.6133f; //9.81f; // earth gravity, m/s^2 * 2
 
 //MARK: GameSpace Constants
-// these only used as class defaults and are overwritten by the mapSizePresets in main.cpp.
+// These are only class defaults - each match overrides them with a mapSizePreset (below), applied in main.cpp's startGame.
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
 const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game space is considered out of bounds
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
