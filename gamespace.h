@@ -403,12 +403,26 @@ public:
     // builds the depth buffer - then all TRANSLUCENT fills in a single depth-mask-
     // off block. This collapses the per-object batch flushes (~56/frame, the main
     // framerate cost) down to the one flush pair around the fill pass.
+    // Open-space boundary fade for an asteroid: 1 inside the arena, easing to 0
+    // at the out-of-bounds line (where the wrap mirrors it to the far side, so
+    // the fade-out and the fade-back-in meet at fully invisible). Derived from
+    // position each frame - no state, so networked clients get it from the
+    // synced position for free. Always 1 with walls on (nothing gets out).
+    float asteroidBoundaryFade(const Asteroid& asteroid) const {
+        if (wallsEnabled) return 1.0f;
+        float maxAxis = std::max({fabsf(asteroid.position.x),
+                                  fabsf(asteroid.position.y),
+                                  fabsf(asteroid.position.z)});
+        float span = walls.halfSize * (GAMESPACE_OUT_OF_BOUNDS_FACTOR - 1.0f);
+        return 1.0f - Clamp((maxAxis - walls.halfSize) / span, 0.0f, 1.0f);
+    }
+
     void draw(int localPlayerIndex = -1) {
         // ---- Pass 1: opaque wireframes (write depth) ----
         if (wallsEnabled) DrawWalls(walls);
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
-        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE);
+        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
         for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE);
         for (Spark& spark : sparks)            DrawSpark(spark); // wire-only lines
@@ -417,7 +431,7 @@ public:
         BeginTranslucentFill();
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL);
         drawPlayersPass(localPlayerIndex, PASS_FILL);
-        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL);
+        for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);
         for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL);
         EndTranslucentFill();

@@ -502,6 +502,10 @@ int main(int argc, char** argv) {
                 if (m.hasOptions) {
                     if (!sliderPlayersActive) optNumPlayers    = (float)m.optNPlayers;
                     if (!sliderDiffActive)    optBotDifficulty = m.optDiff;
+                    // Networked draw runs off OUR gameSpace, so mirror the server's
+                    // walls option onto it (locally startGame does this) - otherwise
+                    // an open-space match would still render the boundary walls.
+                    gameSpace.wallsEnabled = m.optWalls;
                     if (m.optWalls != optSentWalls) { optWallsEnabled = m.optWalls; optSentWalls = m.optWalls; }
                     if (m.optEgpt  != optSentEgpt)  { optPassThroughPlatformsEarthGrav = m.optEgpt; optSentEgpt = m.optEgpt; }
                     if (m.optPhys  != optSentPhys)  { optRocketsObeyPhysics = m.optPhys; optSentPhys = m.optPhys; }
