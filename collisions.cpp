@@ -365,9 +365,24 @@ void CheckAsteroidPlayerCollisions(GameSpace& space, const CollisionGrid& grid) 
                         space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
                         Message msg(MSG_TYPE_ASTEROID_COLLISION, player.name, "", player.id, 0);
                         space.emitMessage(msg);
+                    } else {
+                        // Fatal ram: no killer to credit, so just announce it.
+                        // The death sound + burst fire in updateActiveObjects
+                        // like any other death (see the lost-in-space path).
+                        Message msg(MSG_TYPE_ASTEROID_ELIMINATION, player.name, "", player.id, 0);
+                        space.emitMessage(msg);
                     }
                     asteroid.takeDamage(player.damage);
-                    if (asteroid.isDestroyed) {
+                    if (asteroid.isDestroyed && player.isAlive) {
+                        // Same bonus as destroying an asteroid with a rocket.
+                        // The award helpers no-op for dead players, so a ram
+                        // that kills the rammer earns nothing - gate the
+                        // message/sound on isAlive to match.
+                        awardPoints(&player, asteroid.scoreAward);
+                        awardFuel(&player, asteroid.fuelAward);
+                        awardAmmo(&player, asteroid.ammoAward);
+                        awardHealth(&player, asteroid.healthAward);
+
                         space.emitAudio(FX_ASTEROID_BONUS, player.position, player.id);
                         Message msg(MSG_TYPE_ASTEROID_BONUS, player.name, "", player.id, 0);
                         space.emitMessage(msg);

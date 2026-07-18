@@ -188,8 +188,15 @@ class Message {
                 color = RED;
                 visibility.set(VIS_PLAYER_A); // only the player who is out of bounds sees this message
                 break;
+            // The two "WAS" templates need verb agreement: the caller passes
+            // pa = "YOU" for the local player (main.cpp), which takes "WERE".
             case MSG_TYPE_LOST_IN_SPACE:
-                text = pa + " WAS LOST IN SPACE.";
+                text = pa + (pa == "YOU" ? " WERE" : " WAS") + " LOST IN SPACE.";
+                color = BLUE;
+                visibility.set(VIS_ALL); // all players see this message, like an elimination
+                break;
+            case MSG_TYPE_ASTEROID_ELIMINATION:
+                text = pa + (pa == "YOU" ? " WERE" : " WAS") + " ELIMINATED BY AN ASTEROID.";
                 color = BLUE;
                 visibility.set(VIS_ALL); // all players see this message, like an elimination
                 break;
