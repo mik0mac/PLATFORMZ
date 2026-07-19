@@ -491,6 +491,11 @@ int main(int argc, char** argv) {
     auto enterNetworkedMatch = [&]() {
         prevHealth = -1; netHurt = 0.0f;
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
+        // Start the match with clean feeds: the game-over -> countdown ->
+        // playing route never passes through returnToTitle, so clear here too
+        // (covers leftovers from the tail end of the previous match).
+        audioQueue.clearAll();
+        messageQueue.clearAll();
         showControls = false; showOptions = false; // close any open lobby modal so it can't hold the freed cursor
         DisableCursor();
         consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
@@ -554,6 +559,15 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        // The lobby/countdown/game-over screens that call pumpNet all `continue`
+        // before the PLAYING body's drains, so the kill-feed messages and audio
+        // events each state packet APPENDS to gameSpace would otherwise pile up
+        // for as long as those screens are shown (the server keeps simulating
+        // the bot fight through GAMEOVER) - then burst-replay on the first
+        // frame of the next match. These screens ignore the event feed by
+        // design, so drop it at the source.
+        gameSpace.getMessages().clear();
+        gameSpace.getAudioEvents().clear();
         return phase;
     };
 
@@ -562,6 +576,10 @@ int main(int argc, char** argv) {
     // server owns the world and resyncs it. The NetClient dtor closes on exit.
     auto returnToTitle = [&]() {
         if (!networked) gameSpace.clear();
+        // Drop any not-yet-played sounds and still-live kill-feed entries from
+        // the match we just left, so they can't replay on the next one.
+        audioQueue.clearAll();
+        messageQueue.clearAll();
         botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
         EnableCursor(); // free the cursor for the title menu
         showControls = false; showOptions = false; // no stale modal flag leaking back onto the lobby
@@ -1273,14 +1291,12 @@ int main(int argc, char** argv) {
         // Play all queued sound events after the state updates. Skip while
         // networked-but-not-yet-connected: localPlayer is still null until the
         // first server packet (the connecting-screen guard below handles that
-        // frame), and nothing has queued a sound yet anyway.
-        // MARK: AUDIO QUEUE FLUSH
-        if (screen == GameScreen::TITLE) {
-            // Back at the title: drop stale match sounds instead of playing them.
-            audioQueue.clearAll();
-        } else if (localPlayer != nullptr) {
+        // frame), and nothing has queued a sound yet anyway. This code only
+        // runs on PLAYING frames (every other screen `continue`s before it);
+        // stale-feed cleanup between matches lives in pumpNet /
+        // returnToTitle / enterNetworkedMatch.
+        if (localPlayer != nullptr)
             audioQueue.flush(*localPlayer);
-        }
 
         // MARK: MESSAGE CUE DRAIN
         // messages from the gameSpace are pushed into the local player queue.
@@ -1289,11 +1305,6 @@ int main(int argc, char** argv) {
         }
         // messages removed from gameSpace.
         gameSpace.getMessages().clear();
-        // Clear the queue when returning to the title screen so old messages
-        // don't linger and pop up on the next match.
-        if (screen == GameScreen::TITLE && !messageQueue.empty()) {
-            messageQueue.clearAll();
-        }
 
 
         // MARK: ESCAPE KEY / CURSOR TOGGLE
