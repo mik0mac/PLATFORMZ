@@ -153,6 +153,12 @@ public:
         queue.clear();
     }
 
+    void clearAll() {
+        queue.clear();
+    }
+
+    bool empty() const { return queue.empty(); }
+
 private:
     std::vector<AudioEvent> queue;
 };

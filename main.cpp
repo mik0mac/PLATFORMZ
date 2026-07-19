@@ -181,6 +181,12 @@ int main(int argc, char** argv) {
     const int screenHeight = 700;
     const int textHeight = 20;
     InitWindow(screenWidth, screenHeight, "PLATFORMZ");
+    // Assets load by relative path (assets/sounds, assets/music), so anchor the
+    // working directory to the binary's own folder. Without this, launching the
+    // executable from anywhere else (double-clicking it in Finder runs it from
+    // ~) makes every asset load fail and the game runs fully silent. On the
+    // web build GetApplicationDirectory() is "/", where the preloaded FS lives.
+    ChangeDirectory(GetApplicationDirectory());
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
                           // quit key - quit via the window close button or Cmd+Q.
@@ -1268,8 +1274,13 @@ int main(int argc, char** argv) {
         // networked-but-not-yet-connected: localPlayer is still null until the
         // first server packet (the connecting-screen guard below handles that
         // frame), and nothing has queued a sound yet anyway.
-        if (localPlayer != nullptr)
+        // MARK: AUDIO QUEUE FLUSH
+        if (screen == GameScreen::TITLE) {
+            // Back at the title: drop stale match sounds instead of playing them.
+            audioQueue.clearAll();
+        } else if (localPlayer != nullptr) {
             audioQueue.flush(*localPlayer);
+        }
 
         // MARK: MESSAGE CUE DRAIN
         // messages from the gameSpace are pushed into the local player queue.
@@ -1278,6 +1289,11 @@ int main(int argc, char** argv) {
         }
         // messages removed from gameSpace.
         gameSpace.getMessages().clear();
+        // Clear the queue when returning to the title screen so old messages
+        // don't linger and pop up on the next match.
+        if (screen == GameScreen::TITLE && !messageQueue.empty()) {
+            messageQueue.clearAll();
+        }
 
 
         // MARK: ESCAPE KEY / CURSOR TOGGLE

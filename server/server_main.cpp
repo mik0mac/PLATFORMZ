@@ -43,6 +43,7 @@
 #include <vector>
 #include <array>
 #include <deque>
+#include <algorithm> // std::sort (match-start slot compaction)
 #include <sstream>
 #include <iomanip>
 
@@ -259,19 +260,26 @@ static int ClaimFreeSlot() {
 // applies (see nameDirty). Caller MUST hold gameMutex; `claimed` is the set of
 // client-owned slot indices, gathered by the caller under clientMutex (this
 // helper never touches `clients`, so it can't deadlock on the lock order).
-static void refreshBotSlots(const std::set<int>& claimed) {
+//
+// `allowBotify` is true only in the LOBBY/COUNTDOWN phases: the match roster is
+// final once play begins. Mid-match (PLAYING/GAMEOVER) a claimed slot still
+// flips bot->human (a joiner takes over the body), but a leaver's slot is NOT
+// given to a bot - the body stays open, drifting, keeping its name/score/health,
+// so the player can reconnect and resume it (ClaimFreeSlot hands back the
+// lowest free slot, which is theirs - humans are compacted below the bots).
+static void refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
     auto& players = gameSpace.getPlayers();
     for (int i = 0; i < (int)players.size(); ++i) {
         bool bot = claimed.count(i) == 0;
-        players[i].isBot = bot;
-        if (bot) {
-            // Same NATO label local mode shows (slot 1 -> first name). Guarded
-            // modulo so a bot at slot 0 (all humans gone) still names cleanly.
-            int nameIdx = ((i - 1) % BOT_NAME_COUNT + BOT_NAME_COUNT) % BOT_NAME_COUNT;
-            players[i].name          = BOT_NAME_STRINGS[nameIdx];
-            players[i].color_outline = BOT_OUTLINE_COLOR;
-            players[i].color_fill    = BOT_FILL_COLOR;
-        }
+        if (!bot) { players[i].isBot = false; continue; }
+        if (!allowBotify) continue; // mid-match leaver: leave the slot open
+        players[i].isBot = true;
+        // Same NATO label local mode shows (slot 1 -> first name). Guarded
+        // modulo so a bot at slot 0 (all humans gone) still names cleanly.
+        int nameIdx = ((i - 1) % BOT_NAME_COUNT + BOT_NAME_COUNT) % BOT_NAME_COUNT;
+        players[i].name          = BOT_NAME_STRINGS[nameIdx];
+        players[i].color_outline = BOT_OUTLINE_COLOR;
+        players[i].color_fill    = BOT_FILL_COLOR;
     }
 }
 
@@ -488,9 +496,11 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
         s += ",\"stmr\":"   + jf(p.spectatingTimer); // post-death spectate countdown (drives the client's greyscale ramp)
         s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (set for unoccupied slots during a match)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
-        // A slot renders if a client occupies it OR a bot drives it; genuinely
-        // empty slots (lobby / no bot) stay hidden client-side.
-        s += ",\"active\":" + jb(connectedSlots.count(i) > 0 || p.isBot); // slot occupied by human or bot?
+        // A slot is shown if a human occupies it, a bot drives it, or - once a
+        // match is underway (roster final) - unconditionally, so a mid-match
+        // leaver's open body stays visible/killable instead of going invisible.
+        s += ",\"active\":" + jb(connectedSlots.count(i) > 0 || p.isBot
+                                 || gamePhase.load() != Phase::LOBBY);
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
         s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
         s += "}";
@@ -638,7 +648,10 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
         nb::putF32(b, p.flashTimer);
         nb::putF32(b, p.spectatingTimer);
         nb::putI32(b, p.score);
-        bool active = connectedSlots.count(i) > 0 || p.isBot; // occupied by a human or bot
+        // Same rule as the JSON builder: in-match slots stay visible even when
+        // their human left (open body awaiting a reconnect).
+        bool active = connectedSlots.count(i) > 0 || p.isBot
+                      || gamePhase.load() != Phase::LOBBY;
         nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)));
         nb::putStr(b, p.name);
     }
@@ -1122,18 +1135,38 @@ void SimulationLoop() {
             // reset the existing player slots (ids stay stable so connected
             // clients keep their slot mapping across a restart), then begin.
             if (startRequested.exchange(false)) {
-                // Resize the roster to the requested match size, but never below the
-                // highest connected client's slot (no connected player loses their
-                // body). Empty slots become bots via the per-tick reconcile. Do this
-                // BEFORE generate so resetPlayersForMatch/placePlayersSpread size to
-                // the final count. (lock order gameMutex->clientMutex preserved.)
-                int want = pendingPlayers.load(), maxClaimed = 0, connectedAtStart = 0;
+                // Compact the connected clients into the lowest slots, in their
+                // current slot order (order-preserving, so the host - lowest
+                // slot - stays the host). This closes the hole a mid-session
+                // leaver left behind: the next human takes over their slot (and
+                // its color), and the roster can shrink down to the humans that
+                // are actually here instead of being floored by the highest
+                // claimed slot. nameDirty re-applies each client's name to its
+                // NEW slot via the per-tick name sync. Every client is told its
+                // new slot by the justStarted welcome resend below.
+                // (lock order gameMutex->clientMutex preserved.)
+                int want = pendingPlayers.load(), connectedAtStart = 0;
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
                     connectedAtStart = (int)clients.size();
-                    for (auto& [cid, c] : clients) maxClaimed = std::max(maxClaimed, c.playerId + 1);
+                    std::vector<std::pair<int, uint64_t>> order; // (slot, connId)
+                    for (auto& [cid, c] : clients) order.push_back({c.playerId, cid});
+                    std::sort(order.begin(), order.end());
+                    for (int i = 0; i < (int)order.size(); ++i) {
+                        auto& c = clients[order[i].second];
+                        if (c.playerId != i)
+                            std::cout << "Slot compact: player " << c.playerId
+                                      << " -> " << i << " (" << c.name << ")\n";
+                        c.playerId  = i;
+                        c.nameDirty = true;
+                    }
                 }
-                want = std::min(std::max(want, maxClaimed), GAMESPACE_NUMBER_OF_PLAYERS);
+                // Resize the roster to the requested match size, but never below
+                // the number of connected humans (no one loses their body). Slots
+                // beyond the humans become bots via the per-tick reconcile. Do this
+                // BEFORE generate so resetPlayersForMatch/placePlayersSpread size to
+                // the final count.
+                want = std::min(std::max(want, connectedAtStart), GAMESPACE_NUMBER_OF_PLAYERS);
                 // Clamp the preset's asteroid count to the UDP state-packet
                 // budget for this roster, so a full tick fits one unfragmented
                 // datagram (oversized ticks chunk lossily - see netbin.h).
@@ -1201,9 +1234,11 @@ void SimulationLoop() {
 
             //MARK: Reap idle UDP clients
             // UDP has no disconnect event, so a client that quit just goes quiet.
-            // Free any UDP slot whose last packet is older than the timeout; the
-            // bot reconcile below then turns the vacated slot back into a bot.
-            // (WS clients are cleaned up by their Read()-error callback instead.)
+            // Free any UDP slot whose last packet is older than the timeout. In
+            // the lobby the bot reconcile below turns the vacated slot into a
+            // bot; mid-match the body stays open for a reconnect (see
+            // refreshBotSlots). (WS clients are cleaned up by their
+            // Read()-error callback instead.)
             {
                 std::lock_guard<std::mutex> gc(clientMutex);
                 double now = NowSec();
@@ -1240,11 +1275,19 @@ void SimulationLoop() {
             // Reconcile bot ownership every tick in EVERY phase: any slot without a
             // connected client is a bot (named + colored). Running it in the lobby
             // too means the title-screen player list previews the bots that will
-            // fill the match (and updates live as humans join/leave); in a match it
-            // also handles a mid-match disconnect (a bot reclaims the body) and a
-            // join (the bot yields). Cheap - a handful of slots. Bots are only
-            // DRIVEN in PLAYING/GAMEOVER (below); in the lobby they just hold a slot.
-            { std::lock_guard<std::mutex> gc(clientMutex); refreshBotSlots(gatherClaimedSlots()); }
+            // fill the match (and updates live as humans join/leave). Botifying is
+            // allowed only while the roster is still forming (LOBBY/COUNTDOWN):
+            // once play begins, a mid-match disconnect leaves the body OPEN (not
+            // bot-driven) so the player can reconnect and resume it, while a
+            // mid-match join still flips a slot bot->human (the bot yields).
+            // Cheap - a handful of slots. Bots are only DRIVEN in
+            // PLAYING/GAMEOVER (below); in the lobby they just hold a slot.
+            {
+                Phase ph = gamePhase.load();
+                bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN);
+                std::lock_guard<std::mutex> gc(clientMutex);
+                refreshBotSlots(gatherClaimedSlots(), allowBotify);
+            }
 
             //MARK: Tick sim
             // Keep simulating through PLAYING *and* GAMEOVER; only LOBBY (no world

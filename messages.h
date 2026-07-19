@@ -234,6 +234,12 @@ public:
         }
     }
 
+    void clearAll() {
+        queue.clear();
+    }
+
+    bool empty() const { return queue.empty(); }
+
     // MARK: get messages
     std::vector<Message>& getMessages() { return queue; }
 

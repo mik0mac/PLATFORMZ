@@ -58,8 +58,12 @@ public:
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
     bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
     
-    uint32_t nextID = NON_PLAYER_ID_BASE; // Platforms and Asteroids (0x00000100) 256, 257, 258, ... 
-    uint32_t nextPlayerID = PLAYER_ID_BASE; // (0x00000001) 1, 2, 3, ... 255.
+    uint32_t nextID = NON_PLAYER_ID_BASE; // Platforms and Asteroids (0x00000100) 256, 257, 258, ...
+    // Player ids are SLOT-STABLE: id = slot + 1 (PLAYER_ID_BASE), never minted
+    // from a counter. Networked clients sync players BY id into an append-only
+    // local vector and index it by slot (colors, camera, prediction), so a slot
+    // that shrinks away and later re-grows must come back under the SAME id -
+    // a fresh id would append a duplicate entry and shift every index after it.
     // Rockets' IDs generated in input.h
 
 
@@ -187,8 +191,8 @@ public:
         players.clear();
         for (int i = 0; i < number_of_players; ++i) {
             Player player;
-            //MARK: Player ID
-            player.id = nextPlayerID++;
+            //MARK: Player ID (slot-stable: slot i is always id i+1)
+            player.id = PLAYER_ID_BASE + (uint32_t)i;
             //MARK: Player Color (round-robin human colors; bots recolored by the caller)
             assignPlayerColor(player, i);
             // Unique default name per slot so un-named humans read distinctly
@@ -475,7 +479,9 @@ public:
         while ((int)players.size() > number_of_players) players.pop_back();
         while ((int)players.size() < number_of_players) {
             Player player;
-            player.id = nextPlayerID++;
+            // Slot-stable id (see nextID comment): re-growing slot i always
+            // re-uses id i+1, so clients re-match their existing entry.
+            player.id = PLAYER_ID_BASE + (uint32_t)players.size();
             assignPlayerColor(player, (int)players.size());
             player.name = "PLAYER " + std::to_string(players.size() + 1); // unique default (see spawnPlayers)
             players.push_back(player);
