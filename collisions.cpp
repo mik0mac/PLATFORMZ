@@ -121,10 +121,17 @@ bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 box
 
 //MARK: Spawn Explosion
 // avoid repeated code in CheckRocketAsteroidCollisions, CheckRocketPlatformCollisions, and CheckRocketWallCollisions
-Explosion spawnExplosion(Vector3 position, uint32_t ownerId) {
+// radiusScale is the OPTIONS EXPLOSION RADIUS multiplier (GameSpace::
+// explosionRadiusScale): it grows the damage radius and the blast visual
+// together (expansionRate too, so lifetime stays constant - a big blast grows
+// faster, not slower). Damage per hit is unchanged; falloff just reaches farther.
+Explosion spawnExplosion(Vector3 position, uint32_t ownerId, float radiusScale) {
     Explosion explosion;
     explosion.ownerId = ownerId; // track which player fired this rocket
     explosion.position = position;
+    explosion.damageRadius *= radiusScale;
+    explosion.maxRadius *= radiusScale;
+    explosion.expansionRate *= radiusScale;
     return explosion;
 }
 
@@ -197,7 +204,7 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // double-damaging the asteroid this hit produced.
                     rocket.isDestroyed = true;
 
-                    Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId);
+                    Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId, space.explosionRadiusScale);
                     explosions.push_back(explosion);
                     space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -240,7 +247,7 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 // Detonate at the entry point on the platform, not past it.
                 Vector3 impact = Vector3Lerp(rocket.prevPosition, rocket.position, tHit);
-                Explosion explosion = spawnExplosion(impact, rocket.ownerId);
+                Explosion explosion = spawnExplosion(impact, rocket.ownerId, space.explosionRadiusScale);
                 explosions.push_back(explosion);
                 space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -287,7 +294,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
         rocket.position.z = Clamp(rocket.position.z, -halfSize, halfSize);
         rocket.isDestroyed = true;
 
-        Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId);
+        Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId, space.explosionRadiusScale);
         explosions.push_back(explosion);
         space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
     }
@@ -330,7 +337,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
                 if (SphereIntersectsSphere(rocket.position, rocket.size, player.position, player.radius)) {
                     rocket.isDestroyed = true;
 
-                    Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId);
+                    Explosion explosion = spawnExplosion(rocket.position, rocket.ownerId, space.explosionRadiusScale);
                     explosions.push_back(explosion);
                     space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -491,7 +498,7 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 // Under earth gravity, fall straight through platforms - skip all
                 // collision response for this platform so the player passes
                 // through instead of landing. (Always on; formerly an OPTIONS
-                // toggle, its menu slot now hosts HYPED MODE.)
+                // toggle.)
 
                 // Only resolve when the player is moving down into the platform.
                 // This lets the player pass up through it from below, and -

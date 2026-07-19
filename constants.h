@@ -127,7 +127,7 @@ const float PLATFORM_MAX_HEIGHT = 0.5f; // Maximum height of the platform
 const float PLATFORM_MIN_DEPTH = PLATFORM_MIN_WIDTH; // Minimum depth of the platform
 const float PLATFORM_MAX_DEPTH = PLATFORM_MAX_WIDTH; // Maximum depth of the platform
 
-const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Always on for all games (its OPTIONS slot now hosts HYPED MODE).
+const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass through platforms when Earth gravity is enabled. Always on for all games (no longer an OPTIONS toggle).
 
 
 //MARK: Player Shape / Size
@@ -170,12 +170,8 @@ const float PLAYER_SPEED_WALK = 18.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
-//MARK: Hyped mode
-// OPTIONS "HYPED MODE" (replaces the old EARTH GRAV pass-through toggle, which
-// is now always on): one match-wide flag that scales jetpack horizontal speed +
-// acceleration (vertical thrust unchanged) and rocket speed.
-const bool  HYPED_MODE = false;      // Default for the OPTIONS toggle.
-const float HYPED_MODE_SCALE = 2.0f; // Multiplier applied to both effects while HYPED MODE is on.
+// The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
+// THRUST sliders (MatchOptions in options.h) multiply them per match.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -185,13 +181,12 @@ const int PLAYER_STARTING_HEALTH = PLAYER_MAX_HEALTH;
 const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
-const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
-const float FUEL_REGEN_RATE = 2.0f; // Per sec, at neutral FUEL SCARCITY (0.5).
-// OPTIONS "FUEL SCARCITY" slider [0..1]. 0.5 is neutral (the rates above as-is);
-// the scarcity factor 2^(2s-1) doubles every +0.5 on the slider: at 1.0 fuel
-// burns 2x as fast and regenerates half as fast, at 0.0 the reverse. Replaces
-// the old map-size and HYPED MODE regen multipliers.
-const float FUEL_SCARCITY_DEFAULT = 0.5f;
+// Fuel rates are OPTIONS sliders now (MatchOptions in options.h): FUEL
+// CONSUMPTION is a direct units/sec value (tank is 100, so it reads as %/sec)
+// defaulting to the rate below; FUEL REGEN is a percentage of the consumption
+// rate, so the 40% default recreates the old 2/sec regen (40% of 5).
+const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec; default for the OPTIONS slider.
+const int FUEL_REGEN_PCT_DEFAULT = 40; // Regen as % of consumption; default for the OPTIONS slider.
 const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
 const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
 

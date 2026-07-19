@@ -390,34 +390,40 @@ int main(int argc, char** argv) {
     bool        showControls = false; // controls popup is open
     bool        showOptions  = false; // options popup is open
 
-    // OPTIONS sliders (see the OPTIONS modal below). Stored as floats so UiSlider
-    // can drive them; cast where an int is needed. Defaults match the constants.
-    float optNumPlayers    = (float)GAMESPACE_DEFAULT_PLAYERS; // default 4; slider range 1..GAMESPACE_NUMBER_OF_PLAYERS
-    float optBotDifficulty = BOT_DIFFICULTY_DEFAULT;            // starting value; slider range is 0.0..BOT_DIFFICULTY
+    // OPTIONS (see the OPTIONS modal below): one MatchOptions bundle drives the
+    // sim (locally applied via GameSpace::applyOptions, remotely threaded
+    // through serializeStart/serializeOptions). Drag latches guard the sliders
+    // from server echoes while the mouse is on them.
+    MatchOptions opt;
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
     std::vector<int> botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
-    bool  sliderPlayersActive  = false; // drag latch for the players slider
-    bool  sliderDiffActive     = false; // drag latch for the difficulty slider
-    bool  sliderScarcityActive = false; // drag latch for the fuel-scarcity slider
-    float optFuelScarcity = FUEL_SCARCITY_DEFAULT; // OPTIONS FUEL SCARCITY slider [0..1]; 0.5 = neutral, 1.0 = 2x burn + half regen
-    // OPTIONS toggles (bool gameplay rules; defaults from constants.h). Applied to
-    // the GameSpace at match start - locally in startGame, remotely via serializeStart.
-    bool  optWallsEnabled                  = WALLS_ENABLED;                         // ON => boundary walls drawn + collide; OFF => open space (out-of-bounds rules)
-    bool  optHypedMode                     = HYPED_MODE;                            // ON => 2x jetpack horizontal boost, rocket speed, fuel regen
-    bool  optRocketsObeyPhysics            = ROCKETS_OBEY_PHYSICS;                  // ON => rockets obey gravity + inherit shooter velocity
-    bool  optFriendlyFire                  = FRIENDLY_FIRE;                         // OFF => a player's own blast deals no self-damage
+    bool sliderPlayersActive = false; // drag latch: NUMBER OF PLAYERS
+    bool sliderDiffActive    = false; // drag latch: BOT DIFFICULTY
+    bool sliderWElastActive  = false; // drag latch: WALL ELASTICITY
+    bool sliderPElastActive  = false; // drag latch: PLATFORM ELASTICITY
+    bool sliderBoostActive   = false; // drag latch: SPEED BOOST
+    bool sliderRSpeedActive  = false; // drag latch: ROCKET VELOCITY
+    bool sliderJThrustActive = false; // drag latch: JETPACK THRUST
+    bool sliderFBurnActive   = false; // drag latch: FUEL CONSUMPTION
+    bool sliderFRegenActive  = false; // drag latch: FUEL REGEN
+    bool sliderXRadiusActive = false; // drag latch: EXPLOSION RADIUS
+    // UiSlider needs a float&; NUMBER OF PLAYERS and the two fuel controls are
+    // ints in MatchOptions, so they get float shadows here, synced into
+    // opt.numPlayers/fuelConsumption/fuelRegenPct on change (see the modal below).
+    float optNumPlayersF = (float)opt.numPlayers;
+    float optFuelBurnF   = (float)opt.fuelConsumption;
+    float optFuelRegenF  = (float)opt.fuelRegenPct;
     // Networked options sync (lobby): the server echoes the match-wide options in
-    // every state packet so any client's change shows live. The two sliders are
-    // guarded from server echoes while being dragged (their active latches); the
-    // toggles have no such latch, so we remember the value we last sent and only
-    // accept a server toggle that differs from it - that keeps our own click from
-    // being flipped back before the server's echo of it arrives.
-    bool  optSentWalls = optWallsEnabled;
-    bool  optSentHyped = optHypedMode;
-    bool  optSentPhys  = optRocketsObeyPhysics;
-    bool  optSentFf    = optFriendlyFire;
+    // every state packet so any client's change shows live. Sliders are guarded
+    // from server echoes while being dragged (their active latches); the toggles
+    // have no such latch, so we remember the value we last sent and only accept
+    // a server toggle that differs from it - that keeps our own click from being
+    // flipped back before the server's echo of it arrives.
+    bool  optSentWalls = opt.wallsEnabled;
+    bool  optSentPhys  = opt.rocketsObeyPhysics;
+    bool  optSentFf    = opt.friendlyFire;
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -443,21 +449,14 @@ int main(int argc, char** argv) {
     // the screen flips to PLAYING when the server's phase says so (see the loop).
     auto startGame = [&](float halfSize, int platforms, int asteroids) {
         if (networked) {
-            // Send the chosen map preset + OPTIONS (match size, bot difficulty); the
-            // server applies them before generating the world (first press wins).
-            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids,
-                                                      (int)optNumPlayers, optBotDifficulty, optFuelScarcity,
-                                                      optWallsEnabled, optHypedMode,
-                                                      optRocketsObeyPhysics, optFriendlyFire));
+            // Send the chosen map preset + the full OPTIONS bundle; the server
+            // applies them before generating the world (first press wins).
+            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids, opt));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
-        gameSpace.wallsEnabled = optWallsEnabled;                                 // OPTIONS: boundary walls on vs open space
-        gameSpace.hypedMode = optHypedMode;                                       // OPTIONS: HYPED MODE (2x jetpack horizontal boost + rocket speed)
-        gameSpace.fuelScarcity = optFuelScarcity;                                 // OPTIONS: FUEL SCARCITY slider (0.5 = neutral)
-        gameSpace.rocketsObeyPhysics = optRocketsObeyPhysics;                     // OPTIONS: rockets obey gravity + inherit shooter velocity
-        gameSpace.friendlyFire = optFriendlyFire;                                 // OPTIONS: own blast self-damage on/off
-        gameSpace.setPlayerCount((int)optNumPlayers); // OPTIONS: 1 human + (N-1) bots
+        gameSpace.applyOptions(opt); // OPTIONS: elasticities, speed/rocket/jetpack/explosion scales, fuel rates, gameplay toggles
+        gameSpace.setPlayerCount(opt.numPlayers); // OPTIONS: 1 human + (N-1) bots
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
@@ -475,7 +474,7 @@ int main(int argc, char** argv) {
         }
         // Size per-slot bot state and seed personalities (deterministic from each
         // slot's id, so the same map replays the same bots).
-        botController.init(ps, optBotDifficulty);
+        botController.init(ps, opt.botDifficulty);
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         // World is built but stays frozen: enter the pre-match countdown instead of
         // PLAYING. The COUNTDOWN block below ticks the timer and flips to PLAYING at
@@ -539,23 +538,29 @@ int main(int argc, char** argv) {
                 // a server value that differs from the one we last sent (so our
                 // own click isn't flipped back before its echo returns).
                 if (m.hasOptions) {
-                    if (!sliderPlayersActive)  optNumPlayers    = (float)m.optNPlayers;
-                    if (!sliderDiffActive)     optBotDifficulty = m.optDiff;
-                    if (!sliderScarcityActive) optFuelScarcity  = m.optScarcity;
-                    // Mirror onto our gameSpace (locally startGame does this) so
-                    // anything simulated client-side matches the server.
-                    gameSpace.fuelScarcity = m.optScarcity;
-                    // Networked draw runs off OUR gameSpace, so mirror the server's
-                    // walls option onto it (locally startGame does this) - otherwise
-                    // an open-space match would still render the boundary walls.
-                    gameSpace.wallsEnabled = m.optWalls;
-                    // Mirror HYPED MODE onto our gameSpace too (locally startGame
-                    // does this) so anything simulated client-side matches the server.
-                    gameSpace.hypedMode = m.optHyped;
-                    if (m.optWalls != optSentWalls) { optWallsEnabled = m.optWalls; optSentWalls = m.optWalls; }
-                    if (m.optHyped != optSentHyped) { optHypedMode = m.optHyped; optSentHyped = m.optHyped; }
-                    if (m.optPhys  != optSentPhys)  { optRocketsObeyPhysics = m.optPhys; optSentPhys = m.optPhys; }
-                    if (m.optFf    != optSentFf)    { optFriendlyFire = m.optFf; optSentFf = m.optFf; }
+                    // Update our OPTIONS modal, per-slider guarded by its drag
+                    // latch so a control we're actively dragging isn't stomped.
+                    if (!sliderPlayersActive) { opt.numPlayers = m.opt.numPlayers; optNumPlayersF = (float)opt.numPlayers; }
+                    if (!sliderDiffActive)    opt.botDifficulty      = m.opt.botDifficulty;
+                    if (!sliderWElastActive)  opt.wallElasticity     = m.opt.wallElasticity;
+                    if (!sliderPElastActive)  opt.platformElasticity = m.opt.platformElasticity;
+                    if (!sliderBoostActive)   opt.speedBoost         = m.opt.speedBoost;
+                    if (!sliderRSpeedActive)  opt.rocketSpeedScale   = m.opt.rocketSpeedScale;
+                    if (!sliderXRadiusActive) opt.explosionRadiusScale = m.opt.explosionRadiusScale;
+                    if (!sliderJThrustActive) opt.jetpackThrust      = m.opt.jetpackThrust;
+                    if (!sliderFBurnActive)  { opt.fuelConsumption = m.opt.fuelConsumption; optFuelBurnF  = (float)opt.fuelConsumption; }
+                    if (!sliderFRegenActive) { opt.fuelRegenPct    = m.opt.fuelRegenPct;    optFuelRegenF = (float)opt.fuelRegenPct; }
+
+                    // Mirror the server's full options bundle onto our gameSpace
+                    // regardless of drag state (locally startGame does this) -
+                    // networked draw/sim runs off OUR gameSpace, so an open-space
+                    // match must render open, a bouncy wall must bounce, etc, even
+                    // mid-drag on an unrelated slider.
+                    gameSpace.applyOptions(m.opt);
+
+                    if (m.opt.wallsEnabled       != optSentWalls) { opt.wallsEnabled = m.opt.wallsEnabled; optSentWalls = m.opt.wallsEnabled; }
+                    if (m.opt.rocketsObeyPhysics != optSentPhys)  { opt.rocketsObeyPhysics = m.opt.rocketsObeyPhysics; optSentPhys = m.opt.rocketsObeyPhysics; }
+                    if (m.opt.friendlyFire       != optSentFf)    { opt.friendlyFire = m.opt.friendlyFire; optSentFf = m.opt.friendlyFire; }
                 }
             }
         }
@@ -618,7 +623,7 @@ int main(int argc, char** argv) {
     // exact production startGame path; interactive - you fly, the PERF lines
     // are the record.
     if (benchMode) {
-        optNumPlayers = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
+        opt.numPlayers = benchPlayers; optNumPlayersF = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
         perfOverlay = true;
         SetTargetFPS(0); // uncap so frame times reflect true throughput, not vsync pacing
         startGame(benchHalf, benchPlat, benchRoid);
@@ -774,7 +779,7 @@ int main(int argc, char** argv) {
                 // Networked: preview the roster the match will build - the
                 // connected humans plus bot-fillers up to the chosen NUMBER OF
                 // PLAYERS. The server holds a full slot set (unclaimed ones held by
-                // bots, all flagged isConnected) and echoes optNumPlayers to every
+                // bots, all flagged isConnected) and echoes opt.numPlayers to every
                 // client, so this preview tracks the host's slider live on ALL
                 // clients. Never hide a connected human sitting above the chosen
                 // count (a mid-roster slot can be free while a higher one is taken).
@@ -784,11 +789,11 @@ int main(int argc, char** argv) {
                     int lastHumanSlot = -1;
                     for (int i = 0; i < (int)titlePlayers.size(); ++i)
                         if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) lastHumanSlot = i;
-                    previewCount = std::min(std::max((int)optNumPlayers, lastHumanSlot + 1),
+                    previewCount = std::min(std::max(opt.numPlayers, lastHumanSlot + 1),
                                             (int)titlePlayers.size());
                     rowsShown = previewCount > 0 ? previewCount : 1; // >=1 so the "waiting" line has a row
                 } else {
-                    rowsShown = (int)optNumPlayers; // OPTIONS slider previews the roster
+                    rowsShown = opt.numPlayers; // OPTIONS slider previews the roster
                 }
                 const float rowH = 24.0f, headerH = 30.0f;
                 Rectangle playersBox = {350, 300, 300, headerH + rowsShown * rowH + 10.0f};
@@ -889,19 +894,23 @@ int main(int argc, char** argv) {
                     if (UiModalClose(m, controlsWasOpen)) showControls = false;
                 }
 
-                // Options popup, same opaque modal style. Two functional sliders
-                // (match size + bot difficulty) and four gameplay toggles; they drive
-                // local play directly and ride the start request to the server for
-                // networked play. Taller + raised so four toggles fit the 700px window.
+                // Options popup, same opaque modal style. Two columns of five
+                // sliders (match size/difficulty, elasticities, speed/rocket/
+                // jetpack/explosion multipliers, fuel rates) plus a row of three
+                // gameplay toggles; they drive local play directly and ride the
+                // start request to the server for networked play. Wide + raised
+                // so both columns and the toggle row fit the 700px window.
                 if (showOptions) {
-                    Rectangle m = {250, 10, 500, 680}; // three sliders + four toggles + CLOSE
+                    Rectangle m = {110, 10, 780, 680}; // two 5-slider columns + toggle row + CLOSE
                     UiModalChrome(m, "OPTIONS");
 
-                    float lx = m.x + 40, sw = m.width - 80;
-                    // Right-aligned value readout next to each label.
-                    auto valueRight = [&](const char* v, int y) {
+                    const float colW = 330.0f, gutter = 40.0f;
+                    float lxL = m.x + 40, lxR = lxL + colW + gutter;
+                    // Right-aligned value readout next to each label, within
+                    // the given column's right edge.
+                    auto valueAt = [&](const char* v, float colX, int y) {
                         int vw = MeasureText(v, 18);
-                        DrawText(v, (int)(m.x + m.width - 40 - vw), y, 18, ui::OUTLINE);
+                        DrawText(v, (int)(colX + colW - vw), y, 18, ui::OUTLINE);
                     };
 
                     // Each control returns true the frame it changes; in networked
@@ -909,62 +918,108 @@ int main(int argc, char** argv) {
                     // modal updates live (mirrors the name-field sync above).
                     bool optChanged = false;
 
+                    int y1 = (int)m.y + 80, y2 = y1 + 85, y3 = y2 + 85, y4 = y3 + 85, y5 = y4 + 85;
+
+                    // --- Left column ---
                     // NUMBER OF PLAYERS (integer, 1..GAMESPACE_NUMBER_OF_PLAYERS).
-                    int y1 = (int)m.y + 80;
-                    DrawText("NUMBER OF PLAYERS", (int)lx, y1, 18, RAYWHITE);
-                    valueRight(TextFormat("%d", (int)optNumPlayers), y1);
-                    if (UiSlider({lx, (float)(y1 + 26), sw, 22}, optNumPlayers,
+                    DrawText("NUMBER OF PLAYERS", (int)lxL, y1, 18, RAYWHITE);
+                    valueAt(TextFormat("%d", (int)optNumPlayersF), lxL, y1);
+                    if (UiSlider({lxL, (float)(y1 + 26), colW, 22}, optNumPlayersF,
                              1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
-                             sliderPlayersActive, 1.0f)) optChanged = true;
+                             sliderPlayersActive, 1.0f)) {
+                        opt.numPlayers = (int)optNumPlayersF; optChanged = true;
+                    }
 
                     // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
-                    int y2 = y1 + 85;
-                    DrawText("BOT DIFFICULTY", (int)lx, y2, 18, RAYWHITE);
-                    valueRight(TextFormat("%.2f", optBotDifficulty), y2);
-                    if (UiSlider({lx, (float)(y2 + 26), sw, 22}, optBotDifficulty,
+                    DrawText("BOT DIFFICULTY", (int)lxL, y2, 18, RAYWHITE);
+                    valueAt(TextFormat("%.2f", opt.botDifficulty), lxL, y2);
+                    if (UiSlider({lxL, (float)(y2 + 26), colW, 22}, opt.botDifficulty,
                              0.0f, BOT_DIFFICULTY, sliderDiffActive)) optChanged = true;
 
-                    // FUEL SCARCITY (continuous, 0.0..1.0; 0.5 = neutral burn/regen,
-                    // 1.0 = 2x consumption + half regen, 0.0 the reverse).
-                    int y2b = y2 + 85;
-                    DrawText("FUEL SCARCITY", (int)lx, y2b, 18, RAYWHITE);
-                    valueRight(TextFormat("%.2f", optFuelScarcity), y2b);
-                    if (UiSlider({lx, (float)(y2b + 26), sw, 22}, optFuelScarcity,
-                             0.0f, 1.0f, sliderScarcityActive)) optChanged = true;
+                    // WALL ELASTICITY (players only; asteroids keep their constant).
+                    DrawText("WALL ELASTICITY", (int)lxL, y3, 18, RAYWHITE);
+                    valueAt(TextFormat("%.2f", opt.wallElasticity), lxL, y3);
+                    if (UiSlider({lxL, (float)(y3 + 26), colW, 22}, opt.wallElasticity,
+                             0.0f, 1.0f, sliderWElastActive)) optChanged = true;
 
-                    // Toggles: label on its own line, a compact ON/OFF control below
-                    // (labels are long, so keep them off the control's line). Each
-                    // defaults to its constants.h value; applied at match start. The
-                    // sliders use an 85px rhythm; the toggles are tighter at 70px.
-                    int y3 = y2b + 85;
-                    DrawText("BOUNDARY WALLS", (int)lx, y3, 18, RAYWHITE);
-                    if (UiToggle({lx, (float)(y3 + 26), 100, 24}, optWallsEnabled)) {
-                        optChanged = true; optSentWalls = optWallsEnabled;
+                    // PLATFORM ELASTICITY (players only; asteroids keep their constant).
+                    DrawText("PLATFORM ELASTICITY", (int)lxL, y4, 18, RAYWHITE);
+                    valueAt(TextFormat("%.2f", opt.platformElasticity), lxL, y4);
+                    if (UiSlider({lxL, (float)(y4 + 26), colW, 22}, opt.platformElasticity,
+                             0.0f, 1.0f, sliderPElastActive)) optChanged = true;
+
+                    // SPEED BOOST (walk + jetpack speed/accel, and rocket speed).
+                    DrawText("SPEED BOOST", (int)lxL, y5, 18, RAYWHITE);
+                    valueAt(TextFormat("%.1fx", opt.speedBoost), lxL, y5);
+                    if (UiSlider({lxL, (float)(y5 + 26), colW, 22}, opt.speedBoost,
+                             1.0f, 2.0f, sliderBoostActive)) optChanged = true;
+
+                    // --- Right column ---
+                    // ROCKET VELOCITY (on top of SPEED BOOST).
+                    DrawText("ROCKET VELOCITY", (int)lxR, y1, 18, RAYWHITE);
+                    valueAt(TextFormat("%.1fx", opt.rocketSpeedScale), lxR, y1);
+                    if (UiSlider({lxR, (float)(y1 + 26), colW, 22}, opt.rocketSpeedScale,
+                             1.0f, 2.0f, sliderRSpeedActive)) optChanged = true;
+
+                    // JETPACK THRUST (on top of SPEED BOOST; jetpack only).
+                    DrawText("JETPACK THRUST", (int)lxR, y2, 18, RAYWHITE);
+                    valueAt(TextFormat("%.1fx", opt.jetpackThrust), lxR, y2);
+                    if (UiSlider({lxR, (float)(y2 + 26), colW, 22}, opt.jetpackThrust,
+                             1.0f, 2.0f, sliderJThrustActive)) optChanged = true;
+
+                    // FUEL CONSUMPTION (direct units/sec out of the 100-unit tank).
+                    DrawText("FUEL CONSUMPTION", (int)lxR, y3, 18, RAYWHITE);
+                    valueAt(TextFormat("%d/sec", (int)optFuelBurnF), lxR, y3);
+                    if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, optFuelBurnF,
+                             0.0f, 100.0f, sliderFBurnActive, 1.0f)) {
+                        opt.fuelConsumption = (int)optFuelBurnF; optChanged = true;
                     }
 
-                    int y4 = y3 + 70;
-                    DrawText("HYPED MODE", (int)lx, y4, 18, RAYWHITE);
-                    if (UiToggle({lx, (float)(y4 + 26), 100, 24}, optHypedMode)) {
-                        optChanged = true; optSentHyped = optHypedMode;
+                    // FUEL REGEN (percentage of the consumption rate; 100% = keeps pace).
+                    DrawText("FUEL REGEN", (int)lxR, y4, 18, RAYWHITE);
+                    valueAt(TextFormat("%d%%", (int)optFuelRegenF), lxR, y4);
+                    if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, optFuelRegenF,
+                             0.0f, 100.0f, sliderFRegenActive, 1.0f)) {
+                        opt.fuelRegenPct = (int)optFuelRegenF; optChanged = true;
                     }
 
-                    int y5 = y4 + 70;
-                    DrawText("ROCKETS OBEY PHYSICS", (int)lx, y5, 18, RAYWHITE);
-                    if (UiToggle({lx, (float)(y5 + 26), 100, 24}, optRocketsObeyPhysics)) {
-                        optChanged = true; optSentPhys = optRocketsObeyPhysics;
+                    // EXPLOSION RADIUS (damage radius + blast visual; last in the
+                    // modal per its own domain, grouped away from the speed trio).
+                    DrawText("EXPLOSION RADIUS", (int)lxR, y5, 18, RAYWHITE);
+                    valueAt(TextFormat("%.1fx", opt.explosionRadiusScale), lxR, y5);
+                    if (UiSlider({lxR, (float)(y5 + 26), colW, 22}, opt.explosionRadiusScale,
+                             1.0f, 4.0f, sliderXRadiusActive)) optChanged = true;
+
+                    // Toggles: three across, label on its own line, a compact ON/OFF
+                    // control below (labels are long, so keep them off the control's
+                    // line). Each defaults to its constants.h value; applied at match
+                    // start. Sliders use an 85px rhythm; this row sits just below them.
+                    // Three explicit x positions (not the slider columns) so the
+                    // widest label - ROCKETS OBEY PHYSICS, ~230px at font 18 -
+                    // clears its neighbors on both sides.
+                    int y6 = y5 + 85;
+                    float txBoundary = lxL;        // 150
+                    float txPhysics  = lxL + 190.0f; // 340
+                    float txFriendly = lxL + 450.0f; // 600
+
+                    DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
+                    if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
+                        optChanged = true; optSentWalls = opt.wallsEnabled;
                     }
 
-                    int y6 = y5 + 70;
-                    DrawText("FRIENDLY FIRE", (int)lx, y6, 18, RAYWHITE);
-                    if (UiToggle({lx, (float)(y6 + 26), 100, 24}, optFriendlyFire)) {
-                        optChanged = true; optSentFf = optFriendlyFire;
+                    DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
+                    if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
+                        optChanged = true; optSentPhys = opt.rocketsObeyPhysics;
+                    }
+
+                    DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
+                    if (UiToggle({txFriendly, (float)(y6 + 26), 100, 24}, opt.friendlyFire)) {
+                        optChanged = true; optSentFf = opt.friendlyFire;
                     }
 
                     // Push the change to the server (it re-broadcasts to all clients).
                     if (optChanged && networked && net.isOpen())
-                        net.send(serializeOptions((int)optNumPlayers, optBotDifficulty, optFuelScarcity,
-                                                  optWallsEnabled, optHypedMode,
-                                                  optRocketsObeyPhysics, optFriendlyFire));
+                        net.send(serializeOptions(opt));
 
                     if (UiModalClose(m, optionsWasOpen)) showOptions = false;
                 }

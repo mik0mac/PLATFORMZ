@@ -195,10 +195,16 @@ std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
 // clients at consume) and bot difficulty center. Same io->sim handoff as above.
 std::atomic<int>   pendingPlayers{GAMESPACE_DEFAULT_PLAYERS};
 std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
-std::atomic<float> pendingScarcity{FUEL_SCARCITY_DEFAULT}; // OPTIONS FUEL SCARCITY slider (0.5 = neutral)
+std::atomic<float> pendingWallElast{WALL_ELASTICITY_PLAYER};     // OPTIONS WALL ELASTICITY (players only)
+std::atomic<float> pendingPlatElast{PLATFORM_ELASTICITY_PLAYER}; // OPTIONS PLATFORM ELASTICITY (players only)
+std::atomic<float> pendingBoost{1.0f};       // OPTIONS SPEED BOOST
+std::atomic<float> pendingRocketSpeed{1.0f}; // OPTIONS ROCKET VELOCITY
+std::atomic<float> pendingXRadius{1.0f};     // OPTIONS EXPLOSION RADIUS
+std::atomic<float> pendingJThrust{1.0f};     // OPTIONS JETPACK THRUST
+std::atomic<int>   pendingFuelBurn{(int)FUEL_CONSUMPTION_RATE}; // OPTIONS FUEL CONSUMPTION
+std::atomic<int>   pendingFuelRegen{FUEL_REGEN_PCT_DEFAULT};    // OPTIONS FUEL REGEN (% of consumption)
 // OPTIONS bool toggles carried by a start request; defaults from constants.h.
 std::atomic<bool>  pendingWallsEnabled{WALLS_ENABLED};
-std::atomic<bool>  pendingHypedMode{HYPED_MODE};
 std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
 std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
 
@@ -596,12 +602,18 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     // Lobby options (match-wide config), echoed every tick so a change by any
     // client shows live on every client's OPTIONS modal + roster preview.
     s += ",\"opt\":{\"nplayers\":" + ji(pendingPlayers.load());
-    s += ",\"diff\":"   + jf(pendingDiff.load());
-    s += ",\"scarcity\":" + jf(pendingScarcity.load());
-    s += ",\"walls\":"  + jb(pendingWallsEnabled.load());
-    s += ",\"hyped\":"  + jb(pendingHypedMode.load());
-    s += ",\"phys\":"   + jb(pendingRocketsPhysics.load());
-    s += ",\"ff\":"     + jb(pendingFriendlyFire.load());
+    s += ",\"diff\":"     + jf(pendingDiff.load());
+    s += ",\"welast\":"   + jf(pendingWallElast.load());
+    s += ",\"pelast\":"   + jf(pendingPlatElast.load());
+    s += ",\"boost\":"    + jf(pendingBoost.load());
+    s += ",\"rspeed\":"   + jf(pendingRocketSpeed.load());
+    s += ",\"xradius\":"  + jf(pendingXRadius.load());
+    s += ",\"jthrust\":"  + jf(pendingJThrust.load());
+    s += ",\"fburn\":"    + ji(pendingFuelBurn.load());
+    s += ",\"fregen\":"   + ji(pendingFuelRegen.load());
+    s += ",\"walls\":"    + jb(pendingWallsEnabled.load());
+    s += ",\"phys\":"     + jb(pendingRocketsPhysics.load());
+    s += ",\"ff\":"       + jb(pendingFriendlyFire.load());
     s += "}";
 
     s += "}";
@@ -626,12 +638,21 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
     nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
     nb::putF32(b, countdownRemaining.load());
 
-    // Options (match-wide), same values buildStatePacket puts in "opt".
+    // Options (match-wide), same values buildStatePacket puts in "opt". Order
+    // must match applyBinaryState() in wire.h exactly.
     nb::putU8(b, (uint8_t)pendingPlayers.load());
     nb::putF32(b, pendingDiff.load());
-    nb::putF32(b, pendingScarcity.load());
-    nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0) | (pendingHypedMode.load() ? 2 : 0)
-                          | (pendingRocketsPhysics.load() ? 4 : 0) | (pendingFriendlyFire.load() ? 8 : 0)));
+    nb::putF32(b, pendingWallElast.load());
+    nb::putF32(b, pendingPlatElast.load());
+    nb::putF32(b, pendingBoost.load());
+    nb::putF32(b, pendingRocketSpeed.load());
+    nb::putF32(b, pendingXRadius.load());
+    nb::putF32(b, pendingJThrust.load());
+    nb::putU8(b, (uint8_t)pendingFuelBurn.load());
+    nb::putU8(b, (uint8_t)pendingFuelRegen.load());
+    nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0)
+                          | (pendingRocketsPhysics.load() ? 2 : 0)
+                          | (pendingFriendlyFire.load() ? 4 : 0)));
 
     // Players (fixed roster; u8 count is plenty).
     auto& players = gameSpace.getPlayers();
@@ -952,9 +973,15 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
         pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_DEFAULT_PLAYERS);
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
-        pendingScarcity = parseFloat(msg, "scarcity", FUEL_SCARCITY_DEFAULT);
+        pendingWallElast = parseFloat(msg, "welast", WALL_ELASTICITY_PLAYER);
+        pendingPlatElast = parseFloat(msg, "pelast", PLATFORM_ELASTICITY_PLAYER);
+        pendingBoost = parseFloat(msg, "boost", 1.0f);
+        pendingRocketSpeed = parseFloat(msg, "rspeed", 1.0f);
+        pendingXRadius = parseFloat(msg, "xradius", 1.0f);
+        pendingJThrust = parseFloat(msg, "jthrust", 1.0f);
+        pendingFuelBurn = (int)parseUInt(msg, "fburn", (unsigned)FUEL_CONSUMPTION_RATE);
+        pendingFuelRegen = (int)parseUInt(msg, "fregen", (unsigned)FUEL_REGEN_PCT_DEFAULT);
         pendingWallsEnabled = parseBool(msg, "walls", WALLS_ENABLED);
-        pendingHypedMode = parseBool(msg, "hyped", HYPED_MODE);
         pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);
         pendingFriendlyFire = parseBool(msg, "ff", FRIENDLY_FIRE);
         startRequested = true; // release: set after the preset values above
@@ -984,9 +1011,15 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
         pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
-        pendingScarcity = parseFloat(msg, "scarcity", pendingScarcity.load());
+        pendingWallElast = parseFloat(msg, "welast", pendingWallElast.load());
+        pendingPlatElast = parseFloat(msg, "pelast", pendingPlatElast.load());
+        pendingBoost = parseFloat(msg, "boost", pendingBoost.load());
+        pendingRocketSpeed = parseFloat(msg, "rspeed", pendingRocketSpeed.load());
+        pendingXRadius = parseFloat(msg, "xradius", pendingXRadius.load());
+        pendingJThrust = parseFloat(msg, "jthrust", pendingJThrust.load());
+        pendingFuelBurn = (int)parseUInt(msg, "fburn", (unsigned)pendingFuelBurn.load());
+        pendingFuelRegen = (int)parseUInt(msg, "fregen", (unsigned)pendingFuelRegen.load());
         pendingWallsEnabled = parseBool(msg, "walls", pendingWallsEnabled.load());
-        pendingHypedMode = parseBool(msg, "hyped", pendingHypedMode.load());
         pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
         pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
         return;
@@ -1176,13 +1209,25 @@ void SimulationLoop() {
                               << " (UDP packet budget, " << want << " player slots)\n";
                 gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
                 gameSpace.setPlayerCount(want);
-                // OPTIONS: apply the requesting client's gameplay toggles to the sim
-                // before the world is built (collisions read these off GameSpace).
-                gameSpace.wallsEnabled = pendingWallsEnabled.load();
-                gameSpace.hypedMode = pendingHypedMode.load();
-                gameSpace.fuelScarcity = pendingScarcity.load();
-                gameSpace.rocketsObeyPhysics = pendingRocketsPhysics.load();
-                gameSpace.friendlyFire = pendingFriendlyFire.load();
+                // OPTIONS: apply the requesting client's full options bundle to the
+                // sim before the world is built - generatePlatforms() below stamps
+                // PLATFORM ELASTICITY per-platform from the value applyOptions sets,
+                // and collisions/movement read the rest off GameSpace.
+                {
+                    MatchOptions o;
+                    o.wallElasticity      = pendingWallElast.load();
+                    o.platformElasticity  = pendingPlatElast.load();
+                    o.speedBoost          = pendingBoost.load();
+                    o.rocketSpeedScale    = pendingRocketSpeed.load();
+                    o.explosionRadiusScale = pendingXRadius.load();
+                    o.jetpackThrust       = pendingJThrust.load();
+                    o.fuelConsumption     = pendingFuelBurn.load();
+                    o.fuelRegenPct        = pendingFuelRegen.load();
+                    o.wallsEnabled        = pendingWallsEnabled.load();
+                    o.rocketsObeyPhysics  = pendingRocketsPhysics.load();
+                    o.friendlyFire        = pendingFriendlyFire.load();
+                    gameSpace.applyOptions(o);
+                }
                 // Issue #5 order: platforms -> players (spread) -> asteroids
                 // (buffered away from the placed players). Same sequence the local
                 // client's generate() uses, so both modes build worlds identically.

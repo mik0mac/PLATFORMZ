@@ -59,18 +59,13 @@ struct ServerMessage {
     Phase    phase    = Phase::Unknown; // State only
     float    countdown = 0.0f; // State only: seconds left in the pre-match countdown (0 unless Countdown)
 
-    // Lobby options (match-wide config: match size, bot difficulty, gameplay
-    // toggles). The server echoes these in every state packet so a change by any
-    // client shows live on all - the client applies them to its OPTIONS modal.
-    // hasOptions is false unless the packet carried an "opt" object.
-    bool  hasOptions  = false;
-    int   optNPlayers = 0;      // match size
-    float optDiff     = 0.0f;   // bot difficulty
-    float optScarcity = 0.5f;   // FUEL SCARCITY slider (0.5 = neutral burn/regen rates)
-    bool  optWalls    = true;   // boundary walls on (drawn + collide) vs open space
-    bool  optHyped    = false;  // HYPED MODE: 2x jetpack horizontal boost, rocket speed, fuel regen
-    bool  optPhys     = false;  // rockets obey gravity + inherit shooter velocity
-    bool  optFf       = false;  // friendly fire (own blast can self-damage)
+    // Lobby options (match-wide config: match size, bot difficulty, the
+    // gameplay sliders + toggles - see MatchOptions in options.h). The server
+    // echoes these in every state packet so a change by any client shows live
+    // on all - the client applies them to its OPTIONS modal. hasOptions is
+    // false unless the packet carried an "opt" object.
+    bool         hasOptions = false;
+    MatchOptions opt;
 };
 
 //MARK: Outbound - start request
@@ -131,39 +126,39 @@ inline std::string serializeKeepalive() {
 // stores it as the pending match config (WITHOUT starting) and echoes it back to
 // everyone in the next state packet, so all clients' OPTIONS modals stay in sync.
 // Map size isn't here - it's chosen at the START button press (serializeStart).
-inline std::string serializeOptions(int nplayers, float diff, float fuelScarcity,
-                                    bool wallsEnabled, bool hypedMode,
-                                    bool rocketsPhysics, bool friendlyFire) {
-    nlohmann::json j = {
-        {"type", "options"},
-        {"nplayers", nplayers},
-        {"diff", diff},
-        {"scarcity", fuelScarcity},
-        {"walls", wallsEnabled},
-        {"hyped", hypedMode},
-        {"phys", rocketsPhysics},
-        {"ff", friendlyFire}
-    };
+// The shared option payload: every message that carries the OPTIONS bundle
+// ("options", "start", and the server's "opt" echo) uses these keys.
+inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
+    j["nplayers"] = o.numPlayers;           // requested match size (server clamps to connected)
+    j["diff"]     = o.botDifficulty;        // bot difficulty center [0..BOT_DIFFICULTY]
+    j["welast"]   = o.wallElasticity;       // OPTIONS: WALL ELASTICITY (players only)
+    j["pelast"]   = o.platformElasticity;   // OPTIONS: PLATFORM ELASTICITY (players only)
+    j["boost"]    = o.speedBoost;           // OPTIONS: SPEED BOOST (walk/jetpack/rocket)
+    j["rspeed"]   = o.rocketSpeedScale;     // OPTIONS: ROCKET VELOCITY (on top of boost)
+    j["xradius"]  = o.explosionRadiusScale; // OPTIONS: EXPLOSION RADIUS
+    j["jthrust"]  = o.jetpackThrust;        // OPTIONS: JETPACK THRUST (on top of boost)
+    j["fburn"]    = o.fuelConsumption;      // OPTIONS: FUEL CONSUMPTION (units/sec)
+    j["fregen"]   = o.fuelRegenPct;         // OPTIONS: FUEL REGEN (% of consumption)
+    j["walls"]    = o.wallsEnabled;         // OPTIONS: boundary walls on vs open space
+    j["phys"]     = o.rocketsObeyPhysics;   // OPTIONS: rockets obey gravity + inherit shooter velocity
+    j["ff"]       = o.friendlyFire;         // OPTIONS: a player's own blast can self-damage
+}
+
+inline std::string serializeOptions(const MatchOptions& o) {
+    nlohmann::json j = { {"type", "options"} };
+    writeOptionKeys(j, o);
     return j.dump();
 }
 
 inline std::string serializeStart(float half, int platforms, int asteroids,
-                                  int nplayers, float diff, float fuelScarcity,
-                                  bool wallsEnabled, bool hypedMode,
-                                  bool rocketsPhysics, bool friendlyFire) {
+                                  const MatchOptions& o) {
     nlohmann::json j = {
         {"type", "start"},
         {"half", half},
         {"plat", platforms},
-        {"roid", asteroids},
-        {"nplayers", nplayers},        // requested match size (server clamps to connected)
-        {"diff", diff},                // bot difficulty center [0..BOT_DIFFICULTY]
-        {"scarcity", fuelScarcity},    // OPTIONS: FUEL SCARCITY slider (0.5 = neutral)
-        {"walls", wallsEnabled},       // OPTIONS: boundary walls on vs open space
-        {"hyped", hypedMode},          // OPTIONS: HYPED MODE (2x jetpack horizontal boost + rocket speed)
-        {"phys", rocketsPhysics},      // OPTIONS: rockets obey gravity + inherit shooter velocity
-        {"ff", friendlyFire}           // OPTIONS: a player's own blast can self-damage
+        {"roid", asteroids}
     };
+    writeOptionKeys(j, o);
     return j.dump();
 }
 
@@ -235,6 +230,7 @@ inline ServerMessage applyBinaryWelcome(const std::string& buf, GameSpace& gs) {
         Platform p;
         p.position = p.startingPosition = { r.f32(), r.f32(), r.f32() };
         p.size     = { r.f32(), r.f32(), r.f32() };
+        p.elasticityPlayer = gs.platformElasticityPlayer; // OPTIONS PLATFORM ELASTICITY (client mirror)
         platforms.push_back(p);
     }
 
@@ -267,16 +263,23 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
                            : ServerMessage::Phase::Unknown;
     msg.countdown = r.f32();
 
-    // Options (present every packet).
-    msg.hasOptions  = true;
-    msg.optNPlayers = r.u8();
-    msg.optDiff     = r.f32();
-    msg.optScarcity = r.f32();
+    // Options (present every packet). Order must match the server's binary
+    // state builder exactly (server_main.cpp).
+    msg.hasOptions               = true;
+    msg.opt.numPlayers           = r.u8();
+    msg.opt.botDifficulty        = r.f32();
+    msg.opt.wallElasticity       = r.f32();
+    msg.opt.platformElasticity   = r.f32();
+    msg.opt.speedBoost           = r.f32();
+    msg.opt.rocketSpeedScale     = r.f32();
+    msg.opt.explosionRadiusScale = r.f32();
+    msg.opt.jetpackThrust        = r.f32();
+    msg.opt.fuelConsumption      = r.u8();
+    msg.opt.fuelRegenPct         = r.u8();
     uint8_t optFlags = r.u8();
-    msg.optWalls = (optFlags & 1) != 0;
-    msg.optHyped = (optFlags & 2) != 0;
-    msg.optPhys  = (optFlags & 4) != 0;
-    msg.optFf    = (optFlags & 8) != 0;
+    msg.opt.wallsEnabled       = (optFlags & 1) != 0;
+    msg.opt.rocketsObeyPhysics = (optFlags & 2) != 0;
+    msg.opt.friendlyFire       = (optFlags & 4) != 0;
 
     // Players - fixed slots, never erased; hide slots the server stopped sending.
     {
@@ -379,7 +382,10 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             [&](const Rocket& rk) { return present.find(rk.id) == present.end(); }), rockets.end());
     }
 
-    // Explosions - ephemeral, rebuilt each packet.
+    // Explosions - ephemeral, rebuilt each packet. damageRadius isn't on the
+    // wire (clients don't deal damage), but the blast VISUAL must match the
+    // server's EXPLOSION RADIUS option - scale it from the mirrored gameSpace
+    // value (applied from the options echo in main.cpp).
     {
         auto& explosions = gs.getExplosions();
         explosions.clear();
@@ -389,6 +395,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             e.position = { r.f32(), r.f32(), r.f32() };
             e.radius   = r.f32();
             e.isActive = r.u8() != 0;
+            e.maxRadius     *= gs.explosionRadiusScale;
+            e.expansionRate *= gs.explosionRadiusScale;
             explosions.push_back(e);
         }
     }
@@ -466,6 +474,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 Platform p;
                 p.position = p.startingPosition = vec3(jo, "px", "py", "pz");
                 p.size = vec3(jo, "sx", "sy", "sz");
+                p.elasticityPlayer = gs.platformElasticityPlayer; // OPTIONS PLATFORM ELASTICITY (client mirror)
                 platforms.push_back(p);
             }
         }
@@ -488,14 +497,21 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     // applies these to its OPTIONS modal so any client's change shows live.
     if (j.contains("opt")) {
         const auto& o = j["opt"];
-        msg.hasOptions  = true;
-        msg.optNPlayers = o.value("nplayers", 0);
-        msg.optDiff     = o.value("diff", 0.0f);
-        msg.optScarcity = o.value("scarcity", FUEL_SCARCITY_DEFAULT);
-        msg.optWalls    = o.value("walls", true);
-        msg.optHyped    = o.value("hyped", false);
-        msg.optPhys     = o.value("phys", false);
-        msg.optFf       = o.value("ff", false);
+        msg.hasOptions = true;
+        MatchOptions d; // absent keys fall back to the compile-time defaults
+        msg.opt.numPlayers           = o.value("nplayers", d.numPlayers);
+        msg.opt.botDifficulty        = o.value("diff",     d.botDifficulty);
+        msg.opt.wallElasticity       = o.value("welast",   d.wallElasticity);
+        msg.opt.platformElasticity   = o.value("pelast",   d.platformElasticity);
+        msg.opt.speedBoost           = o.value("boost",    d.speedBoost);
+        msg.opt.rocketSpeedScale     = o.value("rspeed",   d.rocketSpeedScale);
+        msg.opt.explosionRadiusScale = o.value("xradius",  d.explosionRadiusScale);
+        msg.opt.jetpackThrust        = o.value("jthrust",  d.jetpackThrust);
+        msg.opt.fuelConsumption      = o.value("fburn",    d.fuelConsumption);
+        msg.opt.fuelRegenPct         = o.value("fregen",   d.fuelRegenPct);
+        msg.opt.wallsEnabled         = o.value("walls",    d.wallsEnabled);
+        msg.opt.rocketsObeyPhysics   = o.value("phys",     d.rocketsObeyPhysics);
+        msg.opt.friendlyFire         = o.value("ff",       d.friendlyFire);
     }
 
     // Players - a fixed, persistent set of slots; never erased (also Player
@@ -574,7 +590,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
             });
     }
 
-    // Explosions - no id, ephemeral: rebuild each packet.
+    // Explosions - no id, ephemeral: rebuild each packet. Scale the blast
+    // visual by the mirrored EXPLOSION RADIUS option (see the binary decode).
     if (j.contains("explosions")) {
         auto& explosions = gs.getExplosions();
         explosions.clear();
@@ -583,6 +600,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
             e.position = vec3(jo, "px", "py", "pz");
             e.radius   = jo.value("r", 0.0f);
             e.isActive = jo.value("active", true);
+            e.maxRadius     *= gs.explosionRadiusScale;
+            e.expansionRate *= gs.explosionRadiusScale;
             explosions.push_back(e);
         }
     }
