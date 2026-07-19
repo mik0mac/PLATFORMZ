@@ -132,6 +132,12 @@ struct BotController {
         // Grow lazily if the controller was never init()'d for this many slots
         // (defensive — callers init() at match start).
         if ((int)decisions.size() < (int)players.size()) init(players);
+        // OPTIONS-scaled values so lead-aim/standoff match what actually happens
+        // in collisions/input.h: rockets spawn at ROCKET_SPEED * speedBoost *
+        // rocketSpeedScale (input.h), blasts detonate at EXPLOSION_DAMAGE_RADIUS *
+        // explosionRadiusScale (collisions.cpp spawnExplosion).
+        float rocketSpeed = ROCKET_SPEED * gs.speedBoost * gs.rocketSpeedScale;
+        float explosionRadius = EXPLOSION_DAMAGE_RADIUS * gs.explosionRadiusScale;
         for (int i = 0; i < (int)players.size(); ++i) {
             if (!players[i].isBot || !players[i].isAlive) continue;
             int targetIdx = pickTarget(players, i);
@@ -145,7 +151,8 @@ struct BotController {
             }
             PlayerInput botIn = botInput(players[i], players[targetIdx], players,
                                          gs.getPlatforms(), gs.getAsteroids(), gs.getWalls(),
-                                         botTree, dt, decisions[i], profiles[i]);
+                                         botTree, dt, decisions[i], profiles[i],
+                                         rocketSpeed, explosionRadius);
             float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
             ApplyPlayerInput(players[i], botIn, dt, gravity, gs);
         }
