@@ -31,7 +31,7 @@ struct BotController {
                    LATCH_ATTACK_STYLE, LATCH_FIRE,
                    LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
                    LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD,
-                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_COUNT };
+                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_BOUNCE_CHANCE, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -76,6 +76,13 @@ struct BotController {
     // fireAtTarget sits in the top Parallel, so aim/fire stay per-frame regardless
     // of the movement decision cadence.
     LatchedSelector<Player>        fireAtTarget{ LATCH_FIRE, { &rateLimitedFireAtPlayer, &attackAsteroidForBonus } };
+    // Bounce is a valid technique but a crude one (parks the bot at the bottom
+    // wall repeatedly bouncing) - gate it to only actually engage on a fraction
+    // of eligible decision windows so it doesn't become the default whenever
+    // SeekHighGround can't find a platform. When closed, Bounce's own tick
+    // (needed for its Failure-on-done check) never runs - Chance short-circuits
+    // to Failure, which is exactly the "not applicable, fall through" case here.
+    Chance<Player>                  maybeBounce{ LATCH_BOUNCE_CHANCE, BOT_BOUNCE_CHANCE, &bounce };
     // Plain Selector, not latched: both children's "am I still applicable"
     // check is purely positional (SeekHighGround's platform search, Bounce's
     // distance to the floor) and can flip within a single frame, so latching
@@ -84,7 +91,7 @@ struct BotController {
     // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite). "Kiting":
     // retreating while keeping an enemy at a distance you control. avoidAsteroid
     // stays a hard priority ahead of the kite/cover.
-    Selector<Player>               conserveFuel{ { &seekHighGround, &bounce } };
+    Selector<Player>               conserveFuel{ { &seekHighGround, &maybeBounce } };
     Chance<Player>                 maybeKite{ LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer };
     LatchedSelector<Player>        moveToSafety{ LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover } };
     Sequence<Player>               lowHealthResponse{ { &isLowHealth, &moveToSafety, &idle } };
