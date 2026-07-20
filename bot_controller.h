@@ -31,8 +31,7 @@ struct BotController {
                    LATCH_ATTACK_STYLE, LATCH_FIRE,
                    LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
                    LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD,
-                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE,
-                   LATCH_CONSERVE_FUEL, LATCH_COUNT };
+                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -77,10 +76,15 @@ struct BotController {
     // fireAtTarget sits in the top Parallel, so aim/fire stay per-frame regardless
     // of the movement decision cadence.
     LatchedSelector<Player>        fireAtTarget{ LATCH_FIRE, { &rateLimitedFireAtPlayer, &attackAsteroidForBonus } };
+    // Plain Selector, not latched: both children's "am I still applicable"
+    // check is purely positional (SeekHighGround's platform search, Bounce's
+    // distance to the floor) and can flip within a single frame, so latching
+    // onto one for ~1s would leave a bot stuck re-running a child that's
+    // already done and writing nothing (see Bounce's Failure-on-done comment).
     // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite). "Kiting":
     // retreating while keeping an enemy at a distance you control. avoidAsteroid
     // stays a hard priority ahead of the kite/cover.
-    LatchedSelector<Player>        conserveFuel{ LATCH_CONSERVE_FUEL, { &seekHighGround, &bounce } };
+    Selector<Player>               conserveFuel{ { &seekHighGround, &bounce } };
     Chance<Player>                 maybeKite{ LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer };
     LatchedSelector<Player>        moveToSafety{ LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover } };
     Sequence<Player>               lowHealthResponse{ { &isLowHealth, &moveToSafety, &idle } };

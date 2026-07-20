@@ -675,13 +675,13 @@ public:
         // Only worth conserving fuel when it's actually scarce: skip when FUEL
         // REGEN already keeps pace with FUEL CONSUMPTION (OPTIONS sliders) - fly
         // freely, there's nothing to conserve for.
-        if (bb.fuelRegenRate >= bb.fuelConsumptionRate * BOT_FUEL_CONSERVE_REGEN_RATIO) return Status::Failure;
+        if (bb.fuelConsumptionRate <= 25.0f) return Status::Failure;
 
         // in a fuel concious mode, the bot should aim to use the jetpack as little as possible
         // by landing on platforms or coasting.  This movement type is used to move the bot towards
         // the nearest higher platform.
 
-        if (bb.bot.position.y <= (bb.walls.halfSize * HIGH_GROUND_Y_FACTOR) && bb.bot.fuel > 50.0f) {
+        if (bb.bot.position.y <= (bb.walls.halfSize * HIGH_GROUND_Y_FACTOR) && bb.bot.fuel > BOT_LOW_FUEL_THRESHOLD) {
             // a bot in the bottom half of the map with fuel seeks to go higher.
             
             // find nearest platform that is higher.
@@ -798,9 +798,13 @@ public:
             bb.out.earthGravity = true;
             return Status::Running;
         } else {
-            // bot has dropped enough. Turn off earth grav and return success.
+            // Bot has dropped enough - done. Return Failure (not Success): this
+            // node writes no moveAxis/jetpack of its own, so under Selector/
+            // LatchedSelector semantics a Success here with zero movement output
+            // would just get re-picked with nothing to show for it. Failure lets
+            // the parent fall through to whatever's next (attack, etc).
             bb.out.earthGravity = false;
-            return Status::Success;
+            return Status::Failure;
         }
     }
 };
