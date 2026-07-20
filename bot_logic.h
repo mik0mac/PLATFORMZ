@@ -23,10 +23,10 @@ const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will 
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
 const float BOT_LOW_AMMO_THRESHOLD = 20.0f; // ammo level below which bots will avoid firing rockets.
 
-const float HIGH_GROUND_Y_FACTOR = 0.5f; // the factor of gamespace halfsize above 0.0y that the bot considers high ground.
 const float BOT_FUEL_SCARCITY_THRESHOLD = 25.0f; // FUEL CONSUMPTION at/below this isn't scarce enough to bother conserving, regardless of regen.
 const float BOT_FUEL_REGEN_SCARCITY_RATIO = 0.25f; // regen below this fraction of consumption doesn't keep pace - fuel is a genuine net drain.
 const float BOT_BOUNCE_CHANCE = 0.3f; // probability Bounce actually engages on an eligible decision window - keeps it an occasional technique rather than the automatic fallback whenever SeekHighGround fails.
+const float BOT_CONSERVE_FUEL_CHANCE = 0.6f; // probability the whole fuel-conserving branch (SeekHighGround/Bounce) wins a movement decision when eligible, so combat/low-fuel-retreat still get regular turns instead of being starved for as long as there's somewhere to climb to.
 
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
@@ -693,8 +693,15 @@ public:
         // by landing on platforms or coasting.  This movement type is used to move the bot towards
         // the nearest higher platform.
 
-        if (bb.bot.position.y <= (bb.walls.halfSize * HIGH_GROUND_Y_FACTOR) && bb.bot.fuel > BOT_LOW_FUEL_THRESHOLD) {
-            // a bot in the bottom half of the map with fuel seeks to go higher.
+        // Keep climbing toward a still-higher platform as long as there's fuel to
+        // spare - not just until some fixed height. Each arrival re-scans for
+        // something higher than the NEW position (see the `platform.position.y <=
+        // bb.bot.position.y` filter below), so a bot chains progressively higher
+        // platforms until either fuel drops below the threshold (falls to the
+        // coast branch) or nothing higher is left (`!closestPlatform` -> Failure,
+        // handing control back to the rest of the tree instead of squatting).
+        if (bb.bot.fuel > BOT_LOW_FUEL_THRESHOLD) {
+            // a bot with fuel to spare seeks to go higher still.
             
             // find nearest platform that is higher.
             if (bb.allPlatforms.empty()) return Status::Failure;
@@ -748,7 +755,10 @@ public:
             return Status::Running;
         }
         else {
-            // a bot with low fuel or already high in the map should coast to a platform.
+            // low on fuel: can't afford more jetpack thrust, so glide (no jetpack)
+            // to whatever platform is reachable under current momentum instead of
+            // free-falling. If that's the platform already underfoot, this just
+            // holds position - the intended "rest and let fuel regen" state.
 
             // coast to nearest platform that is reachable under current velocity
             if (bb.allPlatforms.empty()) return Status::Failure;
