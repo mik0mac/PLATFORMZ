@@ -78,7 +78,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     // every frame. Guarded on isAlive since death zeroes these resources.
     if (player.isAlive) {
         bool lowResource = player.health <= WARN_HEALTH_THRESHOLD ||
-                           player.fuel   <= WARN_FUEL_THRESHOLD   ||
+                        //    player.fuel   <= WARN_FUEL_THRESHOLD   ||
                            player.ammo   <= WARN_AMMO_THRESHOLD;
         if (lowResource && player.warningSfxCooldown <= 0.0f) {
             gameSpace.emitAudio(FX_WARNING, player.position, player.id);

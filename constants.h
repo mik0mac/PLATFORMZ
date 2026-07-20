@@ -271,8 +271,8 @@ const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets
 
 const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
 
-const float ROCKET_SPEED = 80.0f; // units/sec
-const float ROCKET_KICKBACK_FACTOR = 0.1f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
+const float ROCKET_SPEED = 120.0f; // units/sec
+const float ROCKET_KICKBACK_FACTOR = 0.075f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
 // OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket

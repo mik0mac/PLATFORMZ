@@ -660,8 +660,10 @@ public:
         // value. Guard node -> Success when a bonus is wanted, Failure when topped up.
         bool needsBonus =
             bb.bot.health < PLAYER_MAX_HEALTH - (ASTEROID_HEALTH_AWARD * (1.0f - bb.profile.aggression)) ||
-            bb.bot.fuel   < PLAYER_MAX_FUEL   - (ASTEROID_FUEL_AWARD   * (1.0f - bb.profile.aggression)) ||
             bb.bot.ammo   < PLAYER_MAX_AMMO   - (ASTEROID_AMMO_AWARD   * (1.0f - bb.profile.aggression));
+        if (bb.bot.fuel   < PLAYER_MAX_FUEL   - (ASTEROID_FUEL_AWARD   * (1.0f - bb.profile.aggression)) &&
+            bb.fuelRegenRate < 5.0f)
+            needsBonus = true;
         return needsBonus ? Status::Success : Status::Failure;
     }
 };
