@@ -23,6 +23,9 @@ const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will 
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
 const float BOT_LOW_AMMO_THRESHOLD = 20.0f; // ammo level below which bots will avoid firing rockets.
 
+const float HIGH_GROUND_Y_FACTOR = 0.5f; // the factor of gamespace halfsize above 0.0y that the bot considers high ground.
+const float BOT_FUEL_CONSERVE_REGEN_RATIO = 0.8f; // gates SeekHighGround: skip conserving fuel once FUEL REGEN reaches this fraction of FUEL CONSUMPTION (regen already keeping pace).
+
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
 // keeps the logic in one place since MoveToTarget and MoveToSafety both need it.
@@ -124,7 +127,7 @@ bool vec3ApproxEqual(Vector3 a, Vector3 b, float threshold = 1e-6f) {
 // the pointer. Shared by FindLineOfSight (clear a shot) and FindCover (hide).
 inline const Platform* platformBlockingSegment(Vector3 from, Vector3 to,
         const std::vector<Platform>& platforms, float radiusMargin,
-        Vector3* outPerp = nullptr) {
+        Vector3* outPerp = nullptr, float explosionRadius = EXPLOSION_DAMAGE_RADIUS) {
     Vector3 seg = Vector3Subtract(to, from);
     float len = Vector3Length(seg);
     if (len < 1e-4f) { if (outPerp) *outPerp = {0.0f, 0.0f, 0.0f}; return nullptr; }
@@ -136,7 +139,7 @@ inline const Platform* platformBlockingSegment(Vector3 from, Vector3 to,
         Vector3 toP = Vector3Subtract(p.position, from);
         float along = Vector3DotProduct(toP, dir);           // projection onto the ray
         if (along <= 0.0f || along >= len) continue;         // behind `from` / past `to`
-        if (len - along < EXPLOSION_DAMAGE_RADIUS) continue; // platform hugging `to`
+        if (len - along < explosionRadius) continue; // platform hugging `to`
         Vector3 perp = Vector3Subtract(toP, Vector3Scale(dir, along)); // offset from the ray
         // largest horizontal half-extent as a blocking radius, + caller's margin
         float blockRadius = 0.5f * fmaxf(p.size.x, p.size.z) + radiusMargin;
@@ -201,6 +204,19 @@ struct Blackboard {
     float dt;
     std::vector<BotDecision>& decisions; // per-bot latch/timer, one slot per LatchedSelector (indexed by its latchId)
     const BotProfile& profile;  // per-bot personality (aggression/accuracy)
+    // Effective values under the match's OPTIONS sliders (GameSpace::speedBoost *
+    // rocketSpeedScale, and explosionRadiusScale) - so lead-aim, line-of-sight
+    // margins, and cover standoff stay accurate when a match scales rockets or
+    // blasts up. Computed once in BotController::drive, not per-node.
+    float rocketSpeed;
+    float explosionRadius;
+    // GameSpace::wallsEnabled - gates Bounce (no boundary to bounce off when
+    // walls are disabled).
+    bool  wallsEnabled;
+    // GameSpace::fuelConsumptionRate / fuelRegenRate() - gates SeekHighGround
+    // (only worth conserving fuel when consumption meaningfully outpaces regen).
+    float fuelConsumptionRate;
+    float fuelRegenRate;
 };
 
 template <typename TargetT>
@@ -219,7 +235,7 @@ public:
         // blockerPerp is the blocker's offset from the ray — used to strafe around it.
         Vector3 blockerPerp;
         const Platform* blocker = platformBlockingSegment(bb.bot.position, bb.target.position,
-                                                          bb.allPlatforms, bb.bot.radius, &blockerPerp);
+                                                          bb.allPlatforms, bb.bot.radius, &blockerPerp, bb.explosionRadius);
         if (!blocker) return Status::Success; // clear line of sight — hold and snipe
 
         Vector3 los = Vector3Normalize(Vector3Subtract(bb.target.position, bb.bot.position));
@@ -258,7 +274,7 @@ public:
 
         // Already behind cover? (a platform covers the bot<->target segment) — hold
         // position; the top Parallel keeps firing back from cover.
-        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius))
+        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius, nullptr, bb.explosionRadius))
             return Status::Success;
 
         // Otherwise pick the closest platform and move to its far side from the target.
@@ -270,11 +286,11 @@ public:
         }
 
         // Direction target->platform, continued past the platform to its far face; the
-        // EXPLOSION_DAMAGE_RADIUS standoff keeps the bot clear of splash on the near face.
+        // explosionRadius standoff keeps the bot clear of splash on the near face.
         Vector3 targetToPlat = Vector3Subtract(closest->position, bb.target.position);
         if (Vector3Length(targetToPlat) < 1e-3f) return Status::Failure; // platform ~on the target: useless as cover
         targetToPlat = Vector3Normalize(targetToPlat);
-        Vector3 coveredPos = Vector3Add(closest->position, Vector3Scale(targetToPlat, EXPLOSION_DAMAGE_RADIUS));
+        Vector3 coveredPos = Vector3Add(closest->position, Vector3Scale(targetToPlat, bb.explosionRadius));
 
         Vector3 dir = Vector3Normalize(Vector3Subtract(coveredPos, bb.bot.position));
         Vector3 fwd = bb.bot.ForwardFlat();
@@ -451,16 +467,16 @@ public:
     Status tick(Blackboard<TargetT>& bb) override {
         // No shot through a platform: don't aim or fire, and fail so the
         // fireAtTarget selector can fall through to shooting asteroids instead.
-        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius))
+        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius, nullptr, bb.explosionRadius))
             return Status::Failure;
         // no ammo, can't fire
-        if (bb.bot.ammo <= 0) return Status::Failure; 
+        if (bb.bot.ammo <= 0) return Status::Failure;
         // A bot with low health returns failure to the fireAtTarget selector, which will fall through to
         // firing asteroids instead of the player.  The threshold is scaled by the bot's aggression,
         // so a more aggressive bot will continue to fire at the player longer with lower health than a timid bot.
         if (bb.bot.health < BOT_LOW_HEALTH_THRESHOLD * (1.0f - 0.8f * bb.profile.aggression)) return Status::Failure;
 
-        auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot);
+        auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot, 0.0f, bb.rocketSpeed);
         steerAimToward(bb, aimDir);
 
         if (isOnTarget) {
@@ -488,7 +504,7 @@ public:
             float dist = Vector3Length(Vector3Subtract(asteroid.position, bb.bot.position));
             if (dist < closestDist && dist > buffer) {
                 // no shot through a platform — skip and keep looking for a clear one
-                if (platformBlockingSegment(bb.bot.position, asteroid.position, bb.allPlatforms, bb.bot.radius)) continue;
+                if (platformBlockingSegment(bb.bot.position, asteroid.position, bb.allPlatforms, bb.bot.radius, nullptr, bb.explosionRadius)) continue;
                 closestAsteroid = &asteroid;
                 closestDist = dist;
             }
@@ -496,7 +512,7 @@ public:
 
         //find aiming scheme to lead the asteroid
         if (closestAsteroid) {
-            auto [isOnTarget, aimDir] = onTarget(*closestAsteroid, bb.bot);
+            auto [isOnTarget, aimDir] = onTarget(*closestAsteroid, bb.bot, 0.0f, bb.rocketSpeed);
             steerAimToward(bb, aimDir);
             if (isOnTarget) {
                 if (!DISABLE_BOT_FIRE_ASTEROIDS) bb.out.fire = true;
@@ -644,11 +660,157 @@ public:
         // value. Guard node -> Success when a bonus is wanted, Failure when topped up.
         bool needsBonus =
             bb.bot.health < PLAYER_MAX_HEALTH - (ASTEROID_HEALTH_AWARD * (1.0f - bb.profile.aggression)) ||
-            bb.bot.fuel   < PLAYER_MAX_FUEL   - (ASTEROID_FUEL_AWARD   * (1.0f - bb.profile.aggression)) ||
             bb.bot.ammo   < PLAYER_MAX_AMMO   - (ASTEROID_AMMO_AWARD   * (1.0f - bb.profile.aggression));
+        if (bb.bot.fuel   < PLAYER_MAX_FUEL   - (ASTEROID_FUEL_AWARD   * (1.0f - bb.profile.aggression)) &&
+            bb.fuelRegenRate < 5.0f)
+            needsBonus = true;
         return needsBonus ? Status::Success : Status::Failure;
     }
 };
+
+// MARK: Conserve Fuel Movement Types
+// MARK: Seek High Ground
+template <typename TargetT>
+class SeekHighGround : public Node<TargetT> {
+public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        // Only worth conserving fuel when it's actually scarce: skip when FUEL
+        // REGEN already keeps pace with FUEL CONSUMPTION (OPTIONS sliders) - fly
+        // freely, there's nothing to conserve for.
+        if (bb.fuelConsumptionRate <= 25.0f) return Status::Failure;
+
+        // in a fuel concious mode, the bot should aim to use the jetpack as little as possible
+        // by landing on platforms or coasting.  This movement type is used to move the bot towards
+        // the nearest higher platform.
+
+        if (bb.bot.position.y <= (bb.walls.halfSize * HIGH_GROUND_Y_FACTOR) && bb.bot.fuel > BOT_LOW_FUEL_THRESHOLD) {
+            // a bot in the bottom half of the map with fuel seeks to go higher.
+            
+            // find nearest platform that is higher.
+            if (bb.allPlatforms.empty()) return Status::Failure;
+
+            // find the best platform that is higher than the bot's current position,
+            // scoring by a blend of velocity alignment and proximity.
+            // alignment = dot(normVel, normDir) ∈ [-1,1]: +1 means already heading there.
+            // proximity = 1/(1+dist): bounded (0,1], closer scores higher.
+            // score = ALIGN_WEIGHT * alignment + (1-ALIGN_WEIGHT) * proximity.
+            // A single score lets well-aligned farther platforms beat nearby ones
+            // that would require a sharp course change, and vice-versa.
+            const float ALIGN_WEIGHT = 0.7f;
+            const Platform* closestPlatform = nullptr;
+            float bestScore = -std::numeric_limits<float>::max();
+            const float velLen = Vector3Length(bb.bot.velocity);
+            const Vector3 normVel = (velLen > 0.01f)
+                ? Vector3Scale(bb.bot.velocity, 1.0f / velLen)
+                : Vector3{}; // no velocity — alignment term contributes 0, pure proximity wins
+            for (const Platform& platform : bb.allPlatforms) {
+                if (platform.position.y <= bb.bot.position.y) continue; // must be above
+                Vector3 dir = Vector3Subtract(platform.position, bb.bot.position);
+                float dist = Vector3Length(dir);
+                if (dist < 0.001f) continue;
+                Vector3 normDir = Vector3Scale(dir, 1.0f / dist);
+                float alignment = Vector3DotProduct(normVel, normDir); // cos of angle to platform
+                float proximity = 1.0f / (1.0f + dist);
+                float score = ALIGN_WEIGHT * alignment + (1.0f - ALIGN_WEIGHT) * proximity;
+                if (score > bestScore) {
+                    bestScore = score;
+                    closestPlatform = &platform;
+                }
+            }
+            if (!closestPlatform) return Status::Failure;
+
+            // target a landing point one bot-radius above the platform surface
+            Vector3 landingPosition = closestPlatform->position;
+            landingPosition.y += (bb.bot.radius * 2.0f);
+            // becuase of the threhold of equality, all points will be above the platform surface.
+            // On success, the bot will move to Idle and fall to the platform surface.
+            // might need to add something to counteract the bot's momentum if it is also moving horizontally.
+
+            // considered successful if the bot is at the target point (within its radius).  Third arg is the threshold for equality.
+            if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) return Status::Success; // on platform, done
+
+            Vector3 dir = Vector3Normalize(Vector3Subtract(landingPosition, bb.bot.position));
+            Vector3 fwd = bb.bot.ForwardFlat();
+            Vector3 right = bb.bot.Right();
+            bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
+            bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+            applyVerticalIntent(bb.bot.position.y, landingPosition.y, bb.out);
+            return Status::Running;
+        }
+        else {
+            // a bot with low fuel or already high in the map should coast to a platform.
+
+            // coast to nearest platform that is reachable under current velocity
+            if (bb.allPlatforms.empty()) return Status::Failure;
+
+            // Ballistic apex under current vy with no jetpack (MOON_GRAVITY only).
+            // If the bot is already falling (vy <= 0) the apex is its current height.
+            const float vy = bb.bot.velocity.y;
+            const float maxCoastY = (vy > 0.0f)
+                ? bb.bot.position.y + (vy * vy) / (2.0f * MOON_GRAVITY)
+                : bb.bot.position.y;
+
+            // Find nearest platform whose landing surface sits at or below the apex,
+            // measured by horizontal distance so tall platforms aren't unfairly penalised.
+            const Platform* coastPlatform = nullptr;
+            float coastDist = std::numeric_limits<float>::max();
+            for (const Platform& platform : bb.allPlatforms) {
+                // Landing surface: same convention as the jetpack branch above
+                float landY = platform.position.y + (bb.bot.radius * 2.0f);
+                if (landY > maxCoastY) continue; // unreachable without upward accel
+                Vector3 diff = Vector3Subtract(platform.position, bb.bot.position);
+                diff.y = 0.0f;
+                float horizDist = Vector3Length(diff);
+                if (horizDist < coastDist) {
+                    coastDist = horizDist;
+                    coastPlatform = &platform;
+                }
+            }
+            if (!coastPlatform) return Status::Failure;
+
+            Vector3 landingPosition = coastPlatform->position;
+            landingPosition.y += (bb.bot.radius * 2.0f);
+
+            if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) return Status::Success;
+
+            Vector3 dir = Vector3Normalize(Vector3Subtract(landingPosition, bb.bot.position));
+            Vector3 fwd = bb.bot.ForwardFlat();
+            Vector3 right = bb.bot.Right();
+            bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
+            bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+            // No jetpack — coast only. Apply earth gravity if we need to descend faster.
+            if (landingPosition.y < bb.bot.position.y - BOT_VERTICAL_THRESHOLD)
+                bb.out.earthGravity = true;
+            return Status::Running;
+        }
+    }
+};
+
+// MARK: bounce
+template <typename TargetT>
+class Bounce : public Node<TargetT> {
+public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        // If boundary walls are disabled, or the wall is too dead to bounce off,
+        // pass through to the next node in the selector.
+        if (!bb.wallsEnabled || bb.walls.elasticityPlayer < 0.2f) return Status::Failure;
+
+        if (bb.bot.position.y > -(bb.walls.halfSize - BOT_WALL_AVOID_BUFFER)) {
+            // bot drops via earth grav to bounce off the bottom wall.
+            bb.out.earthGravity = true;
+            return Status::Running;
+        } else {
+            // Bot has dropped enough - done. Return Failure (not Success): this
+            // node writes no moveAxis/jetpack of its own, so under Selector/
+            // LatchedSelector semantics a Success here with zero movement output
+            // would just get re-picked with nothing to show for it. Failure lets
+            // the parent fall through to whatever's next (attack, etc).
+            bb.out.earthGravity = false;
+            return Status::Failure;
+        }
+    }
+};
+
 
 //MARK: Composites
 // Mutually exclusive children — only one ever actually writes movement
@@ -864,9 +1026,15 @@ PlayerInput botInput(Player& bot,
                     Node<TargetT>& tree,
                     float dt,
                     std::vector<BotDecision>& decisions,
-                    const BotProfile& profile) {
+                    const BotProfile& profile,
+                    float rocketSpeed = ROCKET_SPEED,
+                    float explosionRadius = EXPLOSION_DAMAGE_RADIUS,
+                    bool  wallsEnabled = WALLS_ENABLED,
+                    float fuelConsumptionRate = FUEL_CONSUMPTION_RATE,
+                    float fuelRegenRate = FUEL_CONSUMPTION_RATE * FUEL_REGEN_PCT_DEFAULT / 100.0f) {
     PlayerInput out;
-    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, walls, out, dt, decisions, profile};
+    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, walls, out, dt, decisions, profile,
+                           rocketSpeed, explosionRadius, wallsEnabled, fuelConsumptionRate, fuelRegenRate};
     tree.tick(bb);
     return out;
 }

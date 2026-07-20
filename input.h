@@ -58,9 +58,10 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     player.updateLook(in.lookDelta);
     player.isUsingJetpack = in.jetpack;
     player.earthGravityEnabled = in.earthGravity; // mirror gravity mode onto the player for collision rules (main.cpp:664 / bot_controller.h derive `gravity` from the same flag)
-    player.hypedMode = gameSpace.hypedMode; // mirror HYPED MODE onto the player so updateVelocity can scale horizontal jetpack thrust
+    player.speedBoost = gameSpace.speedBoost;       // mirror the OPTIONS speed multipliers onto the player
+    player.jetpackThrust = gameSpace.jetpackThrust; // so updateVelocity can scale movement (covers bots too)
     player.updateVelocity(dt, in.moveAxis, gravity);
-    player.updateFuel(dt, player.isUsingJetpack, gameSpace.fuelScarcityFactor());
+    player.updateFuel(dt, player.isUsingJetpack, gameSpace.fuelConsumptionRate, gameSpace.fuelRegenRate());
 
     // "Empty tank" cue: holding jetpack with no usable fuel (updateVelocity gates
     // thrust on canJetpack()). Mirrors the FX_NO_AMMO cue for firing on empty;
@@ -77,7 +78,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     // every frame. Guarded on isAlive since death zeroes these resources.
     if (player.isAlive) {
         bool lowResource = player.health <= WARN_HEALTH_THRESHOLD ||
-                           player.fuel   <= WARN_FUEL_THRESHOLD   ||
+                        //    player.fuel   <= WARN_FUEL_THRESHOLD   ||
                            player.ammo   <= WARN_AMMO_THRESHOLD;
         if (lowResource && player.warningSfxCooldown <= 0.0f) {
             gameSpace.emitAudio(FX_WARNING, player.position, player.id);
@@ -133,7 +134,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             // (applied just below). Overrides the per-rocket constant defaults.
             rocket.gravityEnabled      = gameSpace.rocketsObeyPhysics;
             rocket.velocityInheritance = gameSpace.rocketsObeyPhysics;
-            if (gameSpace.hypedMode) rocket.speed *= HYPED_MODE_SCALE; // OPTIONS HYPED MODE: rockets fly twice as fast
+            rocket.speed *= gameSpace.speedBoost * gameSpace.rocketSpeedScale; // OPTIONS SPEED BOOST x ROCKET VELOCITY
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             if (rocket.velocityInheritance) {
                 rocket.velocity = Vector3Add(rocket.velocity, player.velocity); // inherit player's velocity

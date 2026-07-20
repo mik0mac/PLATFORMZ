@@ -15,6 +15,7 @@
 #endif
 #include "random.h"
 #include "constants.h"
+#include "options.h"  // MatchOptions (applyOptions)
 #include "messages.h"
 
 
@@ -42,21 +43,42 @@ public:
     // networked play threads them via serializeStart -> server). Default to the
     // compile-time constants so an unconfigured GameSpace behaves as before.
     bool wallsEnabled = WALLS_ENABLED;                                             // boundary walls drawn + collide; OFF = open space, out-of-bounds rules apply
-
-    // OPTIONS "FUEL SCARCITY" slider [0..1]; 0.5 is neutral. The factor
-    // 2^(2s-1) doubles every +0.5 on the slider: consumption is multiplied by
-    // it and regen divided by it in Player::updateFuel (via ApplyPlayerInput),
-    // so 1.0 = 2x burn + half regen, 0.0 the reverse. Replaces the old
-    // map-size and HYPED MODE regen multipliers.
-    float fuelScarcity = FUEL_SCARCITY_DEFAULT;
-    float fuelScarcityFactor() const { return powf(2.0f, 2.0f * fuelScarcity - 1.0f); }
-    // OPTIONS "HYPED MODE": scales jetpack horizontal speed/accel (mirrored onto
-    // each player in ApplyPlayerInput) and rocket speed (at spawn in input.h).
-    // Earth-gravity platform pass-through, formerly this OPTIONS slot, is now
-    // always on (EARTH_GRAVITY_PASS_THROUGH_PLATFORMS).
-    bool hypedMode = HYPED_MODE;
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
     bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
+
+    // OPTIONS sliders (MatchOptions in options.h; stamped by applyOptions).
+    // Elasticities are PLAYER-only - asteroid bounce keeps its constants
+    // (including the single-player speed-up tuning in generate()).
+    float wallElasticityPlayer     = WALL_ELASTICITY_PLAYER;     // 0..1, mirrored onto walls.elasticityPlayer
+    float platformElasticityPlayer = PLATFORM_ELASTICITY_PLAYER; // 0..1, stamped onto each platform in generatePlatforms()
+    float speedBoost           = 1.0f; // walk/jetpack speed+accel and rocket speed (mirrored onto players in ApplyPlayerInput)
+    float rocketSpeedScale     = 1.0f; // rocket spawn speed, on top of speedBoost (read in input.h)
+    float explosionRadiusScale = 1.0f; // explosion damage radius + blast visual (read in collisions.cpp / wire.h)
+    float jetpackThrust        = 1.0f; // jetpack speed+accel, on top of speedBoost (mirrored onto players)
+    float fuelConsumptionRate  = FUEL_CONSUMPTION_RATE; // units/sec while thrusting (tank is 100)
+    int   fuelRegenPct         = FUEL_REGEN_PCT_DEFAULT; // regen as % of the consumption rate
+    float fuelRegenRate() const { return fuelConsumptionRate * fuelRegenPct / 100.0f; }
+
+    // Stamp the OPTIONS bundle onto the sim. numPlayers/botDifficulty are NOT
+    // applied here - they flow through setPlayerCount / the bot controller as
+    // before. Call before generatePlatforms() so the platform elasticity stamp
+    // sees the new value; walls is a persistent member, so its elasticity can
+    // be set directly here.
+    void applyOptions(const MatchOptions& o) {
+        wallsEnabled           = o.wallsEnabled;
+        rocketsObeyPhysics     = o.rocketsObeyPhysics;
+        friendlyFire           = o.friendlyFire;
+        wallElasticityPlayer   = o.wallElasticity;
+        platformElasticityPlayer = o.platformElasticity;
+        speedBoost             = o.speedBoost;
+        rocketSpeedScale       = o.rocketSpeedScale;
+        explosionRadiusScale   = o.explosionRadiusScale;
+        jetpackThrust          = o.jetpackThrust;
+        fuelConsumptionRate    = (float)o.fuelConsumption;
+        fuelRegenPct           = o.fuelRegenPct;
+        walls.elasticityPlayer = o.wallElasticity;
+        for (Platform& p : platforms) p.elasticityPlayer = o.platformElasticity; // in case platforms already exist (client mirror)
+    }
     
     uint32_t nextID = NON_PLAYER_ID_BASE; // Platforms and Asteroids (0x00000100) 256, 257, 258, ...
     // Player ids are SLOT-STABLE: id = slot + 1 (PLAYER_ID_BASE), never minted
@@ -102,6 +124,7 @@ public:
             platform.generateSize(); // Random width and depth, thin height for a platform
             platform.position = bestCandidatePosition(placed, platformBuffer); // spread platforms, avoid clustering
             platform.startingPosition = platform.position; // Store the initial position of the platform
+            platform.elasticityPlayer = platformElasticityPlayer; // OPTIONS PLATFORM ELASTICITY (players only)
             placed.push_back(platform.position);
             platforms.push_back(platform);
         }

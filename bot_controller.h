@@ -47,6 +47,8 @@ struct BotController {
     AvoidAsteroid<Player>  avoidAsteroid;
     AvoidWall<Player>      avoidWall{ LATCH_AVOID_WALL };
     Idle<Player>           idle;
+    SeekHighGround<Player>   seekHighGround;
+    Bounce<Player>          bounce;
 
     // --- Composed tree (declaration order matters: composites reference the
     // addresses of nodes declared above; members initialise top-to-bottom). ---
@@ -74,9 +76,15 @@ struct BotController {
     // fireAtTarget sits in the top Parallel, so aim/fire stay per-frame regardless
     // of the movement decision cadence.
     LatchedSelector<Player>        fireAtTarget{ LATCH_FIRE, { &rateLimitedFireAtPlayer, &attackAsteroidForBonus } };
+    // Plain Selector, not latched: both children's "am I still applicable"
+    // check is purely positional (SeekHighGround's platform search, Bounce's
+    // distance to the floor) and can flip within a single frame, so latching
+    // onto one for ~1s would leave a bot stuck re-running a child that's
+    // already done and writing nothing (see Bounce's Failure-on-done comment).
     // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite). "Kiting":
     // retreating while keeping an enemy at a distance you control. avoidAsteroid
     // stays a hard priority ahead of the kite/cover.
+    Selector<Player>               conserveFuel{ { &seekHighGround, &bounce } };
     Chance<Player>                 maybeKite{ LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer };
     LatchedSelector<Player>        moveToSafety{ LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover } };
     Sequence<Player>               lowHealthResponse{ { &isLowHealth, &moveToSafety, &idle } };
@@ -94,7 +102,7 @@ struct BotController {
     // avoidWall is a hard priority ahead of the hold/close logic so a bot parked
     // on a boundary peels off (then releases back to attackStyle once clear).
     Selector<Player>               attack{ { &avoidAsteroid, &avoidWall, &attackStyle } };
-    LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &maybeDefend, &lowFuelResponse, &attack } };
+    LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &conserveFuel, &maybeDefend, &lowFuelResponse, &attack } };
     Parallel<Player>               botTree{ { &movement, &fireAtTarget } };
 
     // --- Per-slot state, indexed BY PLAYER INDEX (slot 0's entry is simply
@@ -132,6 +140,17 @@ struct BotController {
         // Grow lazily if the controller was never init()'d for this many slots
         // (defensive — callers init() at match start).
         if ((int)decisions.size() < (int)players.size()) init(players);
+        // OPTIONS-scaled values so lead-aim/standoff match what actually happens
+        // in collisions/input.h: rockets spawn at ROCKET_SPEED * speedBoost *
+        // rocketSpeedScale (input.h), blasts detonate at EXPLOSION_DAMAGE_RADIUS *
+        // explosionRadiusScale (collisions.cpp spawnExplosion).
+        float rocketSpeed = ROCKET_SPEED * gs.speedBoost * gs.rocketSpeedScale;
+        float explosionRadius = EXPLOSION_DAMAGE_RADIUS * gs.explosionRadiusScale;
+        // Gates for the fuel-conserving / wall-bounce behaviors (bot_logic.h:
+        // SeekHighGround, Bounce) - read straight off GameSpace's OPTIONS fields.
+        bool  wallsEnabled = gs.wallsEnabled;
+        float fuelConsumptionRate = gs.fuelConsumptionRate;
+        float fuelRegenRate = gs.fuelRegenRate();
         for (int i = 0; i < (int)players.size(); ++i) {
             if (!players[i].isBot || !players[i].isAlive) continue;
             int targetIdx = pickTarget(players, i);
@@ -145,7 +164,9 @@ struct BotController {
             }
             PlayerInput botIn = botInput(players[i], players[targetIdx], players,
                                          gs.getPlatforms(), gs.getAsteroids(), gs.getWalls(),
-                                         botTree, dt, decisions[i], profiles[i]);
+                                         botTree, dt, decisions[i], profiles[i],
+                                         rocketSpeed, explosionRadius,
+                                         wallsEnabled, fuelConsumptionRate, fuelRegenRate);
             float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
             ApplyPlayerInput(players[i], botIn, dt, gravity, gs);
         }

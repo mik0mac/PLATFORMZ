@@ -171,7 +171,10 @@ public:
     float accelerationJetpack = PLAYER_ACCELERATION_JETPACK; // units/sec^2, how quickly the player accelerates to their max jetpack speed when input is applied
     bool isUsingJetpack = false; // Whether the player is currently using the jetpack, which affects movement speed and fuel consumption
     bool earthGravityEnabled = false; // Last-applied gravity mode (mirrors this frame's input) so collision rules can read it after input is gone. Set in ApplyPlayerInput.
-    bool hypedMode = false; // Mirror of GameSpace::hypedMode (set in ApplyPlayerInput) so updateVelocity can scale horizontal jetpack thrust without a GameSpace dependency.
+    // Mirrors of the OPTIONS speed multipliers (set in ApplyPlayerInput) so
+    // updateVelocity can scale movement without a GameSpace dependency.
+    float speedBoost = 1.0f;    // scales walk AND jetpack speed/accel
+    float jetpackThrust = 1.0f; // scales jetpack speed/accel on top of speedBoost
 
     // Full look-direction vector (includes pitch) - used for aiming/shooting.
     Vector3 Forward() const {
@@ -207,17 +210,16 @@ public:
     // both relative to current look direction (flattened), not world axes.
     // Vertical movement (jetpack up/down) is separate, not part of moveInput.
     void updateVelocity(float dt, Vector2 moveInput, float gravity) {
-        // targetSpeed/acceleration only drive the HORIZONTAL easing below; the
-        // vertical jetpack block reads speedJetpack/accelerationJetpack directly,
-        // so the HYPED MODE boost speeds up the flattened plane without touching
-        // vertical thrust.
-        float boost = hypedMode ? HYPED_MODE_SCALE : 1.0f;
-        float targetSpeed = isUsingJetpack ? speedJetpack * boost : speedWalk;
-        float acceleration = isUsingJetpack ? accelerationJetpack * boost : accelerationWalk;
+        // OPTIONS multipliers: SPEED BOOST scales everything (walk + jetpack);
+        // JETPACK THRUST stacks on top for jetpack speed/accel only - and unlike
+        // the old HYPED MODE it scales the vertical thrust block below too.
+        float jetBoost = speedBoost * jetpackThrust;
+        float targetSpeed = isUsingJetpack ? speedJetpack * jetBoost : speedWalk * speedBoost;
+        float acceleration = isUsingJetpack ? accelerationJetpack * jetBoost : accelerationWalk * speedBoost;
 
-        if (fuel <= FUEL_REGEN_RATE * dt) {
-            targetSpeed = speedWalk; // If out of fuel, player can only walk, not jetpack.
-            acceleration = accelerationWalk;
+        if (!canJetpack()) {
+            targetSpeed = speedWalk * speedBoost; // If out of fuel, player can only walk, not jetpack.
+            acceleration = accelerationWalk * speedBoost;
         }
 
         Vector3 fwd = ForwardFlat();
@@ -253,9 +255,9 @@ public:
         // on the very next frame if jetpack input is still held. Accelerating
         // instead means a bounce gets a moment to actually take effect.
         if (isUsingJetpack && canJetpack()) {
-            float targetVerticalSpeed = speedJetpack;
+            float targetVerticalSpeed = speedJetpack * jetBoost;
             float verticalChange = targetVerticalSpeed - velocity.y;
-            float maxStep = accelerationJetpack * dt;
+            float maxStep = accelerationJetpack * jetBoost * dt;
             if (fabsf(verticalChange) > maxStep) {
                 velocity.y += (verticalChange > 0 ? maxStep : -maxStep);
             } else {
@@ -374,16 +376,17 @@ public:
         return shotFired;
     }
 
-    // scarcityFactor: the OPTIONS FUEL SCARCITY factor (GameSpace::
-    // fuelScarcityFactor, 1.0 at the neutral slider position) - consumption is
-    // multiplied by it and regen divided by it, so scarce fuel both burns
-    // faster and comes back slower.
-    void updateFuel(float dt, bool isUsingJetpack, float scarcityFactor = 1.0f) {
+    // Rates come from the OPTIONS fuel sliders (GameSpace::fuelConsumptionRate /
+    // fuelRegenRate(), threaded through ApplyPlayerInput). Defaults recreate the
+    // classic 5/sec burn, 2/sec regen.
+    void updateFuel(float dt, bool isUsingJetpack,
+                    float consumptionPerSec = FUEL_CONSUMPTION_RATE,
+                    float regenPerSec = FUEL_CONSUMPTION_RATE * FUEL_REGEN_PCT_DEFAULT / 100.0f) {
         if (isUsingJetpack && hasFuel()) {
-            fuel -= dt * FUEL_CONSUMPTION_RATE * scarcityFactor; // Consume fuel based on time using jetpack
+            fuel -= dt * consumptionPerSec; // Consume fuel based on time using jetpack
             if (fuel < 0.0f) fuel = 0.0f; // Clamp fuel to zero
         } else {
-            fuel += dt * FUEL_REGEN_RATE / scarcityFactor; // Regenerate fuel slowly when not using jetpack
+            fuel += dt * regenPerSec; // Regenerate fuel slowly when not using jetpack
             if (fuel > maxFuel) fuel = maxFuel; // Clamp fuel to max
         }
         if (!isAlive) {

@@ -26,7 +26,7 @@ namespace nb {
 // Byte 0 tags each binary packet, and (being != '{') keeps it from colliding
 // with a JSON message. One value per binary message type; bump a value if its
 // layout ever changes incompatibly.
-static const uint8_t STATE_BIN_VERSION   = 0x01; // per-tick state packet
+static const uint8_t STATE_BIN_VERSION   = 0x04; // per-tick state packet (bumped: OPTIONS bundle grew for the granular sliders rework)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 
