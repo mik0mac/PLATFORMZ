@@ -20,13 +20,14 @@
 #include <string>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 
 namespace nb {
 
 // Byte 0 tags each binary packet, and (being != '{') keeps it from colliding
 // with a JSON message. One value per binary message type; bump a value if its
 // layout ever changes incompatibly.
-static const uint8_t STATE_BIN_VERSION   = 0x04; // per-tick state packet (bumped: OPTIONS bundle grew for the granular sliders rework)
+static const uint8_t STATE_BIN_VERSION   = 0x05; // per-tick state packet (bumped: position/velocity/angle/scalar fields quantized to shrink the per-object wire cost)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 
@@ -53,13 +54,16 @@ static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 // asteroid count at match start so a full tick fits ONE unfragmented datagram
 // (an oversized tick is chunked with no retransmit: one lost chunk drops the
 // whole tick).
+// Position/velocity/angle/small-scalar fields are quantized (see the putQ*
+// helpers below), which is why these are roughly half their pre-quantization
+// size - that's the point: it lets more asteroids fit the same datagram.
 static const size_t STATE_OVERHEAD  = 33;  // version/tick/seq/phase/options + section counts
-static const size_t PLAYER_BYTES    = 65;  // 58 fixed + a typical name (1 + ~6)
-static const size_t ASTEROID_BYTES  = 38;  // id + pos + vel + size + health + flash
-static const size_t ACTION_HEADROOM = 120; // in-flight rockets (28 B) / explosions (17 B) / audio events (21 B)
+static const size_t PLAYER_BYTES    = 36;  // 29 fixed (quantized) + a typical name (1 + ~6)
+static const size_t ASTEROID_BYTES  = 19;  // id + qpos + qvel + qsize + health + qflash
+static const size_t ACTION_HEADROOM = 65;  // in-flight rockets (16 B) / explosions (8 B) / audio events (12 B)
 
 // Max asteroids that keep a full state tick under UDP_SAFE_DATAGRAM for a
-// roster of nPlayers. 4 players -> 20, 6 players -> 17.
+// roster of nPlayers. 6 players -> 46, 7 players -> 44, 8 players -> 42.
 inline int MaxAsteroidsForRoster(int nPlayers) {
     long budget = (long)UDP_SAFE_DATAGRAM - (long)STATE_OVERHEAD - (long)ACTION_HEADROOM
                 - (long)nPlayers * (long)PLAYER_BYTES;
@@ -78,6 +82,60 @@ inline void putStr(std::string& b, const std::string& s) {
     uint8_t n = (uint8_t)(s.size() < 255 ? s.size() : 255);
     putU8(b, n);
     b.append(s.data(), n);
+}
+
+// ---- quantized writers: fixed-width encodings for bounded fields ----
+// The per-tick state packet is the size-critical one (see the budget above),
+// and most of its fields live in small, known ranges - full 32-bit floats are
+// far more precision than the game needs. These trade a little precision
+// (imperceptible at this game's scale) for roughly half the bytes.
+
+// Position component: int16 over +/-QPOS_RANGE. Covers the largest map preset
+// (XL, 360 half-size) times GAMESPACE_OUT_OF_BOUNDS_FACTOR (1.5) = 540, plus
+// margin. ~1.8cm/step - well under the smallest object radius (PLAYER_RADIUS
+// 2.0, ASTEROID_MIN_SIZE 6.0).
+static const float QPOS_RANGE = 600.0f;
+// Velocity component: int16 over +/-QVEL_RANGE. Covers worst-case rocket speed
+// (ROCKET_SPEED 120 * speedBoost max 2 * rocketSpeedScale max 2 = 480) plus
+// inherited shooter-velocity headroom.
+static const float QVEL_RANGE = 700.0f;
+
+inline int16_t quantizeToI16(float v, float range) {
+    if (v > range) v = range;
+    if (v < -range) v = -range;
+    return (int16_t)std::lround(v / range * 32767.0f);
+}
+inline float dequantizeFromI16(int16_t q, float range) {
+    return (float)q / 32767.0f * range;
+}
+
+inline void putQPos(std::string& b, float v) { putI16(b, quantizeToI16(v, QPOS_RANGE)); }
+inline void putQVel(std::string& b, float v) { putI16(b, quantizeToI16(v, QVEL_RANGE)); }
+
+// Angle (yaw/pitch): uint16 over a full turn (0..2*PI -> 0..65535).
+inline void putQAngle(std::string& b, float radians) {
+    const float twoPi = 6.283185307179586f;
+    float wrapped = std::fmod(radians, twoPi);
+    if (wrapped < 0.0f) wrapped += twoPi;
+    putU16(b, (uint16_t)std::lround(wrapped / twoPi * 65535.0f));
+}
+inline float qAngleToRadians(uint16_t q) {
+    const float twoPi = 6.283185307179586f;
+    return (float)q / 65535.0f * twoPi;
+}
+
+// Generic bounded-scalar: uint8 over [0, max]. Used for every small 0..known-
+// max field (health/fuel/ammo already fit uint8 directly; flash timers,
+// spectating countdowns, asteroid size, explosion radius, and audio volume
+// scale need a max-value scale).
+inline void putQFrac(std::string& b, float v, float maxValue) {
+    if (v < 0.0f) v = 0.0f;
+    if (v > maxValue) v = maxValue;
+    uint8_t q = maxValue > 0.0f ? (uint8_t)std::lround(v / maxValue * 255.0f) : 0;
+    putU8(b, q);
+}
+inline float qFracToFloat(uint8_t q, float maxValue) {
+    return (float)q / 255.0f * maxValue;
 }
 
 // ---- reader: bounds-checked cursor over a byte buffer ----
@@ -101,6 +159,10 @@ struct Reader {
     int16_t  i16() { return (int16_t)u16(); }
     int32_t  i32() { return (int32_t)u32(); }
     float    f32() { uint32_t u = u32(); float f; std::memcpy(&f, &u, 4); return f; }
+    float    qPos()   { return dequantizeFromI16(i16(), QPOS_RANGE); }
+    float    qVel()   { return dequantizeFromI16(i16(), QVEL_RANGE); }
+    float    qAngle() { return qAngleToRadians(u16()); }
+    float    qFrac(float maxValue) { return qFracToFloat(u8(), maxValue); }
     std::string str() {
         uint8_t n = u8();
         std::string s;

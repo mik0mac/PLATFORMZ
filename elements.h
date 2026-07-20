@@ -414,10 +414,10 @@ public:
     int score = 0; // Player's score, can be increased by destroying asteroids or other players
     int eliminationScoreAward = PLAYER_ELIMINATION_SCORE_AWARD; // Points awarded for eliminating this player.
 
-
-private:
     // Longer than the asteroid's flash so a hit reads as a sustained screen
     // flash rather than a blip. static constexpr keeps Player copy-assignable.
+    // Public: also referenced by the wire codec (server_main.cpp/wire.h) to
+    // scale the quantized flashTimer field.
     static constexpr float flash_duration = 0.5f;
 };
 

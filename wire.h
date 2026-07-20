@@ -294,15 +294,15 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             bool isNew = false;
             if (!p) { Player np; np.id = id; players.push_back(np); p = &players.back(); isNew = true; }
 
-            Vector3 pos = { r.f32(), r.f32(), r.f32() };
-            Vector3 vel = { r.f32(), r.f32(), r.f32() };
-            float yaw = r.f32(), pitch = r.f32();
-            int   hp   = r.i16();
-            float fuel = r.f32();
-            int   ammo = r.i16();
-            float flash = r.f32();
-            float stmr  = r.f32();
-            int   score = r.i32();
+            Vector3 pos = { r.qPos(), r.qPos(), r.qPos() };
+            Vector3 vel = { r.qVel(), r.qVel(), r.qVel() };
+            float yaw = r.qAngle(), pitch = r.qAngle();
+            int   hp   = r.u8();
+            float fuel = r.qFrac(PLAYER_MAX_FUEL);
+            int   ammo = r.u8();
+            float flash = r.qFrac(Player::flash_duration);
+            float stmr  = r.qFrac(p->countdownToSpectating);
+            int   score = r.u16();
             uint8_t flags = r.u8();
             std::string name = r.str();
 
@@ -340,11 +340,11 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             bool isNew = false;
             if (!a) { Asteroid na; na.id = id; asteroids.push_back(na); a = &asteroids.back(); isNew = true; }
 
-            Vector3 pos = { r.f32(), r.f32(), r.f32() };
-            Vector3 vel = { r.f32(), r.f32(), r.f32() };
-            float size = r.f32();
-            int   hp   = r.i16();
-            float flash = r.f32();
+            Vector3 pos = { r.qPos(), r.qPos(), r.qPos() };
+            Vector3 vel = { r.qVel(), r.qVel(), r.qVel() };
+            float size = r.qFrac(ASTEROID_SIZE_ENCODE_MAX);
+            int   hp   = r.u8();
+            float flash = r.qFrac(ASTEROID_FLASH_DURATION);
 
             a->position = pos;
             if (isNew) a->startingPosition = pos;
@@ -371,8 +371,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             for (auto& e : rockets) if (e.id == id) { rk = &e; break; }
             if (!rk) { Rocket nr; nr.id = id; rockets.push_back(nr); rk = &rockets.back(); }
 
-            Vector3 pos = { r.f32(), r.f32(), r.f32() };
-            Vector3 vel = { r.f32(), r.f32(), r.f32() };
+            Vector3 pos = { r.qPos(), r.qPos(), r.qPos() };
+            Vector3 vel = { r.qVel(), r.qVel(), r.qVel() };
             rk->position    = pos;
             rk->velocity    = vel;
             rk->direction   = Vector3Normalize(vel);
@@ -392,8 +392,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
         uint16_t count = r.u16();
         for (int k = 0; k < count; ++k) {
             Explosion e;
-            e.position = { r.f32(), r.f32(), r.f32() };
-            e.radius   = r.f32();
+            e.position = { r.qPos(), r.qPos(), r.qPos() };
+            e.radius   = r.qFrac(EXPLOSION_RADIUS_ENCODE_MAX);
             e.isActive = r.u8() != 0;
             e.maxRadius     *= gs.explosionRadiusScale;
             e.expansionRate *= gs.explosionRadiusScale;
@@ -408,8 +408,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             NetAudioEvent ev;
             ev.fx          = r.u8();
             ev.owner       = r.u32();
-            ev.pos         = { r.f32(), r.f32(), r.f32() };
-            ev.volumeScale = r.f32();
+            ev.pos         = { r.qPos(), r.qPos(), r.qPos() };
+            ev.volumeScale = r.qFrac(1.0f);
             gs.getAudioEvents().push_back(ev);
         }
     }
