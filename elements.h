@@ -304,6 +304,7 @@ public:
         if (coolDownTime > 0.0f) coolDownTime -= dt;
         if (noFuelSfxCooldown > 0.0f) noFuelSfxCooldown -= dt;
         if (warningSfxCooldown > 0.0f) warningSfxCooldown -= dt;
+        if (lowFuelMsgCooldown > 0.0f) lowFuelMsgCooldown -= dt;
         if (earthGravSfxCooldown > 0.0f) earthGravSfxCooldown -= dt;
 
         // Spectate delay: a dead (non-bot) player becomes a free-flying spectator
@@ -353,7 +354,8 @@ public:
 
     //MARK: Player SFX throttles (all ticked in updatePos)
     float noFuelSfxCooldown = 0.0f; // Throttle for the "empty tank" cue while jetpack is held on empty
-    float warningSfxCooldown = 0.0f; // Throttle for the low-resource warning beep + messages (see input.h)
+    float warningSfxCooldown = 0.0f; // Throttle for the low-health/low-ammo warning beep + messages (see input.h)
+    float lowFuelMsgCooldown = 0.0f; // Throttle for the low-fuel HUD message (no audio cue - see input.h)
     float earthGravSfxCooldown = 0.0f; // Guard against rapid re-triggers of the earth-gravity engage cue
     bool  earthGravWasEngaged = false; // Prev-frame earth-gravity state, for rising-edge detection of the engage cue
 
@@ -543,7 +545,7 @@ public:
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
     float speed = ROCKET_SPEED; // units/sec
-    float kickback = speed * ROCKET_KICKBACK_FACTOR; // Recoil applied to player on shoot.
+    float kickback = 1.0f; //speed * ROCKET_KICKBACK_FACTOR; // Recoil applied to player on shoot.
 
     bool gravityEnabled = ROCKET_GRAVITY_ENABLED; // Whether gravity affects the rocket's trajectory
     bool velocityInheritance = ROCKET_VELOCITY_INHERITANCE_ENABLED; // Whether the rocket inherits the player's velocity at the moment of firing

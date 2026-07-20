@@ -23,8 +23,10 @@ const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will 
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
 const float BOT_LOW_AMMO_THRESHOLD = 20.0f; // ammo level below which bots will avoid firing rockets.
 
-const float HIGH_GROUND_Y_FACTOR = 0.5f; // the factor of gamespace halfsize above 0.0y that the bot considers high ground.
-const float BOT_FUEL_CONSERVE_REGEN_RATIO = 0.8f; // gates SeekHighGround: skip conserving fuel once FUEL REGEN reaches this fraction of FUEL CONSUMPTION (regen already keeping pace).
+const float BOT_FUEL_SCARCITY_THRESHOLD = 25.0f; // FUEL CONSUMPTION at/below this isn't scarce enough to bother conserving, regardless of regen.
+const float BOT_FUEL_REGEN_SCARCITY_RATIO = 0.25f; // regen below this fraction of consumption doesn't keep pace - fuel is a genuine net drain.
+const float BOT_BOUNCE_CHANCE = 0.3f; // probability Bounce actually engages on an eligible decision window - keeps it an occasional technique rather than the automatic fallback whenever SeekHighGround fails.
+const float BOT_CONSERVE_FUEL_CHANCE = 0.6f; // probability the whole fuel-conserving branch (SeekHighGround/Bounce) wins a movement decision when eligible, so combat/low-fuel-retreat still get regular turns instead of being starved for as long as there's somewhere to climb to.
 
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
@@ -649,6 +651,17 @@ public:
     }
 };
 
+// Fuel is only worth conserving/hunting for when both (a) FUEL CONSUMPTION
+// (OPTIONS slider) meaningfully outpaces the default drain, and (b) FUEL
+// REGEN isn't already keeping pace with it — a net drain, not just a high
+// number on both sides. Shared by NeedsBonus, SeekHighGround, and Bounce so
+// "scarce" means one thing everywhere instead of three separately-tuned checks.
+template <typename TargetT>
+inline bool fuelIsScarce(const Blackboard<TargetT>& bb) {
+    return bb.fuelConsumptionRate > BOT_FUEL_SCARCITY_THRESHOLD &&
+           bb.fuelRegenRate < bb.fuelConsumptionRate * BOT_FUEL_REGEN_SCARCITY_RATIO;
+}
+
 //MARK: Needs Bonus
 template <typename TargetT>
 class NeedsBonus : public Node<TargetT> {
@@ -659,11 +672,9 @@ public:
         // bonuses even when barely down; a timid bot waits until it can bank the full
         // value. Guard node -> Success when a bonus is wanted, Failure when topped up.
         bool needsBonus =
-            bb.bot.health < PLAYER_MAX_HEALTH - (ASTEROID_HEALTH_AWARD * (1.0f - bb.profile.aggression)) ||
-            bb.bot.ammo   < PLAYER_MAX_AMMO   - (ASTEROID_AMMO_AWARD   * (1.0f - bb.profile.aggression));
-        if (bb.bot.fuel   < PLAYER_MAX_FUEL   - (ASTEROID_FUEL_AWARD   * (1.0f - bb.profile.aggression)) &&
-            bb.fuelRegenRate < 5.0f)
-            needsBonus = true;
+            bb.bot.health < PLAYER_MAX_HEALTH - (75.0f - (ASTEROID_HEALTH_AWARD * bb.profile.aggression)) ||
+            bb.bot.ammo   < PLAYER_MAX_AMMO   - 80;
+        if (fuelIsScarce(bb) && bb.bot.fuel < BOT_LOW_FUEL_THRESHOLD) needsBonus = true;
         return needsBonus ? Status::Success : Status::Failure;
     }
 };
@@ -674,17 +685,23 @@ template <typename TargetT>
 class SeekHighGround : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
-        // Only worth conserving fuel when it's actually scarce: skip when FUEL
-        // REGEN already keeps pace with FUEL CONSUMPTION (OPTIONS sliders) - fly
-        // freely, there's nothing to conserve for.
-        if (bb.fuelConsumptionRate <= 25.0f) return Status::Failure;
+        // Only worth conserving fuel when it's actually scarce - fly freely
+        // otherwise, there's nothing to conserve for.
+        if (!fuelIsScarce(bb)) return Status::Failure;
 
         // in a fuel concious mode, the bot should aim to use the jetpack as little as possible
         // by landing on platforms or coasting.  This movement type is used to move the bot towards
         // the nearest higher platform.
 
-        if (bb.bot.position.y <= (bb.walls.halfSize * HIGH_GROUND_Y_FACTOR) && bb.bot.fuel > BOT_LOW_FUEL_THRESHOLD) {
-            // a bot in the bottom half of the map with fuel seeks to go higher.
+        // Keep climbing toward a still-higher platform as long as there's fuel to
+        // spare - not just until some fixed height. Each arrival re-scans for
+        // something higher than the NEW position (see the `platform.position.y <=
+        // bb.bot.position.y` filter below), so a bot chains progressively higher
+        // platforms until either fuel drops below the threshold (falls to the
+        // coast branch) or nothing higher is left (`!closestPlatform` -> Failure,
+        // handing control back to the rest of the tree instead of squatting).
+        if (bb.bot.fuel > BOT_LOW_FUEL_THRESHOLD) {
+            // a bot with fuel to spare seeks to go higher still.
             
             // find nearest platform that is higher.
             if (bb.allPlatforms.empty()) return Status::Failure;
@@ -738,7 +755,10 @@ public:
             return Status::Running;
         }
         else {
-            // a bot with low fuel or already high in the map should coast to a platform.
+            // low on fuel: can't afford more jetpack thrust, so glide (no jetpack)
+            // to whatever platform is reachable under current momentum instead of
+            // free-falling. If that's the platform already underfoot, this just
+            // holds position - the intended "rest and let fuel regen" state.
 
             // coast to nearest platform that is reachable under current velocity
             if (bb.allPlatforms.empty()) return Status::Failure;
@@ -791,6 +811,9 @@ template <typename TargetT>
 class Bounce : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
+        // Same fuel-scarcity gate as SeekHighGround: with fuel abundant, there's
+        // nothing worth conserving, so don't drop for the bottom wall at all.
+        if (!fuelIsScarce(bb)) return Status::Failure;
         // If boundary walls are disabled, or the wall is too dead to bounce off,
         // pass through to the next node in the selector.
         if (!bb.wallsEnabled || bb.walls.elasticityPlayer < 0.2f) return Status::Failure;

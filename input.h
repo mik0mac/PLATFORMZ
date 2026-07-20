@@ -72,13 +72,22 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
         player.noFuelSfxCooldown = NO_FUEL_SFX_INTERVAL;
     }
 
-    // Low-resource alarm and message: any of health/fuel/ammo at or below its warning
-    // threshold pulses one shared cue (FX_WARNING), throttled by
-    // WARNING_SFX_INTERVAL so a sustained low state beeps rather than spamming
+    // Low-resource alarm and message: health/ammo at or below their warning
+    // threshold pulses one shared cue (FX_WARNING) plus a HUD message, throttled
+    // by WARNING_SFX_INTERVAL so a sustained low state beeps rather than spamming
     // every frame. Guarded on isAlive since death zeroes these resources.
+    //
+    // Low fuel gets its own HUD message on its own cooldown, with no audio cue -
+    // fuel already has FX_NO_FUEL (the "empty tank" cue above) once it actually
+    // runs out, so a second alarm while merely low was redundant noise.
     if (player.isAlive) {
+        if (player.fuel <= WARN_FUEL_THRESHOLD && player.lowFuelMsgCooldown <= 0.0f) {
+            Message m(MSG_TYPE_LOW_FUEL, player.name, "", player.id, 0);
+            gameSpace.emitMessage(m);
+            player.lowFuelMsgCooldown = WARNING_SFX_INTERVAL;
+        }
+
         bool lowResource = player.health <= WARN_HEALTH_THRESHOLD ||
-                        //    player.fuel   <= WARN_FUEL_THRESHOLD   ||
                            player.ammo   <= WARN_AMMO_THRESHOLD;
         if (lowResource && player.warningSfxCooldown <= 0.0f) {
             gameSpace.emitAudio(FX_WARNING, player.position, player.id);
@@ -86,11 +95,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
                 Message m(MSG_TYPE_LOW_HEALTH, player.name, "", player.id, 0);
                 gameSpace.emitMessage(m);
             }
-            if (player.fuel   <= WARN_FUEL_THRESHOLD) {
-                Message m(MSG_TYPE_LOW_FUEL, player.name, "", player.id, 0);
-                gameSpace.emitMessage(m);
-            }
-            if (player.ammo   <= WARN_AMMO_THRESHOLD) {
+            if (player.ammo <= WARN_AMMO_THRESHOLD) {
                 Message m(MSG_TYPE_LOW_AMMO, player.name, "", player.id, 0);
                 gameSpace.emitMessage(m);
             }
@@ -143,7 +148,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             gameSpace.emitAudio(FX_ROCKET_LAUNCH, rocket.position, player.id);
 
             // kickback (recoil)
-            Vector3 kickback = Vector3Scale(aim, (-1 * rocket.kickback));
+            Vector3 kickback = Vector3Scale(aim, (-1 * ROCKET_KICKBACK_FACTOR * rocket.speed));
             player.velocity = Vector3Add(player.velocity, kickback);
         }
         else {
