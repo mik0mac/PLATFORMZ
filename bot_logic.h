@@ -23,6 +23,9 @@ const float BOT_LOW_FUEL_THRESHOLD = 20.0f; // fuel level below which bots will 
 const float BOT_LOW_HEALTH_THRESHOLD = 30.0f; // health level below which bots will retreat.
 const float BOT_LOW_AMMO_THRESHOLD = 20.0f; // ammo level below which bots will avoid firing rockets.
 
+const float HIGH_GROUND_Y_FACTOR = 0.5f; // the factor of gamespace halfsize above 0.0y that the bot considers high ground.
+const float BOT_FUEL_CONSERVE_REGEN_RATIO = 0.8f; // gates SeekHighGround: skip conserving fuel once FUEL REGEN reaches this fraction of FUEL CONSUMPTION (regen already keeping pace).
+
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
 // keeps the logic in one place since MoveToTarget and MoveToSafety both need it.
@@ -207,6 +210,13 @@ struct Blackboard {
     // blasts up. Computed once in BotController::drive, not per-node.
     float rocketSpeed;
     float explosionRadius;
+    // GameSpace::wallsEnabled - gates Bounce (no boundary to bounce off when
+    // walls are disabled).
+    bool  wallsEnabled;
+    // GameSpace::fuelConsumptionRate / fuelRegenRate() - gates SeekHighGround
+    // (only worth conserving fuel when consumption meaningfully outpaces regen).
+    float fuelConsumptionRate;
+    float fuelRegenRate;
 };
 
 template <typename TargetT>
@@ -662,11 +672,16 @@ template <typename TargetT>
 class SeekHighGround : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
+        // Only worth conserving fuel when it's actually scarce: skip when FUEL
+        // REGEN already keeps pace with FUEL CONSUMPTION (OPTIONS sliders) - fly
+        // freely, there's nothing to conserve for.
+        if (bb.fuelRegenRate >= bb.fuelConsumptionRate * BOT_FUEL_CONSERVE_REGEN_RATIO) return Status::Failure;
+
         // in a fuel concious mode, the bot should aim to use the jetpack as little as possible
         // by landing on platforms or coasting.  This movement type is used to move the bot towards
         // the nearest higher platform.
 
-        if (bb.bot.position.y <= 0.0f && bb.bot.fuel > 50.0f) {
+        if (bb.bot.position.y <= (bb.walls.halfSize * HIGH_GROUND_Y_FACTOR) && bb.bot.fuel > 50.0f) {
             // a bot in the bottom half of the map with fuel seeks to go higher.
             
             // find nearest platform that is higher.
@@ -769,7 +784,26 @@ public:
     }
 };
 
+// MARK: bounce
+template <typename TargetT>
+class Bounce : public Node<TargetT> {
+public:
+    Status tick(Blackboard<TargetT>& bb) override {
+        // If boundary walls are disabled, or the wall is too dead to bounce off,
+        // pass through to the next node in the selector.
+        if (!bb.wallsEnabled || bb.walls.elasticityPlayer < 0.2f) return Status::Failure;
 
+        if (bb.bot.position.y > -(bb.walls.halfSize - BOT_WALL_AVOID_BUFFER)) {
+            // bot drops via earth grav to bounce off the bottom wall.
+            bb.out.earthGravity = true;
+            return Status::Running;
+        } else {
+            // bot has dropped enough. Turn off earth grav and return success.
+            bb.out.earthGravity = false;
+            return Status::Success;
+        }
+    }
+};
 
 
 //MARK: Composites
@@ -988,9 +1022,13 @@ PlayerInput botInput(Player& bot,
                     std::vector<BotDecision>& decisions,
                     const BotProfile& profile,
                     float rocketSpeed = ROCKET_SPEED,
-                    float explosionRadius = EXPLOSION_DAMAGE_RADIUS) {
+                    float explosionRadius = EXPLOSION_DAMAGE_RADIUS,
+                    bool  wallsEnabled = WALLS_ENABLED,
+                    float fuelConsumptionRate = FUEL_CONSUMPTION_RATE,
+                    float fuelRegenRate = FUEL_CONSUMPTION_RATE * FUEL_REGEN_PCT_DEFAULT / 100.0f) {
     PlayerInput out;
-    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, walls, out, dt, decisions, profile, rocketSpeed, explosionRadius};
+    Blackboard<TargetT> bb{bot, target, allPlayers, platforms, asteroids, walls, out, dt, decisions, profile,
+                           rocketSpeed, explosionRadius, wallsEnabled, fuelConsumptionRate, fuelRegenRate};
     tree.tick(bb);
     return out;
 }

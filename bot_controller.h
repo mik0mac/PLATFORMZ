@@ -31,7 +31,8 @@ struct BotController {
                    LATCH_ATTACK_STYLE, LATCH_FIRE,
                    LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
                    LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD,
-                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_COUNT };
+                   LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE,
+                   LATCH_CONSERVE_FUEL, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -47,6 +48,8 @@ struct BotController {
     AvoidAsteroid<Player>  avoidAsteroid;
     AvoidWall<Player>      avoidWall{ LATCH_AVOID_WALL };
     Idle<Player>           idle;
+    SeekHighGround<Player>   seekHighGround;
+    Bounce<Player>          bounce;
 
     // --- Composed tree (declaration order matters: composites reference the
     // addresses of nodes declared above; members initialise top-to-bottom). ---
@@ -77,6 +80,7 @@ struct BotController {
     // Retreat: a hurt bot doesn't ALWAYS flee (Chance gates the kite). "Kiting":
     // retreating while keeping an enemy at a distance you control. avoidAsteroid
     // stays a hard priority ahead of the kite/cover.
+    LatchedSelector<Player>        conserveFuel{ LATCH_CONSERVE_FUEL, { &seekHighGround, &bounce } };
     Chance<Player>                 maybeKite{ LATCH_KITE_CHANCE, 0.5f, &moveFromPlayer };
     LatchedSelector<Player>        moveToSafety{ LATCH_MOVE_TO_SAFETY, { &avoidAsteroid, &maybeKite, &findCover } };
     Sequence<Player>               lowHealthResponse{ { &isLowHealth, &moveToSafety, &idle } };
@@ -94,7 +98,7 @@ struct BotController {
     // avoidWall is a hard priority ahead of the hold/close logic so a bot parked
     // on a boundary peels off (then releases back to attackStyle once clear).
     Selector<Player>               attack{ { &avoidAsteroid, &avoidWall, &attackStyle } };
-    LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &maybeDefend, &lowFuelResponse, &attack } };
+    LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &conserveFuel, &maybeDefend, &lowFuelResponse, &attack } };
     Parallel<Player>               botTree{ { &movement, &fireAtTarget } };
 
     // --- Per-slot state, indexed BY PLAYER INDEX (slot 0's entry is simply
@@ -138,6 +142,11 @@ struct BotController {
         // explosionRadiusScale (collisions.cpp spawnExplosion).
         float rocketSpeed = ROCKET_SPEED * gs.speedBoost * gs.rocketSpeedScale;
         float explosionRadius = EXPLOSION_DAMAGE_RADIUS * gs.explosionRadiusScale;
+        // Gates for the fuel-conserving / wall-bounce behaviors (bot_logic.h:
+        // SeekHighGround, Bounce) - read straight off GameSpace's OPTIONS fields.
+        bool  wallsEnabled = gs.wallsEnabled;
+        float fuelConsumptionRate = gs.fuelConsumptionRate;
+        float fuelRegenRate = gs.fuelRegenRate();
         for (int i = 0; i < (int)players.size(); ++i) {
             if (!players[i].isBot || !players[i].isAlive) continue;
             int targetIdx = pickTarget(players, i);
@@ -152,7 +161,8 @@ struct BotController {
             PlayerInput botIn = botInput(players[i], players[targetIdx], players,
                                          gs.getPlatforms(), gs.getAsteroids(), gs.getWalls(),
                                          botTree, dt, decisions[i], profiles[i],
-                                         rocketSpeed, explosionRadius);
+                                         rocketSpeed, explosionRadius,
+                                         wallsEnabled, fuelConsumptionRate, fuelRegenRate);
             float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
             ApplyPlayerInput(players[i], botIn, dt, gravity, gs);
         }
