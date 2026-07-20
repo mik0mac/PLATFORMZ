@@ -545,7 +545,7 @@ public:
     Vector3 velocity;
     Vector3 direction; // Normalized direction vector for movement
     float speed = ROCKET_SPEED; // units/sec
-    float kickback = speed * ROCKET_KICKBACK_FACTOR; // Recoil applied to player on shoot.
+    float kickback = 1.0f; //speed * ROCKET_KICKBACK_FACTOR; // Recoil applied to player on shoot.
 
     bool gravityEnabled = ROCKET_GRAVITY_ENABLED; // Whether gravity affects the rocket's trajectory
     bool velocityInheritance = ROCKET_VELOCITY_INHERITANCE_ENABLED; // Whether the rocket inherits the player's velocity at the moment of firing

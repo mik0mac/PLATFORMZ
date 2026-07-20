@@ -272,7 +272,7 @@ const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets
 const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
 
 const float ROCKET_SPEED = 120.0f; // units/sec
-const float ROCKET_KICKBACK_FACTOR = 0.075f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
+const float ROCKET_KICKBACK_FACTOR = 0.0375f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
 // OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket
@@ -285,7 +285,7 @@ const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spi
 //MARK: Explosion Constants
 const int EXPLOSION_DAMAGE = 25;
 const float EXPLOSION_DAMAGE_RADIUS = 25.0f; // units
-const float EXPLOSION_MAX_RADIUS = EXPLOSION_DAMAGE_RADIUS * 1.8f; // units, visual radius of the explosion effect
+const float EXPLOSION_MAX_RADIUS = EXPLOSION_DAMAGE_RADIUS * 1.0f; // units, visual radius of the explosion effect
 const float EXPLOSION_EXPANSION_RATE = 15.0f; // How quickly the explosion expands, in units/sec
 const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as pushback force
 // OPTIONS "FRIENDLY FIRE": when OFF, a player takes no splash DAMAGE from their own
@@ -315,12 +315,12 @@ const float ASTEROID_BURST_SPEED_MAX = 48.0f;
 // Distant starry-vista background (starfield.h): a camera-centered shell of
 // short line dashes, drawn depth-mask-off before all geometry so everything
 // occludes it. Purely visual, client-only; these are the tuning knobs.
-const int   STARFIELD_STAR_COUNT      = 350;
+const int   STARFIELD_STAR_COUNT      = 500;
 const float STARFIELD_RADIUS          = 500.0f;  // shell radius; must stay inside the far clip, which main.cpp keeps >= 1000
 const float STARFIELD_STAR_LENGTH     = 2.2f;    // dash length at the shell, ~3 px at 720p / fovy 60
 const float STARFIELD_HERO_FRACTION   = 0.08f;   // fraction of stars drawn as brighter + crosses
 const float STARFIELD_HERO_SCALE      = 1.8f;    // hero dash length multiplier
-const float STARFIELD_TWINKLE_AMOUNT  = 0.35f;   // peak-to-trough brightness swing, fraction of base
+const float STARFIELD_TWINKLE_AMOUNT  = 0.5f;   // peak-to-trough brightness swing, fraction of base
 const float STARFIELD_TWINKLE_SPEED_MIN = 0.4f;  // rad/s
 const float STARFIELD_TWINKLE_SPEED_MAX = 1.8f;  // rad/s
 const float STARFIELD_BACKDROP_YAW_SPEED = 1.5f; // deg/s camera drift on the 2D screens (title/countdown/game over)
