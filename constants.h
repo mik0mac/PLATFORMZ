@@ -81,7 +81,7 @@ const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game s
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 6; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h).
+const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~42 asteroids, comfortably above the XL preset's 36.
 const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the OPTIONS slider and the server's pending config start at; the host can raise it up to the max above.
 
 struct mapSizePreset {
@@ -103,7 +103,7 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     // here are the LOCAL-play numbers; a networked start clamps them to the
     // UDP state-packet budget for the roster size (nb::MaxAsteroidsForRoster,
     // netbin.h) so a full tick fits one unfragmented datagram.
-    {"XL",     {360.0f, 576, 24}}
+    {"XL",     {360.0f, 576, 36}}
 };
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
@@ -166,10 +166,10 @@ const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of R
 const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
 //MARK: Player Speed
-const float PLAYER_SPEED_WALK = 18.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 18.0f; // units/sec^2
-const float PLAYER_SPEED_JETPACK = 24.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 27.5f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
+const float PLAYER_SPEED_WALK = 20.0f; // units/sec
+const float PLAYER_ACCELERATION_WALK = 24.0f; // units/sec^2
+const float PLAYER_SPEED_JETPACK = 30.0f; // units/sec
+const float PLAYER_ACCELERATION_JETPACK = 32.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
 // THRUST sliders (MatchOptions in options.h) multiply them per match.
 
@@ -207,6 +207,8 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
     {255, 0, 255, 255},   // Pink
     {255, 255, 0, 255},   // Yellow
     {0, 255, 255, 255},   // Cyan
+    {255, 128, 0, 255},   // Orange
+    {160, 32, 240, 255},  // Purple
 };
 
 //MARK: Bot Constants
@@ -236,7 +238,7 @@ const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bot
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
 const char* const BOT_NAME_STRINGS[] = {
-    "RoyBOT OVERLORD","Jeff","Geoff","Qeff","Djeff","Geeff", "Jurf", "j3ff", "JEFF!"
+    "RoyBOT OVERLORD","JEFF","GEOFF","QEFF","DJEFF","GEEEFF", "JURF", "j3ff", "JEFF!"
 };
 const int BOT_NAME_COUNT = sizeof(BOT_NAME_STRINGS) / sizeof(BOT_NAME_STRINGS[0]);
 
@@ -262,6 +264,13 @@ const float ASTEROID_PLAYER_SPAWN_BUFFER = 15.0f;
 
 const float ASTEROID_FLASH_DURATION = 4.0f; // length of the hot-glow damage flash, seconds
 const float ASTEROID_FLASH_INTENSITY = 0.6f; // intensity of the hot-glow damage flash, 0.0 - 1.0
+
+// Shared client+server wire contract: the binary state packet (netbin.h/
+// server_main.cpp/wire.h) quantizes asteroid `size` into a single byte via
+// nb::putQFrac/qFrac. This is the scale's max - well above ASTEROID_MAX_SIZE
+// (6.0) for headroom, since size has a commented-out map-scaled formula above
+// that could reactivate a larger range later.
+const float ASTEROID_SIZE_ENCODE_MAX = 64.0f;
 
 //MARK: Rocket Constants
 const Color ROCKET_OUTLINE_COLOR = {255, 255, 0, 255}; // Yellow outline for rockets.
@@ -292,6 +301,12 @@ const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as p
 // blast (self-knockback still applies, so rocket-jumping survives). Default ON keeps
 // the current behavior. Consumed in ApplyExplosionSplashDamage (collisions.cpp).
 const bool FRIENDLY_FIRE = true; // default ON: your own rocket can damage you (current behavior)
+
+// Shared client+server wire contract: the binary state packet quantizes
+// explosion `radius` into a single byte (nb::putQFrac/qFrac, netbin.h). This
+// is the scale's max - the worst case is EXPLOSION_DAMAGE_RADIUS (25) times
+// the OPTIONS "EXPLOSION RADIUS" slider's max (4x, see options.h).
+const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
 
 //MARK: Spark VFX Constants
 // Sparks are pure visual particles (no collision). Shared physics/draw, spawned
