@@ -1014,6 +1014,25 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         return;
     }
 
+    //MARK: Msg: goodbye
+    // Client is exiting intentionally (window close, or a caught SIGINT/SIGTERM -
+    // see main.cpp). Free its slot right away instead of waiting out the UDP idle
+    // timeout - the common "player just quit" case no longer has to sit in a
+    // stale-but-still-connected state for up to UDP_CLIENT_TIMEOUT seconds. (WS
+    // clients are already reaped promptly via Session::Read()'s TCP-error path;
+    // handling this here too is harmless and keeps both transports symmetric.)
+    if (msg.find("\"type\":\"goodbye\"") != std::string::npos) {
+        std::lock_guard<std::mutex> lock(clientMutex);
+        auto it = clients.find(connId);
+        if (it != clients.end()) {
+            std::cout << "Player " << it->second.playerId << " said goodbye. Active: "
+                      << (clients.size() - 1) << "\n";
+            if (it->second.transport == Transport::UDP) udpIndex.erase(it->second.udpEndpoint);
+            clients.erase(it);
+        }
+        return;
+    }
+
     //MARK: Msg: start
     // Control message: a client asking to start/restart a match. Only the host
     // (lowest connected slot) may start; ignore it from anyone else. Flagged here
@@ -1235,6 +1254,12 @@ void SimulationLoop() {
                 int want = pendingPlayers.load(), connectedAtStart = 0;
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
+                    // Reap eagerly, not just on this tick's later periodic sweep:
+                    // a UDP client that already exceeded the idle timeout (e.g.
+                    // quit moments ago) must not get compacted into the fresh
+                    // roster as a "connected" human just because that sweep
+                    // hasn't run yet this tick.
+                    ReapIdleUdpClients();
                     connectedAtStart = (int)clients.size();
                     std::vector<std::pair<int, uint64_t>> order; // (slot, connId)
                     for (auto& [cid, c] : clients) order.push_back({c.playerId, cid});

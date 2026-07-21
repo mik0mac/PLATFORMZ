@@ -21,6 +21,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <csignal>
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h> // emscripten_run_script_string (read page URL)
@@ -29,6 +30,16 @@
 EM_JS(void, PlatformzSetModalOpen, (int open), { if (window.Module) Module.modalOpen = !!open; });
 #else
 inline void PlatformzSetModalOpen(int) {} // no-op on native builds
+
+// Ctrl+C (SIGINT) / SIGTERM: without a handler, the default disposition kills
+// the process immediately, skipping the MARK: TEARDOWN block below entirely -
+// so a networked client never gets a chance to send its goodbye (see wire.h),
+// and the server only notices via the multi-second UDP idle timeout. The
+// handler itself just sets a flag (async-signal-safe); the main loop checks
+// it every frame and exits normally, letting teardown run as usual. Native
+// only - there's no POSIX signal delivery to catch in the browser.
+static volatile std::sig_atomic_t g_quitRequested = 0;
+static void HandleQuitSignal(int) { g_quitRequested = 1; }
 #endif
 
 // Kill-feed HUD: draw the live messages centered at the bottom of the window,
@@ -79,6 +90,10 @@ static void DrawMessageQueue(MessageQueue& mq, int screenW, int screenH) {
 // In the browser there's no command line, so the web build is always a
 // networked client and the server URL comes from the page query string.
 int main(int argc, char** argv) {
+#ifndef __EMSCRIPTEN__
+    std::signal(SIGINT,  HandleQuitSignal); // Ctrl+C
+    std::signal(SIGTERM, HandleQuitSignal); // e.g. `kill` without -9
+#endif
     bool        networked;
     std::string serverUrl;
     // Auto-fallback (native, baked-in server only): start on UDP and pivot to the
@@ -640,7 +655,11 @@ int main(int argc, char** argv) {
 
     //MARK: MAIN LOOP
     // --- The loop itself ---
-    while (!WindowShouldClose()) {  // true when user hits the window close button (Esc is repurposed below)
+    while (!WindowShouldClose()
+#ifndef __EMSCRIPTEN__
+           && !g_quitRequested // true once a caught SIGINT/SIGTERM asked us to exit
+#endif
+    ) {  // WindowShouldClose(): true when user hits the window close button (Esc is repurposed below)
 
         // 1. TIME
         // dt = seconds since last frame. Multiply all movement by this
@@ -1650,6 +1669,10 @@ int main(int argc, char** argv) {
 
     // MARK: TEARDOWN
     // --- Teardown (runs once, after the loop exits) ---
+    // Tell the server we're leaving on purpose, so it frees our slot right away
+    // instead of waiting out the UDP idle timeout (see serializeGoodbye). Best-
+    // effort only: a crash or SIGKILL still just falls back to that timeout.
+    if (networked && net.isOpen()) net.send(serializeGoodbye());
     for (audioFX& fx : fxTable) fx.unload();
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();

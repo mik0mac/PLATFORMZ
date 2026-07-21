@@ -121,6 +121,19 @@ inline std::string serializeKeepalive() {
     return j.dump();
 }
 
+//MARK: Outbound - goodbye
+// Best-effort "I'm leaving" notice, sent once on intentional exit (window close
+// or a caught SIGINT/SIGTERM - see main.cpp). Lets the server free the sender's
+// slot immediately instead of waiting out the UDP idle timeout; a WS client that
+// never gets to send this is still caught promptly via its TCP teardown, but a
+// UDP client otherwise sits "connected" for up to UDP_CLIENT_TIMEOUT with nobody
+// there. Not delivery-guaranteed (a crash/SIGKILL still just times out) - this
+// only shortens the common clean-exit case.
+inline std::string serializeGoodbye() {
+    nlohmann::json j = { {"type", "goodbye"} };
+    return j.dump();
+}
+
 // Live lobby-option change (match size, bot difficulty, gameplay toggles). Any
 // client may send it whenever a control in the OPTIONS modal changes; the server
 // stores it as the pending match config (WITHOUT starting) and echoes it back to
