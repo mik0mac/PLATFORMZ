@@ -197,6 +197,13 @@ class Message {
                 color = GRAY;
                 visibility.set(VIS_ALL); // all players see this message, like an elimination
                 break;
+            case MSG_TYPE_LEFT_GAME:
+                // No "YOU" substitution: by construction the local viewer is
+                // never the one who left (they wouldn't be here to see it).
+                text = pa + " HAS LEFT THE GAME.";
+                color = GRAY;
+                visibility.set(VIS_ALL); // all players see this message, like an elimination
+                break;
             default:
                 text = "Unknown message type.";
                 color = RED;

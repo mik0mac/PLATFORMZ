@@ -139,6 +139,14 @@ public:
     float countdownToSpectating = 5.0f; // Countdown length for the player to enter spectating mode after death.
     float spectatingTimer = countdownToSpectating; // Timer for the player to enter spectating mode after death.
 
+    // Server-only (not wire-synced): grace countdown for a mid-match slot that
+    // lost its client (isBot stays false so the body is left open for a
+    // reconnect - see refreshBotSlots in server_main.cpp). -1 = not currently
+    // vacant/not applicable. Armed to MID_MATCH_LEAVE_GRACE_SEC the tick the
+    // slot goes unclaimed, ticks down each subsequent tick it's still
+    // unclaimed, and is reset to -1 the moment anyone reclaims the slot.
+    float leaveGraceSec = -1.0f;
+
     // Reticle
     Reticle reticle; // Each player has their own reticle, which is updated based on the player's position and aim direction.
 

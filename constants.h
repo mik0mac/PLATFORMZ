@@ -66,7 +66,8 @@ enum MessageType {
     MSG_TYPE_ASTEROID_BONUS,
     MSG_TYPE_OUT_OF_BOUNDS,
     MSG_TYPE_LOST_IN_SPACE,
-    MSG_TYPE_ASTEROID_ELIMINATION, // appended last: MessageType crosses the wire as a raw int
+    MSG_TYPE_ASTEROID_ELIMINATION,
+    MSG_TYPE_LEFT_GAME, // appended last: MessageType crosses the wire as a raw int
     COUNT
 };
 
@@ -108,6 +109,7 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.
+const float MID_MATCH_LEAVE_GRACE_SEC = 15.0f; // seconds a mid-match leaver's body stays open for a reconnect before being eliminated (see Player::leaveGraceSec)
 
 //MARK: Wall Constants
 const float WALL_ELASTICITY_PLAYER = 0.5f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)

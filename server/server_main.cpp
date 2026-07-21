@@ -63,6 +63,10 @@ const float          TICK_DT   = 1.0f / TICK_RATE;
 // Comfortably above the client's 1s keepalive cadence (and deliberately NOT equal
 // to COUNTDOWN_SECONDS) so a brief frame hitch can't cull a live client.
 const double         UDP_CLIENT_TIMEOUT = 10.0;
+// Shorter timeout while nobody's mid-action: an ungraceful lobby disconnect
+// (crash/force-quit - no "goodbye" possible) shouldn't sit around looking
+// connected for as long as a mid-match one would need to survive a hitch.
+const double         UDP_CLIENT_TIMEOUT_LOBBY = 3.0;
 // const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
 
 //MARK: JSON out
@@ -264,12 +268,16 @@ static int ClaimFreeSlot() {
 // hello/accept could otherwise land ahead of that tick's sweep and get pushed
 // to a higher slot than a just-expired one it should have reclaimed (e.g. a
 // client reconnecting under a new source endpoint after its old one goes
-// stale). Caller MUST hold clientMutex.
+// stale). Uses the shorter UDP_CLIENT_TIMEOUT_LOBBY while nobody's mid-action;
+// the longer UDP_CLIENT_TIMEOUT otherwise, to survive a mid-match frame hitch.
+// Caller MUST hold clientMutex.
 static void ReapIdleUdpClients() {
-    double now = NowSec();
+    double now     = NowSec();
+    double timeout = gamePhase.load() == Phase::LOBBY ? UDP_CLIENT_TIMEOUT_LOBBY
+                                                        : UDP_CLIENT_TIMEOUT;
     for (auto it = clients.begin(); it != clients.end(); ) {
         if (it->second.transport == Transport::UDP &&
-            now - it->second.lastSeenSec > UDP_CLIENT_TIMEOUT) {
+            now - it->second.lastSeenSec > timeout) {
             std::cout << "UDP player " << it->second.playerId
                       << " timed out. Active: " << (clients.size() - 1) << "\n";
             udpIndex.erase(it->second.udpEndpoint);
@@ -278,6 +286,33 @@ static void ReapIdleUdpClients() {
             ++it;
         }
     }
+}
+
+// Compact every connected client into the lowest slots, in their current
+// slot order (order-preserving, so the lowest-slot client - the host - stays
+// the host). Closes the hole a leaver left behind: the next-lowest client
+// takes over the vacated slot instead of it just sitting empty/bot-ified
+// while they stay parked higher up. Returns the connIds whose playerId
+// actually changed, so the caller can push each of them a fresh welcome -
+// a client only learns "which slot is mine" from a welcome message, so
+// changing playerId without one would leave it rendering/inputting as its
+// old slot. Caller MUST hold clientMutex.
+static std::vector<uint64_t> CompactConnectedSlots() {
+    std::vector<uint64_t> changed;
+    std::vector<std::pair<int, uint64_t>> order; // (slot, connId)
+    for (auto& [cid, c] : clients) order.push_back({c.playerId, cid});
+    std::sort(order.begin(), order.end());
+    for (int i = 0; i < (int)order.size(); ++i) {
+        auto& c = clients[order[i].second];
+        if (c.playerId != i) {
+            std::cout << "Slot compact: player " << c.playerId
+                      << " -> " << i << " (" << c.name << ")\n";
+            changed.push_back(order[i].second);
+        }
+        c.playerId  = i;
+        c.nameDirty = true;
+    }
+    return changed;
 }
 
 //MARK: Bot slots
@@ -309,6 +344,41 @@ static void refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
         players[i].name          = BOT_NAME_STRINGS[nameIdx];
         players[i].color_outline = BOT_OUTLINE_COLOR;
         players[i].color_fill    = BOT_FILL_COLOR;
+    }
+}
+
+// Companion to refreshBotSlots for the case it deliberately leaves alone: a
+// mid-match slot whose client left (PLAYING/GAMEOVER, so `!allowBotify` -
+// see refreshBotSlots' comment). That body stays open for a reconnect, but
+// if nobody reconnects within MID_MATCH_LEAVE_GRACE_SEC, eliminate it so it
+// stops being a pointless, uncontrolled target: same direct-elimination
+// pattern as the "lost in space" path (gamespace.h) - no takeDamage(), no
+// damage source - plus a kill-feed message everyone sees. Caller MUST hold
+// gameMutex (reads/writes players, emits a message) AND clientMutex
+// (indirectly, via the already-gathered `claimed` set - this helper itself
+// never touches `clients`). No-ops entirely while `allowBotify` (LOBBY/
+// COUNTDOWN): those slots become bots instead via refreshBotSlots.
+static void HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify, float dt) {
+    if (allowBotify) return;
+    auto& players = gameSpace.getPlayers();
+    for (int i = 0; i < (int)players.size(); ++i) {
+        Player& p = players[i];
+        if (claimed.count(i) > 0) {
+            p.leaveGraceSec = -1.0f; // reclaimed (reconnect or new joiner) - cancel any countdown
+            continue;
+        }
+        if (p.isBot) continue;      // a real bot slot, never had a human - not a leaver
+        if (!p.isAlive) continue;   // already dead/eliminated - nothing to do
+        if (p.leaveGraceSec < 0.0f) {
+            p.leaveGraceSec = MID_MATCH_LEAVE_GRACE_SEC; // just noticed vacant - arm the countdown
+            continue;
+        }
+        p.leaveGraceSec -= dt;
+        if (p.leaveGraceSec <= 0.0f) {
+            p.isAlive = false;
+            Message msg(MSG_TYPE_LEFT_GAME, p.name, p.name, p.id, p.id);
+            gameSpace.emitMessage(msg);
+        }
     }
 }
 
@@ -1261,17 +1331,12 @@ void SimulationLoop() {
                     // hasn't run yet this tick.
                     ReapIdleUdpClients();
                     connectedAtStart = (int)clients.size();
-                    std::vector<std::pair<int, uint64_t>> order; // (slot, connId)
-                    for (auto& [cid, c] : clients) order.push_back({c.playerId, cid});
-                    std::sort(order.begin(), order.end());
-                    for (int i = 0; i < (int)order.size(); ++i) {
-                        auto& c = clients[order[i].second];
-                        if (c.playerId != i)
-                            std::cout << "Slot compact: player " << c.playerId
-                                      << " -> " << i << " (" << c.name << ")\n";
-                        c.playerId  = i;
-                        c.nameDirty = true;
-                    }
+                    // Every client is welcomed unconditionally right below
+                    // (justStarted), so this call's own re-welcome list can be
+                    // ignored here - it only matters for the continuous LOBBY
+                    // compaction call site (see the per-tick "Bot reconcile"
+                    // block below).
+                    CompactConnectedSlots();
                 }
                 // Resize the roster to the requested match size, but never below
                 // the number of connected humans (no one loses their body). Slots
@@ -1367,6 +1432,23 @@ void SimulationLoop() {
                 ReapIdleUdpClients();
             }
 
+            //MARK: Lobby slot compaction
+            // Continuously close gaps left by a leaver, live - not just once at
+            // match start. LOBBY only: once gameSpace.generate() has run
+            // (COUNTDOWN onward), slot index also means a spawned body tied to
+            // that index, and renumbering playerId without moving the body
+            // would desync "which body is mine" from the client's new slot. In
+            // pure LOBBY, gameSpace.getPlayers() is preview data only, so this
+            // is safe. Every re-slotted client needs a fresh welcome - it only
+            // learns "which slot is mine" (myIndex) from one.
+            if (gamePhase.load() == Phase::LOBBY) {
+                std::lock_guard<std::mutex> gc(clientMutex);
+                for (uint64_t connId : CompactConnectedSlots()) {
+                    auto it = clients.find(connId);
+                    if (it != clients.end()) SendToClient(it->second, welcomeFor(it->second));
+                }
+            }
+
             //MARK: Name sync
             // Apply any pending display-name changes onto their player slots. Runs
             // every tick in every phase (lock order gameMutex->clientMutex), so
@@ -1394,11 +1476,16 @@ void SimulationLoop() {
             // mid-match join still flips a slot bot->human (the bot yields).
             // Cheap - a handful of slots. Bots are only DRIVEN in
             // PLAYING/GAMEOVER (below); in the lobby they just hold a slot.
+            // HandleMidMatchLeavers is the mid-match counterpart: once
+            // !allowBotify, it grace-counts and eventually eliminates a body
+            // refreshBotSlots left open (see its own comment).
             {
                 Phase ph = gamePhase.load();
                 bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN);
                 std::lock_guard<std::mutex> gc(clientMutex);
-                refreshBotSlots(gatherClaimedSlots(), allowBotify);
+                std::set<int> claimed = gatherClaimedSlots();
+                refreshBotSlots(claimed, allowBotify);
+                HandleMidMatchLeavers(claimed, allowBotify, TICK_DT);
             }
 
             //MARK: Tick sim
