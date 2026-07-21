@@ -571,18 +571,17 @@ static std::string buildFullBinary() {
 
 //MARK: State packet
 // -------------------------------------------------------------------------
-// State serialization - build the JSON state packet sent to all clients.
-// Each client gets the same world state but with their own lastSeq injected.
+// State serialization - build the JSON state body sent to all clients.
+// Every client sees the same world this tick - only `tick`/`lastSeq` (the tiny
+// per-client header built by buildStatePacket below) actually differ, so this
+// body is built exactly ONCE per tick in BroadcastState and reused for every
+// connected WS client instead of being re-serialized per client.
 // `connectedSlots` are the player indices currently occupied by a client; each
 // player carries an "active" flag so clients can skip rendering empty slots.
 // -------------------------------------------------------------------------
-static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
-                                    const std::set<int>& connectedSlots) {
+static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
     std::string s;
     s.reserve(1024);
-    s += "{\"type\":\"state\"";
-    s += ",\"tick\":"  + ju(tick);
-    s += ",\"seq\":"   + ju(lastSeq);
     s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
     s += ",\"countdown\":" + jf(countdownRemaining.load()); // seconds left in the pre-match countdown (0 unless COUNTDOWN)
 
@@ -727,21 +726,34 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
     return s;
 }
 
+// Cheap per-client wrapper: prepends the tiny header (type/tick/seq) that
+// actually varies per client onto the shared `body` built once per tick by
+// buildStateBodyJson above.
+static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
+                                    const std::string& body) {
+    std::string s;
+    s.reserve(32 + body.size());
+    s += "{\"type\":\"state\"";
+    s += ",\"tick\":" + ju(tick);
+    s += ",\"seq\":"  + ju(lastSeq);
+    s += body;
+    return s;
+}
+
 //MARK: State packet (binary)
 // -------------------------------------------------------------------------
-// The same state as buildStatePacket, packed as little-endian binary (netbin.h)
+// The same state as buildStateBodyJson, packed as little-endian binary (netbin.h)
 // for UDP clients so it fits one datagram (~4x smaller than the JSON). Field
 // ORDER here must match the client's applyBinaryState() reader in wire.h.
 // Unused-on-the-wire fields are dropped: asteroid/rocket `dead` (the server never
 // sends dead=true - destroyed objects just vanish from the set).
+//
+// Same once-per-tick split as buildStateBodyJson: this body excludes the
+// header (tag/tick/lastSeq), which buildStateBinary below prepends per client.
 // -------------------------------------------------------------------------
-static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
-                                    const std::set<int>& connectedSlots) {
+static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
     std::string b;
     b.reserve(768);
-    nb::putU8(b, nb::STATE_BIN_VERSION);   // byte 0: tag (not '{'); also the discriminator
-    nb::putU32(b, tick);
-    nb::putU32(b, lastSeq);
     nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
     nb::putF32(b, countdownRemaining.load());
 
@@ -835,6 +847,20 @@ static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
         nb::putStr(b, m.playerB_Name);
     }
 
+    return b;
+}
+
+// Cheap per-client wrapper: prepends the tiny header (tag/tick/lastSeq) that
+// actually varies per client onto the shared `body` built once per tick by
+// buildStateBodyBinary above.
+static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
+                                    const std::string& body) {
+    std::string b;
+    b.reserve(16 + body.size());
+    nb::putU8(b, nb::STATE_BIN_VERSION);
+    nb::putU32(b, tick);
+    nb::putU32(b, lastSeq);
+    b += body;
     return b;
 }
 
@@ -1219,28 +1245,43 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
 //MARK: Broadcast
 // -------------------------------------------------------------------------
 // Broadcast state to all connected clients.
-// Each client gets the same world state but with their own lastSeq.
+// Every client sees the same world this tick - only `lastSeq` differs, so the
+// (comparatively expensive) JSON/binary body is serialized ONCE per tick per
+// transport here, not once per connected client; buildStatePacket/
+// buildStateBinary then just prepend each client's own small tick/seq header
+// onto that shared body.
 //
 // Called from the sim loop AFTER gameMutex is released, on purpose: the
-// per-client JSON build and blocking socket writes must not stall the
-// simulation (or hold gameMutex while a slow/dead client backs up a write).
-// Reading gameSpace here without gameMutex is safe because the sim thread is
-// its only mutator and this runs on that same thread, sequentially after the
-// locked sim step - so no concurrent writer exists. Only clientMutex is taken
-// here, to guard the clients map against connects/disconnects on io threads.
+// per-client build and blocking socket writes must not stall the simulation
+// (or hold gameMutex while a slow/dead client backs up a write). Reading
+// gameSpace here without gameMutex is safe because the sim thread is its only
+// mutator and this runs on that same thread, sequentially after the locked
+// sim step - so no concurrent writer exists. Only clientMutex is taken here,
+// to guard the clients map against connects/disconnects on io threads.
 // -------------------------------------------------------------------------
 void BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
     // Which player slots are occupied, so clients can hide empty ones.
     std::set<int> connectedSlots;
-    for (auto& [cid, client] : clients) connectedSlots.insert(client.playerId);
+    bool haveWs = false, haveUdp = false;
+    for (auto& [cid, client] : clients) {
+        connectedSlots.insert(client.playerId);
+        if (client.transport == Transport::UDP) haveUdp = true;
+        else haveWs = true;
+    }
+
+    // Build each transport's shared body at most once, and only if a client
+    // of that transport is actually connected.
+    std::string jsonBody, binBody;
+    if (haveWs)  jsonBody = buildStateBodyJson(connectedSlots);
+    if (haveUdp) binBody  = buildStateBodyBinary(connectedSlots);
 
     for (auto& [cid, client] : clients) {
         // UDP gets the compact binary state (fits one datagram; MTU-safe over the
         // internet). WebSocket/TCP has no MTU limit, so it keeps the JSON state.
         std::string packet = (client.transport == Transport::UDP)
-            ? buildStateBinary(tick, client.lastSeq, connectedSlots)
-            : buildStatePacket(tick, client.lastSeq, connectedSlots);
+            ? buildStateBinary(tick, client.lastSeq, binBody)
+            : buildStatePacket(tick, client.lastSeq, jsonBody);
         // Oversize warning (throttled): a binary state over UDP_SAFE_DATAGRAM
         // gets chunked with no retransmit, so any lost chunk drops that whole
         // tick. If this fires steadily, the map preset has too many objects.
