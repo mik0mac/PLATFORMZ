@@ -462,6 +462,20 @@ static std::string welcomeFor(const ConnectedClient& c) {
                                          : buildWelcome(c.playerId);
 }
 
+// Rejection: every player slot is already claimed (typical mid-match, since the
+// roster is sized to the connected humans at match start with no bot filler).
+// Sent instead of silently dropping the connection, so the client can show
+// "match in progress" rather than a generic connect failure and keep retrying
+// in the background.
+static std::string buildFull() {
+    return "{\"type\":\"full\"}";
+}
+static std::string buildFullBinary() {
+    std::string b;
+    nb::putU8(b, nb::FULL_BIN_VERSION);
+    return b;
+}
+
 //MARK: State packet
 // -------------------------------------------------------------------------
 // State serialization - build the JSON state packet sent to all clients.
@@ -781,25 +795,38 @@ public:
                 std::lock_guard<std::mutex> gg(gameMutex);
                 std::lock_guard<std::mutex> gc(clientMutex);
                 playerId = ClaimFreeSlot();
-                if (playerId == -1) {
-                    std::cout << "Server full, rejecting connection\n";
-                    beast::error_code cec;
-                    self->ws_.close(websocket::close_code::try_again_later, cec);
-                    return;
+                if (playerId != -1) {
+                    self->connId_ = nextConnId++;
+                    ConnectedClient c;
+                    c.playerId  = playerId;
+                    c.transport = Transport::WS;
+                    c.session   = self;
+                    clients[self->connId_] = c;
+                    // Note: no bot-slot refresh here. Bots exist only during a match
+                    // (set at match start + reconciled each sim tick), so the lobby
+                    // stays bot-free and a mid-match join's slot yields on the next
+                    // tick's reconcile (see SimulationLoop). Marking bots here would
+                    // also invert the gameMutex->clientMutex order we hold above.
+                    std::cout << "Client connected -> player slot " << playerId
+                              << ". Active: " << clients.size() << "\n";
                 }
-                self->connId_ = nextConnId++;
-                ConnectedClient c;
-                c.playerId  = playerId;
-                c.transport = Transport::WS;
-                c.session   = self;
-                clients[self->connId_] = c;
-                // Note: no bot-slot refresh here. Bots exist only during a match
-                // (set at match start + reconciled each sim tick), so the lobby
-                // stays bot-free and a mid-match join's slot yields on the next
-                // tick's reconcile (see SimulationLoop). Marking bots here would
-                // also invert the gameMutex->clientMutex order we hold above.
-                std::cout << "Client connected -> player slot " << playerId
-                          << ". Active: " << clients.size() << "\n";
+            }
+
+            if (playerId == -1) {
+                // Server full (every slot claimed - typical mid-match with no bot
+                // filler). Tell the client so it can show "match in progress"
+                // instead of a silent connect failure, then drop the socket.
+                // Deliberately NOT the synchronous ws_.close(): that performs a
+                // blocking WS closing handshake, and doing it while gameMutex was
+                // held used to freeze the whole match - SimulationLoop takes the
+                // same mutex every tick, so the sim thread stalled for however
+                // long the handshake took, on every retry. Send() posts onto this
+                // session's strand and keeps `self` alive via the async_write
+                // chain until the frame goes out (or errors); the socket then
+                // closes non-blocking when the Session's last reference drops.
+                std::cout << "Server full, rejecting connection\n";
+                self->Send(buildFull());
+                return;
             }
 
             // Send welcome with the assigned slot + the current platform layout
@@ -1523,31 +1550,42 @@ private:
         }
         int playerId = -1;
         ConnectedClient sink;
-        bool ok = false;
         {
             // Lock order gameMutex->clientMutex, matching Session::Start.
             std::lock_guard<std::mutex> gg(gameMutex);
             std::lock_guard<std::mutex> gc(clientMutex);
             playerId = ClaimFreeSlot();
-            if (playerId == -1) { std::cout << "Server full, rejecting UDP client\n"; return; }
-            uint64_t connId = nextConnId++;
-            ConnectedClient c;
-            c.playerId    = playerId;
-            c.transport   = Transport::UDP;
-            c.udpEndpoint = from;
-            c.lastSeenSec = NowSec();
-            std::string nm = clampName(parseString(helloMsg, "name"));
-            if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
-            clients[connId] = c;
-            udpIndex[from]  = connId;
-            sink = c;
-            ok = true;
-            std::cout << "UDP client connected -> player slot " << playerId
-                      << ". Active: " << clients.size() << "\n";
+            if (playerId != -1) {
+                uint64_t connId = nextConnId++;
+                ConnectedClient c;
+                c.playerId    = playerId;
+                c.transport   = Transport::UDP;
+                c.udpEndpoint = from;
+                c.lastSeenSec = NowSec();
+                std::string nm = clampName(parseString(helloMsg, "name"));
+                if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
+                clients[connId] = c;
+                udpIndex[from]  = connId;
+                sink = c;
+                std::cout << "UDP client connected -> player slot " << playerId
+                          << ". Active: " << clients.size() << "\n";
+            }
         }
-        // Welcome after releasing locks (mirrors Session::Start): buildWelcome
-        // reads gameSpace unlocked exactly as the WS connect-welcome does.
-        if (ok) SendToClient(sink, welcomeFor(sink));
+        // Welcome/reject after releasing locks (mirrors Session::Start): both
+        // buildWelcome and SendToClient's UDP path only take clientMutex-free
+        // locks (welcomeStaticMutex / udpSendMutex), unlike gameMutex/clientMutex.
+        if (playerId != -1) {
+            SendToClient(sink, welcomeFor(sink));
+        } else {
+            std::cout << "Server full, rejecting UDP client\n";
+            // Reply so the client can show "match in progress" instead of
+            // silently retrying forever with no feedback (the hello resend
+            // loop otherwise looks identical to an unreachable server).
+            ConnectedClient reject;
+            reject.transport   = Transport::UDP;
+            reject.udpEndpoint = from;
+            SendToClient(reject, buildFullBinary());
+        }
     }
 };
 

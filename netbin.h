@@ -30,6 +30,7 @@ namespace nb {
 static const uint8_t STATE_BIN_VERSION   = 0x05; // per-tick state packet (bumped: position/velocity/angle/scalar fields quantized to shrink the per-object wire cost)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
+static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)
 
 // ---- chunking: oversized UDP messages ----
 // A datagram over ~1400 bytes IP-fragments, and some home routers/NATs drop
