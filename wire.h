@@ -48,7 +48,7 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 
 //MARK: Inbound - parsed result
 struct ServerMessage {
-    enum class Type { None, Welcome, State, Unknown };
+    enum class Type { None, Welcome, State, Full, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -449,6 +449,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         uint8_t tag = (uint8_t)text[0];
         if (tag == nb::STATE_BIN_VERSION)   return applyBinaryState(text, gs);
         if (tag == nb::WELCOME_BIN_VERSION) return applyBinaryWelcome(text, gs);
+        if (tag == nb::FULL_BIN_VERSION)    { ServerMessage m; m.type = ServerMessage::Type::Full; return m; }
     }
 
     ServerMessage msg;
@@ -480,6 +481,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         }
         return msg;
     }
+    if (type == "full") { msg.type = ServerMessage::Type::Full; return msg; }
     if (type != "state") { msg.type = ServerMessage::Type::Unknown; return msg; }
 
     msg.type = ServerMessage::Type::State;

@@ -325,6 +325,7 @@ int main(int argc, char** argv) {
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
+    bool      serverFull = false; // last join attempt was rejected: every slot claimed (mid-match, no bot filler)
     uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
     // Handshake/reconnect bookkeeping (networked): resend hello until welcomed, and
     // (UDP only) treat a long state silence as a dropped connection so the handshake
@@ -524,11 +525,18 @@ int main(int argc, char** argv) {
             ServerMessage m = applyMessage(frame, gameSpace);
             if (m.type == ServerMessage::Type::Welcome) {
                 myIndex = m.playerId;
+                serverFull = false;
                 // Now that we know our real slot, assert our name: send our display
                 // name (custom, or the correct "PLAYER {slot+1}" default). The
                 // server slot may carry a leftover lobby bot name, and pre-welcome
                 // (myIndex == -1) every client's default would have been "PLAYER 1".
                 net.send(serializeName(myDisplayName()));
+            }
+            else if (m.type == ServerMessage::Type::Full) {
+                // Every slot is claimed (mid-match, no bot filler). The hello
+                // resend loop keeps retrying; this just drives the lobby message
+                // below so it reads "match in progress" instead of "connecting".
+                serverFull = true;
             }
             else if (m.type == ServerMessage::Type::State) {
                 phase = m.phase; netCountdown = m.countdown;
@@ -848,8 +856,9 @@ int main(int argc, char** argv) {
                     if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
                     if (uiEnabled && UiButton(bxl, "XL")) startGame(mapSizePresets["XL"].halfSize, mapSizePresets["XL"].numPlatforms, mapSizePresets["XL"].numAsteroids);
                 } else if (!ready) {
-                    UiTextCentered(myIndex >= 0 ? "JOINING..." : "CONNECTING...",
-                                   screenWidth, (int)startY + 14, 20, GRAY);
+                    const char* waitMsg = serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
+                                        : myIndex >= 0 ? "JOINING..." : "CONNECTING...";
+                    UiTextCentered(waitMsg, screenWidth, (int)startY + 14, 20, GRAY);
                 } else {
                     // Connected but not the host: only "player 1" starts the match.
                     // Show who we're waiting on (their synced name, or the slot-
