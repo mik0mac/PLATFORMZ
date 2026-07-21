@@ -257,6 +257,29 @@ static int ClaimFreeSlot() {
     return -1;
 }
 
+// UDP has no disconnect event, so a client that quit just goes quiet. Free any
+// UDP slot whose last packet is older than the timeout. Called both on the
+// periodic per-tick sweep AND right before a new connection claims a slot
+// (Session::Accept / RegisterPeer) - the latter closes a race where a fresh
+// hello/accept could otherwise land ahead of that tick's sweep and get pushed
+// to a higher slot than a just-expired one it should have reclaimed (e.g. a
+// client reconnecting under a new source endpoint after its old one goes
+// stale). Caller MUST hold clientMutex.
+static void ReapIdleUdpClients() {
+    double now = NowSec();
+    for (auto it = clients.begin(); it != clients.end(); ) {
+        if (it->second.transport == Transport::UDP &&
+            now - it->second.lastSeenSec > UDP_CLIENT_TIMEOUT) {
+            std::cout << "UDP player " << it->second.playerId
+                      << " timed out. Active: " << (clients.size() - 1) << "\n";
+            udpIndex.erase(it->second.udpEndpoint);
+            it = clients.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 //MARK: Bot slots
 // "Fill empty slots": every player slot NOT owned by a connected client becomes
 // a bot; claimed slots are humans. Flipping isBot on/off is all that's needed to
@@ -794,6 +817,10 @@ public:
             {
                 std::lock_guard<std::mutex> gg(gameMutex);
                 std::lock_guard<std::mutex> gc(clientMutex);
+                // Reap eagerly, not just on the periodic tick: a stale UDP slot
+                // (e.g. a client whose network identity changed across a sleep)
+                // must not be able to push this new WS client above it.
+                ReapIdleUdpClients();
                 playerId = ClaimFreeSlot();
                 if (playerId != -1) {
                     self->connId_ = nextConnId++;
@@ -1305,26 +1332,14 @@ void SimulationLoop() {
             gameSpace.getMessages().clear();
 
             //MARK: Reap idle UDP clients
-            // UDP has no disconnect event, so a client that quit just goes quiet.
-            // Free any UDP slot whose last packet is older than the timeout. In
-            // the lobby the bot reconcile below turns the vacated slot into a
-            // bot; mid-match the body stays open for a reconnect (see
+            // In the lobby the bot reconcile below turns the vacated slot into
+            // a bot; mid-match the body stays open for a reconnect (see
             // refreshBotSlots). (WS clients are cleaned up by their
-            // Read()-error callback instead.)
+            // Read()-error callback instead.) See ReapIdleUdpClients() for why
+            // this also runs eagerly at connect time, not just here.
             {
                 std::lock_guard<std::mutex> gc(clientMutex);
-                double now = NowSec();
-                for (auto it = clients.begin(); it != clients.end(); ) {
-                    if (it->second.transport == Transport::UDP &&
-                        now - it->second.lastSeenSec > UDP_CLIENT_TIMEOUT) {
-                        std::cout << "UDP player " << it->second.playerId
-                                  << " timed out. Active: " << (clients.size() - 1) << "\n";
-                        udpIndex.erase(it->second.udpEndpoint);
-                        it = clients.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
+                ReapIdleUdpClients();
             }
 
             //MARK: Name sync
@@ -1554,6 +1569,11 @@ private:
             // Lock order gameMutex->clientMutex, matching Session::Start.
             std::lock_guard<std::mutex> gg(gameMutex);
             std::lock_guard<std::mutex> gc(clientMutex);
+            // Reap eagerly, not just on the periodic tick: a client reconnecting
+            // under a new source endpoint (e.g. after its laptop slept and WiFi
+            // got a new NAT mapping) must reclaim its old slot immediately
+            // rather than racing this tick's scheduled sweep and losing to it.
+            ReapIdleUdpClients();
             playerId = ClaimFreeSlot();
             if (playerId != -1) {
                 uint64_t connId = nextConnId++;
