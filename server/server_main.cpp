@@ -325,12 +325,15 @@ static std::vector<uint64_t> CompactConnectedSlots() {
 // client-owned slot indices, gathered by the caller under clientMutex (this
 // helper never touches `clients`, so it can't deadlock on the lock order).
 //
-// `allowBotify` is true only in the LOBBY/COUNTDOWN phases: the match roster is
-// final once play begins. Mid-match (PLAYING/GAMEOVER) a claimed slot still
-// flips bot->human (a joiner takes over the body), but a leaver's slot is NOT
-// given to a bot - the body stays open, drifting, keeping its name/score/health,
-// so the player can reconnect and resume it (ClaimFreeSlot hands back the
-// lowest free slot, which is theirs - humans are compacted below the bots).
+// `allowBotify` is true in LOBBY/COUNTDOWN/GAMEOVER: the match roster is only
+// truly locked while PLAYING. Mid-match (PLAYING) a claimed slot still flips
+// bot->human (a joiner takes over the body), but a leaver's slot is NOT given
+// to a bot - the body stays open, drifting, keeping its name/score/health, so
+// the player can reconnect and resume it (ClaimFreeSlot hands back the lowest
+// free slot, which is theirs - humans are compacted below the bots). Once
+// GAMEOVER, though, the client is already back on the roster-showing screen
+// (see returnToTitle in main.cpp), so a leaver's slot is relabeled right away
+// instead of sitting on their stale name until the next match start.
 static void refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
     auto& players = gameSpace.getPlayers();
     for (int i = 0; i < (int)players.size(); ++i) {
@@ -348,16 +351,16 @@ static void refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
 }
 
 // Companion to refreshBotSlots for the case it deliberately leaves alone: a
-// mid-match slot whose client left (PLAYING/GAMEOVER, so `!allowBotify` -
-// see refreshBotSlots' comment). That body stays open for a reconnect, but
-// if nobody reconnects within MID_MATCH_LEAVE_GRACE_SEC, eliminate it so it
+// mid-match slot whose client left while PLAYING (so `!allowBotify` - see
+// refreshBotSlots' comment). That body stays open for a reconnect, but if
+// nobody reconnects within MID_MATCH_LEAVE_GRACE_SEC, eliminate it so it
 // stops being a pointless, uncontrolled target: same direct-elimination
 // pattern as the "lost in space" path (gamespace.h) - no takeDamage(), no
 // damage source - plus a kill-feed message everyone sees. Caller MUST hold
 // gameMutex (reads/writes players, emits a message) AND clientMutex
 // (indirectly, via the already-gathered `claimed` set - this helper itself
 // never touches `clients`). No-ops entirely while `allowBotify` (LOBBY/
-// COUNTDOWN): those slots become bots instead via refreshBotSlots.
+// COUNTDOWN/GAMEOVER): those slots become bots instead via refreshBotSlots.
 static void HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify, float dt) {
     if (allowBotify) return;
     auto& players = gameSpace.getPlayers();
@@ -1511,18 +1514,22 @@ void SimulationLoop() {
             // connected client is a bot (named + colored). Running it in the lobby
             // too means the title-screen player list previews the bots that will
             // fill the match (and updates live as humans join/leave). Botifying is
-            // allowed only while the roster is still forming (LOBBY/COUNTDOWN):
-            // once play begins, a mid-match disconnect leaves the body OPEN (not
-            // bot-driven) so the player can reconnect and resume it, while a
-            // mid-match join still flips a slot bot->human (the bot yields).
-            // Cheap - a handful of slots. Bots are only DRIVEN in
-            // PLAYING/GAMEOVER (below); in the lobby they just hold a slot.
-            // HandleMidMatchLeavers is the mid-match counterpart: once
-            // !allowBotify, it grace-counts and eventually eliminates a body
-            // refreshBotSlots left open (see its own comment).
+            // withheld only while a match is actually LIVE (PLAYING): a mid-match
+            // disconnect leaves the body OPEN (not bot-driven) so the player can
+            // reconnect and resume it, while a mid-match join still flips a slot
+            // bot->human (the bot yields). GAMEOVER counts as "forming" here too -
+            // the client's screen already looks and behaves like the lobby at that
+            // point (returnToTitle keeps the socket open and comes right back to
+            // the roster), so a leaver's slot should stop showing their stale name
+            // instead of sitting untouched until the next match start relabels it.
+            // Cheap - a handful of slots. Bots are only DRIVEN in PLAYING/GAMEOVER
+            // (below); in the lobby they just hold a slot. HandleMidMatchLeavers is
+            // the PLAYING-only counterpart: once !allowBotify, it grace-counts and
+            // eventually eliminates a body refreshBotSlots left open (see its own
+            // comment).
             {
                 Phase ph = gamePhase.load();
-                bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN);
+                bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN || ph == Phase::GAMEOVER);
                 std::lock_guard<std::mutex> gc(clientMutex);
                 std::set<int> claimed = gatherClaimedSlots();
                 refreshBotSlots(claimed, allowBotify);
