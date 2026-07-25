@@ -317,6 +317,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             float stmr  = r.qFrac(p->countdownToSpectating);
             int   score = r.u16();
             uint8_t flags = r.u8();
+            float oobTimer = r.qFrac(OUT_OF_BOUNDS_TIMER);
             std::string name = r.str();
 
             p->position = pos;
@@ -334,6 +335,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             p->isBot         = (flags & 2) != 0;
             p->isConnected   = (flags & 4) != 0;
             p->isSpectating  = (flags & 8) != 0;
+            p->isOutOfBounds = (flags & 16) != 0;
+            p->outOfBoundsTimer = oobTimer;
             p->name          = name;
         }
         for (Player& p : players)
@@ -552,6 +555,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.spectatingTimer = jo.value("stmr", p.spectatingTimer); // drives the client-side greyscale ramp
                 p.isBot    = jo.value("bot", false); // server-owned: which slots are bots (absent on older packets)
                 p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
+                p.isOutOfBounds    = jo.value("oob", false);  // server-owned: outside the boundary, elimination pending
+                p.outOfBoundsTimer = jo.value("oobt", p.outOfBoundsTimer); // drives the HUD countdown
                 p.isConnected = jo.value("active", true); // hide empty slots client-side
                 p.name     = jo.value("name", std::string("Player")); // server-owned display name
                 p.score    = jo.value("score", p.score); // server-owned score (kept stable if absent)
