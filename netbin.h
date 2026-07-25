@@ -91,11 +91,23 @@ inline void putStr(std::string& b, const std::string& s) {
 // far more precision than the game needs. These trade a little precision
 // (imperceptible at this game's scale) for roughly half the bytes.
 
-// Position component: int16 over +/-QPOS_RANGE. Covers the largest map preset
-// (XL, 360 half-size) times GAMESPACE_OUT_OF_BOUNDS_FACTOR (1.5) = 540, plus
-// margin. ~1.8cm/step - well under the smallest object radius (PLAYER_RADIUS
-// 2.0, ASTEROID_MIN_SIZE 6.0).
-static const float QPOS_RANGE = 600.0f;
+// Position component: int16 over +/-QPOS_RANGE. This must cover how far an
+// object can actually GET, which with WALLS_ENABLED off is a long way PAST the
+// out-of-bounds line - objects keep flying out there for seconds before the OOB
+// rules retire them. Sizing this to the OOB line alone is what caused the
+// walls-off bug where a player froze at +/-600 and rocket trails bent along the
+// clamp plane (quantizeToI16 clamps silently, per axis, and networked position
+// is server-authoritative - so the clamp IS the position the client renders).
+// Worst case is XL (360 half-size) with every speed slider maxed:
+//   OOB line   = 360 * GAMESPACE_OUT_OF_BOUNDS_FACTOR (1.5)           = 540
+//   player     = 540 + (PLAYER_SPEED_JETPACK 30 * speedBoost 2
+//                       * jetpackThrust 2) * OUT_OF_BOUNDS_TIMER 10s  = 1740
+//   rocket     = 540 + (ROCKET_SPEED 120 * speedBoost 2
+//                       * rocketSpeedScale 2 + ~120 inherited)
+//                      * Rocket::fadeLength 3s                        = 2340
+// ~7.3cm/step - still far under the smallest object radius (PLAYER_RADIUS 2.0,
+// ASTEROID_MIN_SIZE 6.0) and under the per-tick motion of anything moving.
+static const float QPOS_RANGE = 2400.0f;
 // Velocity component: int16 over +/-QVEL_RANGE. Covers worst-case rocket speed
 // (ROCKET_SPEED 120 * speedBoost max 2 * rocketSpeedScale max 2 = 480) plus
 // inherited shooter-velocity headroom.
