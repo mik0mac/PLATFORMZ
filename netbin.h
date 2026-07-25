@@ -27,7 +27,7 @@ namespace nb {
 // Byte 0 tags each binary packet, and (being != '{') keeps it from colliding
 // with a JSON message. One value per binary message type; bump a value if its
 // layout ever changes incompatibly.
-static const uint8_t STATE_BIN_VERSION   = 0x05; // per-tick state packet (bumped: position/velocity/angle/scalar fields quantized to shrink the per-object wire cost)
+static const uint8_t STATE_BIN_VERSION   = 0x06; // per-tick state packet (bumped: per-player out-of-bounds flag + countdown added, so the HUD can show it on net clients)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)
@@ -59,7 +59,7 @@ static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 // helpers below), which is why these are roughly half their pre-quantization
 // size - that's the point: it lets more asteroids fit the same datagram.
 static const size_t STATE_OVERHEAD  = 33;  // version/tick/seq/phase/options + section counts
-static const size_t PLAYER_BYTES    = 36;  // 29 fixed (quantized) + a typical name (1 + ~6)
+static const size_t PLAYER_BYTES    = 37;  // 29 fixed (quantized, incl. the OOB countdown byte) + a typical name (1 + ~6) + 1 slack
 static const size_t ASTEROID_BYTES  = 19;  // id + qpos + qvel + qsize + health + qflash
 static const size_t ACTION_HEADROOM = 65;  // in-flight rockets (16 B) / explosions (8 B) / audio events (12 B)
 
