@@ -264,6 +264,12 @@ public:
         // instead means a bounce gets a moment to actually take effect.
         if (isUsingJetpack && canJetpack()) {
             float targetVerticalSpeed = speedJetpack * jetBoost;
+            // if player is also moving horizontally, split the jetpack thrust between vertical and horizontal components.
+            if (moveInput.x != 0.0f || moveInput.y != 0.0f) {
+                float speedDiff = (speedJetpack * jetBoost) - (speedWalk * speedBoost);
+                targetVerticalSpeed -= speedDiff; // reduce vertical speed to allocate some thrust to horizontal movement
+            }
+
             float verticalChange = targetVerticalSpeed - velocity.y;
             float maxStep = accelerationJetpack * jetBoost * dt;
             if (fabsf(verticalChange) > maxStep) {

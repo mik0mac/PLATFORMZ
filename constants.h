@@ -72,8 +72,9 @@ enum MessageType {
 };
 
 //MARK: Physics Constants
-const float MOON_GRAVITY = 3.25f; //1.62f; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
-const float EARTH_GRAVITY = 19.6133f; //9.81f; // earth gravity, m/s^2 * 2
+const float GRAVITY_SCALE = 4.0f;
+const float MOON_GRAVITY = 1.62f * GRAVITY_SCALE; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
+const float EARTH_GRAVITY = 9.81f * GRAVITY_SCALE; // earth gravity, m/s^2 * 2
 
 //MARK: GameSpace Constants
 // These are only class defaults - each match overrides them with a mapSizePreset (below), applied in main.cpp's startGame.
@@ -168,10 +169,10 @@ const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of R
 const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
 //MARK: Player Speed
-const float PLAYER_SPEED_WALK = 20.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 24.0f; // units/sec^2
-const float PLAYER_SPEED_JETPACK = 30.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 32.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
+const float PLAYER_SPEED_WALK = 30.0f; // units/sec
+const float PLAYER_ACCELERATION_WALK = 30.0f; // units/sec^2
+const float PLAYER_SPEED_JETPACK = 45.0f; // units/sec
+const float PLAYER_ACCELERATION_JETPACK = 45.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
 // THRUST sliders (MatchOptions in options.h) multiply them per match.
 
@@ -282,8 +283,8 @@ const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets
 
 const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
 
-const float ROCKET_SPEED = 120.0f; // units/sec
-const float ROCKET_KICKBACK_FACTOR = 0.0375f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
+const float ROCKET_SPEED = 180.0f; // units/sec
+const float ROCKET_KICKBACK_FACTOR = 0.03f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
 // OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket
