@@ -286,8 +286,8 @@ public:
             bool wasAlive = player.isAlive;
             player.updatePos(dt, walls.halfSize);
             if (player.isOutOfBounds && player.isAlive && !player.outOfBoundsWarned) {
-                Message msg(MSG_TYPE_OUT_OF_BOUNDS, player.name, player.name, player.id, player.id);
-                emitMessage(msg);
+                // Message msg(MSG_TYPE_OUT_OF_BOUNDS, player.name, player.name, player.id, player.id);
+                // emitMessage(msg);
                 emitAudio(FX_WARNING, player.position, player.id);
                 player.outOfBoundsWarned = true; // Set the warning flag to true
             }
