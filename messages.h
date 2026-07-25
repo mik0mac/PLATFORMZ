@@ -9,7 +9,7 @@
 
 
 const float DEFAULT_MSG_DURATION = 5.0f; // seconds
-const Color DEFAULT_MSG_COLOR = {255, 255, 255, 255}; // white text
+const Color DEFAULT_MSG_COLOR = {0, 255, 255, 255}; // cyan text
 
 // MARK: Visibility
 enum VIS_TYPE {
@@ -180,11 +180,12 @@ class Message {
                 color = GREEN;
                 visibility.set(VIS_PLAYER_A); // only the player who destroyed the asteroid sees this message
                 break;
-            case MSG_TYPE_OUT_OF_BOUNDS:
-                text = "YOU ARE OUT OF BOUNDS!";
-                color = RED;
-                visibility.set(VIS_PLAYER_A); // only the player who is out of bounds sees this message
-                break;
+            // Out of bounds messages are replaced by the in-game warning and timer system.
+            // case MSG_TYPE_OUT_OF_BOUNDS:
+            //     text = "YOU ARE OUT OF BOUNDS!";
+            //     color = RED;
+            //     visibility.set(VIS_PLAYER_A); // only the player who is out of bounds sees this message
+            //     break;
             // The two "WAS" templates need verb agreement: the caller passes
             // pa = "YOU" for the local player (main.cpp), which takes "WERE".
             case MSG_TYPE_LOST_IN_SPACE:

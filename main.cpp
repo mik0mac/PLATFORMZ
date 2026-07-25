@@ -1537,17 +1537,30 @@ int main(int argc, char** argv) {
                 // than recomputed, and this block reads identically in local and
                 // networked play. Sited above centre so it never covers the
                 // reticle, which is what you need to see to fly back in.
+                static float oobPulsePhase = 0.0f;
                 if (player.isOutOfBounds) {
-                    // Pulse accelerates as the timer drains (2Hz full -> 6Hz at zero),
-                    // so urgency reads from motion before the digits are parsed.
-                    float frac = Clamp(player.outOfBoundsTimer / OUT_OF_BOUNDS_TIMER, 0.0f, 1.0f);
-                    float hz   = 2.0f + (1.0f - frac) * 4.0f;
-                    unsigned char a = (unsigned char)(160.0f + 95.0f * sinf((float)GetTime() * hz * 2.0f * PI));
+                    // Match Player::updatePos's AABB rule: speed ramps with how far
+                    // past the OOB box face you are, independent of travel direction.
+                    float outOfBoundsLimit = gameSpace.getWalls().halfSize * GAMESPACE_OUT_OF_BOUNDS_FACTOR;
+                    float maxComp = fmaxf(fmaxf(player.position.x, player.position.y), player.position.z);
+                    float minComp = fminf(fminf(player.position.x, player.position.y), player.position.z);
+                    float outsidePos = fmaxf(0.0f, maxComp - outOfBoundsLimit);
+                    float outsideNeg = fmaxf(0.0f, -outOfBoundsLimit - minComp);
+                    float outsideDepth = fmaxf(outsidePos, outsideNeg);
+                    float factor = outsideDepth / outOfBoundsLimit;
+                    factor = Clamp(factor, 0.0f, 1.0f);
+                    float hz   = 0.5f + 3.5f * factor;
+                    oobPulsePhase += dt * hz * 2.0f * PI;
+                    if (oobPulsePhase > 2.0f * PI) oobPulsePhase = fmodf(oobPulsePhase, 2.0f * PI);
+                    unsigned char a = (unsigned char)(160.0f + 95.0f * sinf(oobPulsePhase));
                     Color warn = {255, 60, 60, a};
-                    int y = screenHeight / 2 - 140;
+                    int y = screenHeight / 2 - 160;
                     DrawCentered("OUT OF BOUNDS", y, 40, warn);
-                    DrawCentered(TextFormat("RETURN TO THE ARENA  %.1f", player.outOfBoundsTimer),
-                                 y + 48, 22, warn);
+                    DrawCentered("RETURN TO THE ARENA", y + 48, 22, warn);
+                    DrawCentered(TextFormat("%.1f", player.outOfBoundsTimer),
+                                 y + 48 + 30, 22, warn);
+                } else {
+                    oobPulsePhase = 0.0f;
                 }
             }
 
