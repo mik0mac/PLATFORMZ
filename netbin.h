@@ -25,12 +25,31 @@
 namespace nb {
 
 // Byte 0 tags each binary packet, and (being != '{') keeps it from colliding
-// with a JSON message. One value per binary message type; bump a value if its
-// layout ever changes incompatibly.
-static const uint8_t STATE_BIN_VERSION   = 0x05; // per-tick state packet (bumped: position/velocity/angle/scalar fields quantized to shrink the per-object wire cost)
+// with a JSON message. All four share ONE namespace - applyMessage (wire.h)
+// dispatches on byte 0 alone - so every value here must be distinct, which the
+// static_assert below enforces.
+//
+// Bump a value whenever the packet's MEANING changes incompatibly. That includes
+// changing what existing bytes decode to, not just adding/removing/reordering
+// fields: raising QPOS_RANGE (below) kept the layout byte-for-byte identical but
+// rescaled every position, and because the tag stayed put, a client happily
+// decoded a stale server's packets at 4x scale instead of rejecting them.
+static const uint8_t STATE_BIN_VERSION   = 0x07; // per-tick state packet (bumped: QPOS_RANGE 600 -> 2400 rescales every position; 0x06 was unavailable, see FULL_BIN_VERSION)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)
+
+// Distinct tags, checked at compile time. STATE is matched FIRST in applyMessage,
+// so a collision wouldn't error at runtime - it would silently swallow the other
+// message type (a STATE/FULL clash makes "server full" decode as a truncated
+// state packet, and the client never learns it was rejected).
+static_assert(STATE_BIN_VERSION != WELCOME_BIN_VERSION &&
+              STATE_BIN_VERSION != CHUNK_VERSION &&
+              STATE_BIN_VERSION != FULL_BIN_VERSION &&
+              WELCOME_BIN_VERSION != CHUNK_VERSION &&
+              WELCOME_BIN_VERSION != FULL_BIN_VERSION &&
+              CHUNK_VERSION != FULL_BIN_VERSION,
+              "binary packet tags must be unique - they share byte 0");
 
 // ---- chunking: oversized UDP messages ----
 // A datagram over ~1400 bytes IP-fragments, and some home routers/NATs drop

@@ -1776,6 +1776,17 @@ private:
 int main() {
     std::cout << "PLATFORMZ server | port " << PORT
               << " (TCP/WebSocket + UDP) | " << TICK_RATE << " Hz\n";
+    // Protocol identity, so `journalctl -u platformz` answers "is the running
+    // binary actually the one I just deployed?". That question is why a stale
+    // server once went unnoticed: make didn't track game headers, so a
+    // header-only pull rebuilt nothing and the restart swapped in the same
+    // binary. Clients must match these exactly - see netbin.h.
+    std::cout << "Protocol: state tag 0x" << std::hex << std::setfill('0')
+              << std::setw(2) << (int)nb::STATE_BIN_VERSION
+              << ", welcome tag 0x" << std::setw(2) << (int)nb::WELCOME_BIN_VERSION
+              << std::dec << std::setfill(' ')
+              << " | qpos +/-" << nb::QPOS_RANGE
+              << " | qvel +/-" << nb::QVEL_RANGE << "\n";
 
     // Join key gate (never printed - it's the secret). Lives in the
     // environment, not the repo: docs/deploy-vultr.md covers setting it on

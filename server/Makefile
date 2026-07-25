@@ -49,11 +49,26 @@ endif
 # server_main.cpp + collisions.cpp (game logic, no rendering)
 SRCS     := server_main.cpp ../collisions.cpp
 
+# Every header is a dependency, exactly like the root Makefile's `HDRS :=
+# $(wildcard *.h)`. Most of this project's logic lives in headers (netbin.h,
+# elements.h, gamespace.h, ...), so listing only the .cpp files meant a
+# header-only change rebuilt NOTHING here: `git pull` + `make -C server` +
+# `systemctl restart` on the box would print "gameserver is up to date" and
+# restart the identical old binary. That silently shipped a server whose
+# netbin.h constants disagreed with the clients', decoding every position at
+# the wrong scale. Deps, not the deploy docs, are the right place to fix that.
+#
+# Relative (not $(SERVERDIR)/$(GAMEDIR)) on purpose: prerequisites are split on
+# whitespace and can't be quoted the way the -I flags above are, so absolute
+# paths would break on a paths-with-spaces checkout (e.g. Dropbox on a Mac).
+# This also subsumes the old explicit raylib_server_stub.h dep - it's a *.h here.
+HDRS     := $(wildcard *.h) $(wildcard ../*.h)
+
 TARGET   := gameserver
 
 all: $(TARGET)
 
-$(TARGET): $(SRCS) raylib_server_stub.h
+$(TARGET): $(SRCS) $(HDRS)
 	$(CXX) $(CXXFLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 
 clean:

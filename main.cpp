@@ -341,6 +341,7 @@ int main(int argc, char** argv) {
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
     bool      serverFull = false; // last join attempt was rejected: every slot claimed (mid-match, no bot filler)
+    bool      protoMismatch = false; // server is speaking a different build's binary protocol (see netbin.h tags)
     uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
     // Handshake/reconnect bookkeeping (networked): resend hello until welcomed, and
     // (UDP only) treat a long state silence as a dropped connection so the handshake
@@ -552,6 +553,15 @@ int main(int argc, char** argv) {
                 // resend loop keeps retrying; this just drives the lobby message
                 // below so it reads "match in progress" instead of "connecting".
                 serverFull = true;
+            }
+            else if (m.type == ServerMessage::Type::VersionMismatch) {
+                // Client and server binaries disagree on the wire protocol, so
+                // nothing this server sends will ever decode. Latch it: without
+                // this the client sits on "CONNECTING TO SERVER..." forever with
+                // no clue why (no state packet applies, so no local player is
+                // ever created). Latched, not cleared on the next frame, because
+                // the hello-retry loop keeps the bad frames coming.
+                protoMismatch = true;
             }
             else if (m.type == ServerMessage::Type::State) {
                 phase = m.phase; netCountdown = m.countdown;
@@ -1407,10 +1417,18 @@ int main(int argc, char** argv) {
                 // "JOINING" only once the server has actually assigned us a slot
                 // (myIndex); merely having an open socket isn't "in" yet - and for
                 // UDP the socket is open instantly, before any welcome.
-                const char* msg = myIndex >= 0 ? "JOINING GAME..." : "CONNECTING TO SERVER...";
-                DrawText(msg, 20, 20, 20, RAYWHITE);
+                // A protocol mismatch never resolves - say so instead of spinning
+                // on "CONNECTING..." forever, and name the fix (rebuild/redeploy
+                // so both ends share netbin.h's tags).
+                const char* msg = protoMismatch ? "SERVER VERSION MISMATCH"
+                                : myIndex >= 0  ? "JOINING GAME..."
+                                                : "CONNECTING TO SERVER...";
+                DrawText(msg, 20, 20, 20, protoMismatch ? RED : RAYWHITE);
                 DrawText(serverUrl.c_str(), 20, 48, 14, DARKGRAY);
-                if (!net.lastError().empty())
+                if (protoMismatch)
+                    DrawText("This client and that server are different builds - redeploy the server.",
+                             20, 70, 14, RED);
+                else if (!net.lastError().empty())
                     DrawText(net.lastError().c_str(), 20, 70, 14, RED);
             EndDrawing();
             continue;

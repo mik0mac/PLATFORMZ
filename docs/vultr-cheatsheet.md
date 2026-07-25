@@ -58,8 +58,25 @@ cd /opt/PLATFORMZ
 sudo git pull                                  # pull your pushed commits
 sudo make -C server                            # rebuild the gameserver
 sudo systemctl restart platformz               # swap in the new binary
-sudo journalctl -u platformz -f                # confirm it came back up
+sudo journalctl -u platformz -n 20             # confirm it came back up
 ```
+
+**Check the `Protocol:` line in that log** — it prints the wire tags and quantizer
+ranges the running binary was built with:
+
+```
+PLATFORMZ server | port 9000 (TCP/WebSocket + UDP) | 60 Hz
+Protocol: state tag 0x07, welcome tag 0x02 | qpos +/-2400 | qvel +/-700
+```
+
+Those must match `netbin.h` in the build your clients are running. If they don't,
+the deploy didn't take and clients will be refused with SERVER VERSION MISMATCH.
+
+> This used to fail silently. `server/Makefile` only listed the `.cpp` files as
+> dependencies, so a commit that touched only a header (most of this codebase is
+> headers) rebuilt **nothing** — `make` printed "gameserver is up to date" and the
+> restart swapped in the same binary. The Makefile now depends on every `*.h`, so
+> `make -C server` is enough; the log line above is how you confirm it.
 
 Web client only (after `make web` on your Mac, committed and pushed):
 

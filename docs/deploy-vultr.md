@@ -229,7 +229,11 @@ filtered. `./platformz local` is the single-player escape hatch.
 ## Redeploying after code changes
 
 - **Server:** commit + push, then on the box: `cd /opt/PLATFORMZ && git pull` →
-  `make -C server` → `systemctl restart platformz`.
+  `make -C server` → `systemctl restart platformz`. Then confirm the deploy
+  actually took: `journalctl -u platformz -n 20` prints a `Protocol:` line with
+  the wire tags and quantizer ranges the running binary was built with, and those
+  must match `netbin.h` in your clients' build. A mismatch means clients get
+  SERVER VERSION MISMATCH instead of connecting.
 - **Web:** rebuild on your Mac (`make web RAYLIB_WEB_DIR=$HOME/raylib`), commit +
   push the regenerated `web/platformz.*` (they're tracked), then on the box:
   `git pull` and `cp /opt/PLATFORMZ/web/platformz.* /var/www/html/`.

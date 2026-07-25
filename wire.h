@@ -48,7 +48,7 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 
 //MARK: Inbound - parsed result
 struct ServerMessage {
-    enum class Type { None, Welcome, State, Full, Unknown };
+    enum class Type { None, Welcome, State, Full, VersionMismatch, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -463,6 +463,18 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         if (tag == nb::STATE_BIN_VERSION)   return applyBinaryState(text, gs);
         if (tag == nb::WELCOME_BIN_VERSION) return applyBinaryWelcome(text, gs);
         if (tag == nb::FULL_BIN_VERSION)    { ServerMessage m; m.type = ServerMessage::Type::Full; return m; }
+        // Chunks are a transport concern - UdpTransport reassembles them
+        // (net_client.h) and only ever hands us completed messages. One arriving
+        // here is a stray, not a version skew, so drop it quietly rather than
+        // letting it trip the mismatch report below.
+        if (tag == nb::CHUNK_VERSION)       { ServerMessage m; m.type = ServerMessage::Type::Unknown; return m; }
+        // A non-JSON first byte we don't recognise means the peer is speaking a
+        // different build's protocol (see the tag block in netbin.h). Naming it
+        // matters: this used to fall through to the JSON parse and come back as
+        // a generic Unknown, which callers drop - so a version-skewed server
+        // presented as a world that simply never updated, with nothing on screen
+        // to say why. '{' is excluded so real JSON still reaches the parser.
+        if (tag != '{') { ServerMessage m; m.type = ServerMessage::Type::VersionMismatch; return m; }
     }
 
     ServerMessage msg;
