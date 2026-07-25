@@ -34,7 +34,11 @@ namespace nb {
 // fields: raising QPOS_RANGE (below) kept the layout byte-for-byte identical but
 // rescaled every position, and because the tag stayed put, a client happily
 // decoded a stale server's packets at 4x scale instead of rejecting them.
-static const uint8_t STATE_BIN_VERSION   = 0x07; // per-tick state packet (bumped: QPOS_RANGE 600 -> 2400 rescales every position; 0x06 was unavailable, see FULL_BIN_VERSION)
+//
+// Values are never recycled, even once no live build uses them: 0x05 and 0x07
+// are burned by earlier state layouts, and a stale client in the wild still
+// speaks them. Reusing one would make a genuine mismatch decode as valid.
+static const uint8_t STATE_BIN_VERSION   = 0x08; // per-tick state packet (bumped: per-player out-of-bounds flag + countdown byte added to each player record)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)
@@ -78,7 +82,7 @@ static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 // helpers below), which is why these are roughly half their pre-quantization
 // size - that's the point: it lets more asteroids fit the same datagram.
 static const size_t STATE_OVERHEAD  = 33;  // version/tick/seq/phase/options + section counts
-static const size_t PLAYER_BYTES    = 36;  // 29 fixed (quantized) + a typical name (1 + ~6)
+static const size_t PLAYER_BYTES    = 37;  // 29 fixed (quantized, incl. the OOB countdown byte) + a typical name (1 + ~6) + 1 slack
 static const size_t ASTEROID_BYTES  = 19;  // id + qpos + qvel + qsize + health + qflash
 static const size_t ACTION_HEADROOM = 65;  // in-flight rockets (16 B) / explosions (8 B) / audio events (12 B)
 

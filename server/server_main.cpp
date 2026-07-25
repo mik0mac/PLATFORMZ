@@ -611,6 +611,8 @@ static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
         s += ",\"stmr\":"   + jf(p.spectatingTimer); // post-death spectate countdown (drives the client's greyscale ramp)
         s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (set for unoccupied slots during a match)
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
+        s += ",\"oob\":"    + jb(p.isOutOfBounds);   // server-owned: outside the boundary, elimination pending
+        s += ",\"oobt\":"   + jf(p.outOfBoundsTimer); // seconds left before being lost in space (drives the HUD countdown)
         // A slot is shown if a human occupies it, a bot drives it, or - once a
         // match is underway (roster final) - unconditionally, so a mid-match
         // leaver's open body stays visible/killable instead of going invisible.
@@ -795,7 +797,12 @@ static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
         // their human left (open body awaiting a reconnect).
         bool active = connectedSlots.count(i) > 0 || p.isBot
                       || gamePhase.load() != Phase::LOBBY;
-        nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)));
+        nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)
+                              | (p.isOutOfBounds ? 16 : 0)));
+        // Out-of-bounds countdown. Player::updatePos (which owns this timer)
+        // only runs server-side, so without this the client can't show how long
+        // is left before elimination - see the HUD block in main.cpp.
+        nb::putQFrac(b, p.outOfBoundsTimer, OUT_OF_BOUNDS_TIMER);
         nb::putStr(b, p.name);
     }
 

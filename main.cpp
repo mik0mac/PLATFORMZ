@@ -1530,6 +1530,25 @@ int main(int argc, char** argv) {
                     DrawText("EARTH GRAVITY ENGAGED!!!", 10, textHeight * 4, 14, BLUE);
                 }
                 DrawText(TextFormat("Score: %d", player.score), screenWidth - 80, textHeight * 1, 14, WHITE);
+
+                //MARK: Out-of-bounds countdown
+                // isOutOfBounds/outOfBoundsTimer are owned by Player::updatePos,
+                // which runs only on the host - so they're synced (wire.h) rather
+                // than recomputed, and this block reads identically in local and
+                // networked play. Sited above centre so it never covers the
+                // reticle, which is what you need to see to fly back in.
+                if (player.isOutOfBounds) {
+                    // Pulse accelerates as the timer drains (2Hz full -> 6Hz at zero),
+                    // so urgency reads from motion before the digits are parsed.
+                    float frac = Clamp(player.outOfBoundsTimer / OUT_OF_BOUNDS_TIMER, 0.0f, 1.0f);
+                    float hz   = 2.0f + (1.0f - frac) * 4.0f;
+                    unsigned char a = (unsigned char)(160.0f + 95.0f * sinf((float)GetTime() * hz * 2.0f * PI));
+                    Color warn = {255, 60, 60, a};
+                    int y = screenHeight / 2 - 140;
+                    DrawCentered("OUT OF BOUNDS", y, 40, warn);
+                    DrawCentered(TextFormat("RETURN TO THE ARENA  %.1f", player.outOfBoundsTimer),
+                                 y + 48, 22, warn);
+                }
             }
 
             //MARK: Perf overlay (F3)
