@@ -923,11 +923,11 @@ int main(int argc, char** argv) {
                         "Mouse         look",
                         "Left click    fire rocket",
                         "Space         jetpack (up)",
-                        "Left Shift    stronger (earth) gravity",
+                        "Left Shift    earth gravity enable",
                         "M             end match (player 1 / host only)",
                         "Esc           toggle cursor capture",
                     };
-                    int ly = (int)m.y + 80;
+                    int ly = (int)m.y + 60;
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
                     if (UiModalClose(m, controlsWasOpen)) showControls = false;
                 }
@@ -1006,7 +1006,7 @@ int main(int argc, char** argv) {
                              1.0f, 2.0f, sliderJThrustActive)) optChanged = true;
 
                     // FUEL CONSUMPTION (direct units/sec out of the 100-unit tank).
-                    DrawText("FUEL CONSUMPTION", (int)lxR, y3, 18, RAYWHITE);
+                    DrawText("FUEL CONSUMPTION (%)", (int)lxR, y3, 18, RAYWHITE);
                     valueAt(TextFormat("%d/sec", (int)optFuelBurnF), lxR, y3);
                     if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, optFuelBurnF,
                              0.0f, 100.0f, sliderFBurnActive, 1.0f)) {
@@ -1014,8 +1014,8 @@ int main(int argc, char** argv) {
                     }
 
                     // FUEL REGEN (percentage of the consumption rate; 100% = keeps pace).
-                    DrawText("FUEL REGEN", (int)lxR, y4, 18, RAYWHITE);
-                    valueAt(TextFormat("%d%%", (int)optFuelRegenF), lxR, y4);
+                    DrawText("FUEL REGEN (% of consmpt.)", (int)lxR, y4, 18, RAYWHITE);
+                    valueAt(TextFormat("%d/sec", (int)optFuelRegenF), lxR, y4);
                     if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, optFuelRegenF,
                              0.0f, 100.0f, sliderFRegenActive, 1.0f)) {
                         opt.fuelRegenPct = (int)optFuelRegenF; optChanged = true;
