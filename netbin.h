@@ -38,7 +38,7 @@ namespace nb {
 // Values are never recycled, even once no live build uses them: 0x05 and 0x07
 // are burned by earlier state layouts, and a stale client in the wild still
 // speaks them. Reusing one would make a genuine mismatch decode as valid.
-static const uint8_t STATE_BIN_VERSION   = 0x08; // per-tick state packet (bumped: per-player out-of-bounds flag + countdown byte added to each player record)
+static const uint8_t STATE_BIN_VERSION   = 0x09; // per-tick state packet (bumped: match-epoch u32 added to the state header)
 static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)

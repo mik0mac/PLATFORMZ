@@ -11,9 +11,15 @@
 //   - State is broadcast as JSON every tick to all clients.
 //
 // Wire protocol (text frames, JSON):
-//   Client -> Server:  {"seq":N,"mx":0.0,"mz":1.0,"jp":false,"grav":false,"fire":false,"yaw":-1.57,"pitch":0.0}
+//   Client -> Server:  {"seq":N,"ep":M,"mx":0.0,"mz":1.0,"jp":false,"grav":false,"fire":false,"yaw":-1.57,"pitch":0.0}
 //   Server -> Client (on connect): {"type":"welcome","playerId":1,"tick":0}
-//   Server -> Client (each tick):  {"type":"state","tick":N,"seq":N, "players":[...], "asteroids":[...], ...}
+//   Server -> Client (each tick):  {"type":"state","tick":N,"seq":N,"ep":M, "players":[...], "asteroids":[...], ...}
+//
+// "ep" is the match epoch: the server bumps it per match and echoes it in every
+// state packet; the client stamps the newest one it saw on each input. Input
+// carrying a different epoch is dropped, so an input built for the previous
+// match can't land on the new match's spawn state. "ep":0 means "unstamped"
+// and is accepted, so a client build predating the field still works.
 //
 // BUILD: make  (from server/ directory)
 
@@ -188,6 +194,17 @@ std::atomic<bool>  startRequested{false};
 // clients show the same number and drive their fade-ins in lockstep. Written by the
 // sim thread each COUNTDOWN tick, read by the io thread in buildStatePacket.
 std::atomic<float> countdownRemaining{0.0f};
+
+// Monotonic match counter, bumped when a match is built and published in every
+// state packet. Clients echo the last epoch they saw in each input packet, and
+// the input handler drops anything stamped with a different one - so an input
+// still in flight from the previous match (or from a client that hasn't yet
+// noticed the restart) can never be applied to the new match's fresh spawn
+// state. This is the general form of the stale-latch clear in SimulationLoop:
+// that closes the window at the COUNTDOWN -> PLAYING flip, this closes it for
+// every tick afterwards too. 0 is reserved: it means "client didn't stamp an
+// epoch" (a build predating this field), which is accepted for compatibility.
+std::atomic<uint32_t> matchEpoch{0};
 
 // Map preset carried by a start request (boundary half-size + object counts).
 // Written by the io thread when a "start" arrives, read by the sim thread when
@@ -587,6 +604,7 @@ static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
     s.reserve(1024);
     s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
     s += ",\"countdown\":" + jf(countdownRemaining.load()); // seconds left in the pre-match countdown (0 unless COUNTDOWN)
+    s += ",\"ep\":" + std::to_string(matchEpoch.load()); // match epoch; clients echo it in their input packets
 
     // Players
     s += ",\"players\":[";
@@ -761,6 +779,7 @@ static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
     b.reserve(768);
     nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
     nb::putF32(b, countdownRemaining.load());
+    nb::putU32(b, matchEpoch.load()); // match epoch; clients echo it in their input packets
 
     // Options (match-wide), same values buildStatePacket puts in "opt". Order
     // must match applyBinaryState() in wire.h exactly.
@@ -1237,6 +1256,15 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         std::lock_guard<std::mutex> lock(clientMutex);
         auto it = clients.find(connId);
         if (it != clients.end()) {
+            // Match-epoch gate. The client stamps every input with the last epoch
+            // it saw in a state packet, so a packet built for the PREVIOUS match -
+            // still in flight, or sent by a client that hasn't seen the restart
+            // yet - is dropped here instead of overwriting the new match's spawn
+            // state. It carries an ABSOLUTE yaw/pitch, so applying a stale one is
+            // exactly the spawn-aim bug. ep == 0 means the client didn't stamp
+            // one (a build predating this field); accept those unchanged.
+            uint32_t ep = parseUInt(msg, "ep", 0);
+            if (ep != 0 && ep != matchEpoch.load()) return;
             uint32_t seq = parseUInt(msg, "seq", 0);
             if (seq > it->second.lastSeq || !it->second.hasInput) {
                 PlayerInput parsed = parseInput(msg);
@@ -1443,6 +1471,11 @@ void SimulationLoop() {
                 // below only ticks in PLAYING/GAMEOVER), so it doesn't move until the
                 // count hits zero. justStarted resends the map/welcome now so clients
                 // can render the frozen world during the count.
+                // New match: bump the epoch BEFORE leaving LOBBY/GAMEOVER so the
+                // first packet clients see for this match already carries it.
+                // Every input still stamped with the old epoch is now rejected.
+                // Skips 0, which is reserved for "client didn't stamp one".
+                if (++matchEpoch == 0) matchEpoch = 1;
                 gamePhase = Phase::COUNTDOWN;
                 countdownEnd = now + std::chrono::duration_cast<Clock::duration>(
                                          std::chrono::duration<double>(COUNTDOWN_SECONDS));

@@ -31,10 +31,13 @@
 // Matches the server's parseInput() schema. yaw/pitch are absolute (the server
 // converts them to a look-delta), so the client tracks them locally and sends
 // the current values each frame.
+// `epoch` is the newest match epoch we've seen in a state packet, echoed back so
+// the server can drop input built for a previous match (see ServerMessage::epoch).
 inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
-                                  float yaw, float pitch) {
+                                  float yaw, float pitch, uint32_t epoch) {
     nlohmann::json j = {
         {"seq",  seq},
+        {"ep",   epoch},
         {"mx",   in.moveAxis.x},
         {"mz",   in.moveAxis.y},
         {"jp",   in.jetpack},
@@ -58,6 +61,12 @@ struct ServerMessage {
     uint32_t tick     = 0;  // State/Welcome
     Phase    phase    = Phase::Unknown; // State only
     float    countdown = 0.0f; // State only: seconds left in the pre-match countdown (0 unless Countdown)
+    // State only: the server's match epoch, bumped every time a match is built.
+    // The client echoes the newest one it has seen in each input packet; the
+    // server drops input stamped with any other, so an input still in flight
+    // from the previous match can't land on the new match's spawn state. 0 means
+    // the server didn't send one (a build predating the field).
+    uint32_t epoch = 0;
 
     // Lobby options (match-wide config: match size, bot difficulty, the
     // gameplay sliders + toggles - see MatchOptions in options.h). The server
@@ -275,6 +284,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
               : phase == 0 ? ServerMessage::Phase::Lobby
                            : ServerMessage::Phase::Unknown;
     msg.countdown = r.f32();
+    msg.epoch     = r.u32(); // match epoch (state tag 0x09+)
 
     // Options (present every packet). Order must match the server's binary
     // state builder exactly (server_main.cpp).
@@ -522,6 +532,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
               : phase == "lobby"     ? ServerMessage::Phase::Lobby
                                      : ServerMessage::Phase::Unknown;
     msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
+    msg.epoch     = j.value("ep", 0u);          // match epoch; echoed back in our input
 
     // Lobby options snapshot (match-wide). Present every state packet; the client
     // applies these to its OPTIONS modal so any client's change shows live.

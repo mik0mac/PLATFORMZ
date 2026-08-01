@@ -405,6 +405,11 @@ int main(int argc, char** argv) {
     int    perfIdx = 0, perfCount = 0;
     double perfLastLog = 0.0;
     float netCountdown       = 0.0f; // networked: latest countdown-seconds-left the server sent (drives the same screen)
+    uint32_t netEpoch        = 0;    // networked: newest match epoch the server sent. Echoed in every
+                                     // input packet so the server can drop input we built for a
+                                     // previous match (see ServerMessage::epoch in wire.h). Updated
+                                     // in BOTH drain paths - pumpNet and the PLAYING poll - because
+                                     // the lobby/countdown/game-over screens only use the former.
     bool  netMatchOver  = false; // networked: latched once the server reports the match ended, so the gameOverTimer countdown survives packet-less frames
 
     // Title-screen menu state (widgets live in ui.h). The name is local-only for
@@ -578,7 +583,7 @@ int main(int argc, char** argv) {
                 protoMismatch = true;
             }
             else if (m.type == ServerMessage::Type::State) {
-                phase = m.phase; netCountdown = m.countdown;
+                phase = m.phase; netCountdown = m.countdown; netEpoch = m.epoch;
                 // Apply the server's live options to our OPTIONS modal. Don't
                 // stomp a control the local user is actively driving: skip a
                 // slider while it's being dragged, and for the toggles only take
@@ -1248,7 +1253,7 @@ int main(int argc, char** argv) {
             // Never transmit an unseeded aim (see the seed above). Costs at most a
             // frame or two of silence while the welcome lands.
             if (net.isOpen() && predInit)
-                net.send(serializeInput(inputSeq++, in, predYaw, predPitch));
+                net.send(serializeInput(inputSeq++, in, predYaw, predPitch, netEpoch));
 
             // Snapshot asteroid positions by id BEFORE applying state. The server
             // destroys and erases an asteroid within one tick, so it never sends
@@ -1269,6 +1274,7 @@ int main(int argc, char** argv) {
                     TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
                 } else if (m.type == ServerMessage::Type::State) {
                     netPhase = m.phase; // track phase so we can detect the match ending
+                    netEpoch = m.epoch; // stamp on the input we send from next frame
                 }
             }
             localIndex = myIndex;
