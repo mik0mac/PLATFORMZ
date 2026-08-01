@@ -357,10 +357,18 @@ int main(int argc, char** argv) {
     float     predYaw   = 0.0f;   // locally-predicted look (mouse drives this every
     float     predPitch = 0.0f;   // frame so aiming is instant, not server-round-trip)
     bool      predInit  = false;  // seed predYaw/predPitch from the server spawn once
-    bool      consumeFirstLook = false; // drop the first mouse-look delta after a cursor
-                                        // lock (GetMouseDelta jumps the frame after
-                                        // DisableCursor), so the centered spawn
-                                        // orientation isn't clobbered.
+    int       predSeededFor = -1; // the slot predYaw was seeded from. CompactConnectedSlots
+                                  // can move us at match start, so a seed taken against an
+                                  // old myIndex is another player's spawn aim - re-seed when
+                                  // the slot changes, not just when predInit is false.
+    int       consumeLookFrames = 0; // frames of mouse-look to swallow after a cursor lock.
+                                     // Not a bool: the blocks that call DisableCursor()
+                                     // `continue` before reaching EndDrawing(), which is
+                                     // where raylib polls - so the first frame after a
+                                     // capture still reports the STALE pre-lock delta and
+                                     // the real capture jump only lands on the second.
+                                     // Two frames covers both, so neither can clobber the
+                                     // centered spawn orientation.
     bool      consumeFirstFire = false; // drop the first frame's fire after entering a
                                         // match - the click that starts/restarts the game
                                         // can land on the first play frame and would
@@ -514,8 +522,13 @@ int main(int argc, char** argv) {
         messageQueue.clearAll();
         showControls = false; showOptions = false; // close any open lobby modal so it can't hold the freed cursor
         DisableCursor();
-        consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
+        consumeLookFrames = 2;   // swallow the cursor-lock delta (see the declaration)
         consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
+        // Elimination bursts are a client-only effect and deathBurstSpawned isn't
+        // wire-synced, so the server clearing its own copy in resetPlayersForMatch()
+        // never reaches us - without this, anyone who died last match gets no burst
+        // for the rest of the session.
+        for (Player& p : gameSpace.getPlayers()) p.deathBurstSpawned = false;
         // Seed the look prediction from the server's spawn orientation NOW - the
         // countdown states already carried it into our slot - so the very first
         // PLAYING frame sends and renders the correct facing instead of a stale
@@ -524,9 +537,10 @@ int main(int argc, char** argv) {
         // the PLAYING block.
         std::vector<Player>& ps = gameSpace.getPlayers();
         if (myIndex >= 0 && myIndex < (int)ps.size()) {
-            predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch; predInit = true;
+            predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch;
+            predInit = true; predSeededFor = myIndex;
         } else {
-            predInit = false;
+            predInit = false; predSeededFor = -1;
         }
         screen = GameScreen::PLAYING;
     };
@@ -618,6 +632,11 @@ int main(int argc, char** argv) {
         // the match we just left, so they can't replay on the next one.
         audioQueue.clearAll();
         messageQueue.clearAll();
+        // Drop the look prediction: predYaw/predPitch go out as ABSOLUTE aim
+        // targets, so carrying the last match's aim into the next one lets a
+        // pre-seed frame transmit it and drag the server off our spawn facing.
+        // Clearing predInit forces a re-seed from the new spawn orientation.
+        predYaw = 0.0f; predPitch = 0.0f; predInit = false; predSeededFor = -1;
         botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
         EnableCursor(); // free the cursor for the title menu
         showControls = false; showOptions = false; // no stale modal flag leaking back onto the lobby
@@ -1081,7 +1100,7 @@ int main(int argc, char** argv) {
                 countdownRemaining -= dt;
                 if (countdownRemaining <= 0.0f) { // count reached zero: unfreeze into the match
                     DisableCursor(); // capture the mouse for free-look while playing
-                    consumeFirstLook = true; // swallow the cursor-lock delta on the first play frame
+                    consumeLookFrames = 2; // swallow the cursor-lock delta (see the declaration)
                     consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
                     screen = GameScreen::PLAYING;
                     continue;
@@ -1191,6 +1210,21 @@ int main(int argc, char** argv) {
         ServerMessage::Phase netPhase = ServerMessage::Phase::Unknown; // latest server phase (networked); drives the game-over edge below
 
         if (networked) {
+            // Seed the look prediction BEFORE this frame's accumulate + send. We
+            // transmit predYaw/predPitch as an ABSOLUTE aim target, so sending an
+            // unseeded (or previous-match) value here drags the server's yaw to a
+            // meaningless direction - and the lazy seed further down runs AFTER
+            // the send, too late to prevent it. enterNetworkedMatch normally seeds
+            // already; this covers the case where our slot wasn't known yet then,
+            // and re-seeds if CompactConnectedSlots moved us to a different slot.
+            if (!predInit || predSeededFor != myIndex) {
+                std::vector<Player>& ps = gameSpace.getPlayers();
+                if (myIndex >= 0 && myIndex < (int)ps.size()) {
+                    predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch;
+                    predInit = true; predSeededFor = myIndex;
+                }
+            }
+
             // Gather input and predict look locally. Position is server-
             // authoritative, but a mouse-look that waited a full round-trip
             // would be unusable - so we accumulate yaw/pitch from the mouse here
@@ -1199,19 +1233,21 @@ int main(int argc, char** argv) {
             if (!IsCursorHidden()) {
                 in = PlayerInput{}; // cursor free (Esc, or window unfocused): no look/move/fire
             } else {
-                // First frame the mouse is actually captured: swallow the cursor-
+                // First frames the mouse is actually captured: swallow the cursor-
                 // centering jump and the match-start click HERE, not on the first
                 // PLAYING frame - which can arrive before the window is focused (two
                 // clients on one machine, or an alt-tab during the countdown), which
                 // would otherwise leak the capture jump into the aim later.
-                if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; }
+                if (consumeLookFrames > 0) { in.lookDelta = {0, 0}; --consumeLookFrames; }
                 if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; }
             }
             predYaw   += in.lookDelta.x * 0.0025f;   // 0.0025 = Player::lookSensitivity
             predPitch -= in.lookDelta.y * 0.0025f;
             predPitch  = Clamp(predPitch, -89.0f * DEG2RAD, 89.0f * DEG2RAD);
 
-            if (net.isOpen())
+            // Never transmit an unseeded aim (see the seed above). Costs at most a
+            // frame or two of silence while the welcome lands.
+            if (net.isOpen() && predInit)
                 net.send(serializeInput(inputSeq++, in, predYaw, predPitch));
 
             // Snapshot asteroid positions by id BEFORE applying state. The server
@@ -1262,12 +1298,16 @@ int main(int argc, char** argv) {
 
             std::vector<Player>& players = gameSpace.getPlayers();
             if (localIndex >= 0 && localIndex < (int)players.size()) {
-                // Seed prediction from the server spawn orientation once so the
-                // first frame doesn't snap the view.
-                if (!predInit) {
+                // Catch-up seed: if the welcome only landed in THIS frame's poll
+                // above, myIndex just became valid and the pre-send seed couldn't
+                // run. Seeding here also discards the garbage predYaw this frame
+                // accumulated (that value was never sent - the send is gated on
+                // predInit).
+                if (!predInit || predSeededFor != localIndex) {
                     predYaw = players[localIndex].yaw;
                     predPitch = players[localIndex].pitch;
                     predInit = true;
+                    predSeededFor = localIndex;
                 }
                 // Override the local player's look with the prediction (the
                 // server echo lags); all other fields stay server-authoritative.
@@ -1324,8 +1364,8 @@ int main(int argc, char** argv) {
                 in = PlayerInput{}; // cursor free (Esc, or window unfocused): no look/move/fire
             } else {
                 // Swallow the cursor-centering jump + match-start click on the first
-                // CAPTURED frame, not the first PLAYING frame (see networked path).
-                if (consumeFirstLook) { in.lookDelta = {0, 0}; consumeFirstLook = false; }
+                // CAPTURED frames, not the first PLAYING frame (see networked path).
+                if (consumeLookFrames > 0) { in.lookDelta = {0, 0}; --consumeLookFrames; }
                 if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; }
             }
             float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
@@ -1405,7 +1445,7 @@ int main(int argc, char** argv) {
             // toggle cursor capture so you can alt-tab / quit comfortably. Re-arm
             // the first-look swallow on re-capture so the centering jump doesn't
             // leak into the aim (same reason it's armed at match start).
-            if (IsCursorHidden()) EnableCursor(); else { DisableCursor(); consumeFirstLook = true; }
+            if (IsCursorHidden()) EnableCursor(); else { DisableCursor(); consumeLookFrames = 2; }
         }
 
         // MARK: DRAW
