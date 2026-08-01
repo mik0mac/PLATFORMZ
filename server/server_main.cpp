@@ -1354,6 +1354,8 @@ void SimulationLoop() {
         uint32_t tick;
         size_t   asteroidCount = 0;
         bool     justStarted = false; // a match began this tick -> resend welcomes below
+        bool     wentLive    = false; // COUNTDOWN -> PLAYING flipped THIS tick -> drop every
+                                      // client's stale input latch before the first apply
         {
             std::lock_guard<std::mutex> gg(gameMutex);
 
@@ -1458,6 +1460,7 @@ void SimulationLoop() {
                 if (left <= 0.0) {
                     countdownRemaining = 0.0f;
                     gamePhase = Phase::PLAYING;
+                    wentLive  = true; // consumed by the input-apply block below
                     std::cout << "Match started\n";
                 } else {
                     countdownRemaining = (float)left;
@@ -1554,6 +1557,31 @@ void SimulationLoop() {
                 // Apply each client's latest input to their player slot
                 {
                     std::lock_guard<std::mutex> gc(clientMutex);
+                    // First PLAYING tick of a match: every client's latch still holds
+                    // the ABSOLUTE yaw/pitch from the END of the previous match -
+                    // clients send nothing while on the TITLE/COUNTDOWN/GAME_OVER
+                    // screens, so lastInput froze there and hasInput stayed true.
+                    // ApplyInputToPlayer treats lookDelta as an aim TARGET, so
+                    // applying it here would overwrite the face-the-centre spawn
+                    // orientation resetPlayersForMatch() just set - and this tick's
+                    // broadcast is exactly what the client seeds its own predYaw
+                    // from, latching the wrong aim for the whole match. That's why
+                    // only match 1 ever spawned facing centre (hasInput was false).
+                    // Cleared under the SAME clientMutex the apply below holds, not
+                    // at the phase flip, so a straggler packet from a client still
+                    // running its game-over countdown can't slip in between.
+                    // hasInput=false is the load-bearing part: it gates the loop
+                    // below AND makes the input handler accept the next packet
+                    // whatever its seq (see the `|| !hasInput` clause there).
+                    // lastSeq is deliberately left alone - the client's inputSeq is
+                    // monotonic across matches.
+                    if (wentLive) {
+                        for (auto& [cid, client] : clients) {
+                            client.hasInput    = false;
+                            client.lastInput   = PlayerInput{};
+                            client.firePending = false;
+                        }
+                    }
                     auto& players = gameSpace.getPlayers();
                     for (auto& [cid, client] : clients) {
                         if (!client.hasInput) continue;

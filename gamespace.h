@@ -252,6 +252,12 @@ public:
     // individually). Keeps the server's slot<->client mapping stable across a
     // restart. Call after generatePlatforms() so placePlayersSpread has platforms
     // to spread the slots across; follow with generateAsteroids().
+    //
+    // IMPORTANT: this must mirror EVERY non-const default in Player. The local
+    // sim never comes through here (spawnPlayers() clears the vector and builds
+    // fresh objects), so anything missed here is stale only in networked play,
+    // only from match 2 onward - the exact signature of the spawn-aim bug that
+    // lived in this code path. Add new Player state here when you add it there.
     void resetPlayersForMatch() {
         for (Player& p : players) {
             p.health  = PLAYER_STARTING_HEALTH;
@@ -265,6 +271,27 @@ public:
             p.isUsingJetpack = false;
             p.isSpectating   = false;                 // fresh match: no one is spectating yet
             p.spectatingTimer = p.countdownToSpectating; // re-arm the post-death spectate delay
+            // Out-of-bounds state: a stale timer would have the new match's spawn
+            // already counting down toward "lost in space".
+            p.isOutOfBounds    = false;
+            p.outOfBoundsTimer = 0.0f;
+            p.outOfBoundsWarned = false;
+            // Platform pass-through edge detector: a height from the old layout
+            // would fire the traversal sound on the first frame of the new one.
+            p.prevY      = 0.0f;
+            p.prevYValid = false;
+            // SFX throttles and rising-edge guards - a stale one swallows the
+            // first cue of the new match.
+            p.noFuelSfxCooldown    = 0.0f;
+            p.warningSfxCooldown   = 0.0f;
+            p.earthGravSfxCooldown = 0.0f;
+            p.earthGravWasEngaged  = false;
+            // Reticle re-anchors at the new spawn aim instead of gliding in from
+            // wherever the player was looking when the last match ended.
+            p.reticle.anchorInitialized = false;
+            // NOT reset: rocketCounter (generates rocket ids the client tracks by
+            // identity - reusing ids across matches would alias them) and
+            // leaveGraceSec (owned by the slot-vacancy logic in refreshBotSlots).
         }
         placePlayersSpread(); // reposition all slots spread across the new platforms (issue #5)
         rockets.clear();
