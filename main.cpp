@@ -237,13 +237,18 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
         audioFX("assets/sounds/warning.wav",             0.4f, true, false, 2),       // FX_WARNING (local only)
-        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)         // FX_ENGAGE_EARTH_GRAVITY
+        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)     // FX_ENGAGE_EARTH_GRAVITY (local only)
+         // FX_VOLUME_CHANGE (local only)
     };
     // Platform passthrough is suppressed while earth-gravity engage is ringing
     // (one-directional: engage is never blocked, and passthrough's own 4
     // variation files still round-robin freely).
     fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
+
+    // Load volume-change feedback sound (local only).
+    Sound volumeChange = LoadSound("assets/sounds/volume_change.wav"); // FX_VOLUME_CHANGE
+    SetSoundVolume(volumeChange, 0.5f);
 
     // MARK: MUSIC FILES
     // Client side: one MusicCue per MusicId, in enum order. The client owns and
@@ -690,6 +695,7 @@ int main(int argc, char** argv) {
     //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()
+
 #ifndef __EMSCRIPTEN__
            && !g_quitRequested // true once a caught SIGINT/SIGTERM asked us to exit
 #endif
@@ -950,6 +956,7 @@ int main(int argc, char** argv) {
                         "Left Shift    earth gravity enable",
                         "M             end match (player 1 / host only)",
                         "Esc           toggle cursor capture",
+                        "+ / -         volume up/down",
                     };
                     int ly = (int)m.y + 60;
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
@@ -1397,6 +1404,18 @@ int main(int argc, char** argv) {
 
         gameSpace.updateAsteroidSpin(dt); // advance tumble in both local and networked modes
 
+        // MARK: AUDIO VOLUME
+        // game volume adjustment.
+        float currentVolume = GetMasterVolume();
+        if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
+            if (currentVolume < 1.0f) PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(std::min(currentVolume + 0.1f, 1.0f));
+
+        }
+        if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
+            PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(std::max(currentVolume - 0.1f, 0.0f));
+        }
         // MARK: AUDIO EVENT DRAIN
         // Turn this frame's networked/local audio events into queued sounds.
         // Networked: filled by applyMessage() from the packet. Local: filled by
