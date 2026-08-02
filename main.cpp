@@ -444,6 +444,7 @@ int main(int argc, char** argv) {
     bool sliderFBurnActive   = false; // drag latch: FUEL CONSUMPTION
     bool sliderFRegenActive  = false; // drag latch: FUEL REGEN
     bool sliderXRadiusActive = false; // drag latch: EXPLOSION RADIUS
+    bool sliderVolumeActive  = false; // drag latch: MASTER VOLUME (title screen)
     // UiSlider needs a float&; NUMBER OF PLAYERS and the two fuel controls are
     // ints in MatchOptions, so they get float shadows here, synced into
     // opt.numPlayers/fuelConsumption/fuelRegenPct on change (see the modal below).
@@ -777,6 +778,22 @@ int main(int argc, char** argv) {
         // title screen, so force it false everywhere else.
         PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions));
 
+        // MARK: AUDIO VOLUME
+        // game volume adjustment. Handled here - ahead of every screen branch,
+        // each of which ends in `continue` - so the keys work on the title,
+        // countdown and game-over screens too, not just in a match. The title
+        // screen's VOLUME slider drives the same raylib master volume.
+        float currentVolume = GetMasterVolume();
+        if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
+            if (currentVolume < 1.0f) PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(std::min(currentVolume + 0.1f, 1.0f));
+
+        }
+        if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
+            PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(std::max(currentVolume - 0.1f, 0.0f));
+        }
+
         // MARK: TITLE SCREEN
         // Placeholder front/end screens. Each handles its own input + draw and
         // skips the rest of the loop; PLAYING (below) is the original game body.
@@ -943,10 +960,25 @@ int main(int argc, char** argv) {
                     if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
                 }
 
+                // Master volume, pinned bottom-right. Reads and writes raylib's
+                // master volume directly (no shadow copy), so the slider and the
+                // +/- keys can never disagree about the level.
+                const float volW = 200.0f;
+                Rectangle volTrack = {screenWidth - volW - 30.0f, screenHeight - 44.0f, volW, 22.0f};
+                float vol = GetMasterVolume();
+                DrawText("VOLUME", (int)volTrack.x, (int)volTrack.y - 26, 18, RAYWHITE);
+                const char* volVal = TextFormat("%d%%", (int)roundf(vol * 100.0f));
+                DrawText(volVal, (int)(volTrack.x + volW - MeasureText(volVal, 18)),
+                         (int)volTrack.y - 26, 18, ui::OUTLINE);
+                // No feedback blip here (unlike the +/- keys): the slider shows
+                // the level on screen, and a drag would machine-gun the sound.
+                if (uiEnabled && UiSlider(volTrack, vol, 0.0f, 1.0f, sliderVolumeActive))
+                    SetMasterVolume(vol);
+
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
                 if (showControls) {
-                    Rectangle m = {250, 170, 500, 360};
+                    Rectangle m = {250, 140, 500, 420};
                     UiModalChrome(m, "CONTROLS");
                     const char* lines[] = {
                         "WASD          move",
@@ -954,7 +986,7 @@ int main(int argc, char** argv) {
                         "Left click    fire rocket",
                         "Space         jetpack (up)",
                         "Left Shift    earth gravity enable",
-                        "M             end match (player 1 / host only)",
+                        "M             end match (host only)",
                         "Esc           toggle cursor capture",
                         "+ / -         volume up/down",
                     };
@@ -1404,18 +1436,6 @@ int main(int argc, char** argv) {
 
         gameSpace.updateAsteroidSpin(dt); // advance tumble in both local and networked modes
 
-        // MARK: AUDIO VOLUME
-        // game volume adjustment.
-        float currentVolume = GetMasterVolume();
-        if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
-            if (currentVolume < 1.0f) PlaySound(volumeChange); // feedback for the change
-            SetMasterVolume(std::min(currentVolume + 0.1f, 1.0f));
-
-        }
-        if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
-            PlaySound(volumeChange); // feedback for the change
-            SetMasterVolume(std::max(currentVolume - 0.1f, 0.0f));
-        }
         // MARK: AUDIO EVENT DRAIN
         // Turn this frame's networked/local audio events into queued sounds.
         // Networked: filled by applyMessage() from the packet. Local: filled by
