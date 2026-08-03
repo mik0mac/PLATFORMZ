@@ -237,13 +237,18 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/player_elimination_score.wav", 1.0f, true, false, 2),   // FX_PLAYER_ELIMINATION_SCORE (local only)
         audioFX("assets/sounds/player_local_damage.wav", 1.0f, true, false, 3, 0.08f), // FX_PLAYER_LOCAL_DAMAGE (local only)
         audioFX("assets/sounds/warning.wav",             0.4f, true, false, 2),       // FX_WARNING (local only)
-        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)         // FX_ENGAGE_EARTH_GRAVITY
+        audioFX("assets/sounds/engage_earth_grav.wav",   0.8f, true, false, 1)     // FX_ENGAGE_EARTH_GRAVITY (local only)
+         // FX_VOLUME_CHANGE (local only)
     };
     // Platform passthrough is suppressed while earth-gravity engage is ringing
     // (one-directional: engage is never blocked, and passthrough's own 4
     // variation files still round-robin freely).
     fxTable[FX_PLATFORM_PASSTHROUGH].blockedBy = &fxTable[FX_ENGAGE_EARTH_GRAVITY];
     for (audioFX& fx : fxTable) fx.load();
+
+    // Load volume-change feedback sound (local only).
+    Sound volumeChange = LoadSound("assets/sounds/volume_change.wav"); // FX_VOLUME_CHANGE
+    SetSoundVolume(volumeChange, 0.5f);
 
     // MARK: MUSIC FILES
     // Client side: one MusicCue per MusicId, in enum order. The client owns and
@@ -439,6 +444,7 @@ int main(int argc, char** argv) {
     bool sliderFBurnActive   = false; // drag latch: FUEL CONSUMPTION
     bool sliderFRegenActive  = false; // drag latch: FUEL REGEN
     bool sliderXRadiusActive = false; // drag latch: EXPLOSION RADIUS
+    bool sliderVolumeActive  = false; // drag latch: MASTER VOLUME (title screen)
     // UiSlider needs a float&; NUMBER OF PLAYERS and the two fuel controls are
     // ints in MatchOptions, so they get float shadows here, synced into
     // opt.numPlayers/fuelConsumption/fuelRegenPct on change (see the modal below).
@@ -690,6 +696,7 @@ int main(int argc, char** argv) {
     //MARK: MAIN LOOP
     // --- The loop itself ---
     while (!WindowShouldClose()
+
 #ifndef __EMSCRIPTEN__
            && !g_quitRequested // true once a caught SIGINT/SIGTERM asked us to exit
 #endif
@@ -770,6 +777,22 @@ int main(int argc, char** argv) {
         // title-screen modal is open (no-op on native). Modals live only on the
         // title screen, so force it false everywhere else.
         PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions));
+
+        // MARK: AUDIO VOLUME
+        // game volume adjustment. Handled here - ahead of every screen branch,
+        // each of which ends in `continue` - so the keys work on the title,
+        // countdown and game-over screens too, not just in a match. The title
+        // screen's VOLUME slider drives the same raylib master volume.
+        float currentVolume = GetMasterVolume();
+        if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
+            if (currentVolume < 1.0f) PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(std::min(currentVolume + 0.1f, 1.0f));
+
+        }
+        if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
+            PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(std::max(currentVolume - 0.1f, 0.0f));
+        }
 
         // MARK: TITLE SCREEN
         // Placeholder front/end screens. Each handles its own input + draw and
@@ -937,10 +960,25 @@ int main(int argc, char** argv) {
                     if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
                 }
 
+                // Master volume, pinned bottom-right. Reads and writes raylib's
+                // master volume directly (no shadow copy), so the slider and the
+                // +/- keys can never disagree about the level.
+                const float volW = 200.0f;
+                Rectangle volTrack = {screenWidth - volW - 30.0f, screenHeight - 44.0f, volW, 22.0f};
+                float vol = GetMasterVolume();
+                DrawText("VOLUME", (int)volTrack.x, (int)volTrack.y - 26, 18, RAYWHITE);
+                const char* volVal = TextFormat("%d%%", (int)roundf(vol * 100.0f));
+                DrawText(volVal, (int)(volTrack.x + volW - MeasureText(volVal, 18)),
+                         (int)volTrack.y - 26, 18, ui::OUTLINE);
+                // No feedback blip here (unlike the +/- keys): the slider shows
+                // the level on screen, and a drag would machine-gun the sound.
+                if (uiEnabled && UiSlider(volTrack, vol, 0.0f, 1.0f, sliderVolumeActive))
+                    SetMasterVolume(vol);
+
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
                 if (showControls) {
-                    Rectangle m = {250, 170, 500, 360};
+                    Rectangle m = {250, 140, 500, 420};
                     UiModalChrome(m, "CONTROLS");
                     const char* lines[] = {
                         "WASD          move",
@@ -948,8 +986,9 @@ int main(int argc, char** argv) {
                         "Left click    fire rocket",
                         "Space         jetpack (up)",
                         "Left Shift    earth gravity enable",
-                        "M             end match (player 1 / host only)",
+                        "M             end match (host only)",
                         "Esc           toggle cursor capture",
+                        "+ / -         volume up/down",
                     };
                     int ly = (int)m.y + 60;
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
