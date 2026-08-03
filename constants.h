@@ -75,6 +75,7 @@ enum MessageType {
 const float GRAVITY_SCALE = 4.0f;
 const float MOON_GRAVITY = 1.62f * GRAVITY_SCALE; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 const float EARTH_GRAVITY = 9.81f * GRAVITY_SCALE; // earth gravity, m/s^2 * 2
+const bool ORIGIN_GRAVITY = false; // if true {0, 0, 0} is a gravity attractor.
 
 //MARK: GameSpace Constants
 // These are only class defaults - each match overrides them with a mapSizePreset (below), applied in main.cpp's startGame.

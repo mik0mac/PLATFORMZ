@@ -329,7 +329,12 @@ public:
         // (accelerationJetpack > EARTH_GRAVITY, see constants.h). This also means
         // excess upward velocity (rocket jump, bounce) decays under thrust+gravity
         // together instead of being held while the jetpack key is down.
-        velocity.y -= gravity * dt;
+        if (ORIGIN_GRAVITY) {
+            Vector3 directionToOrigin = Vector3Normalize(Vector3Scale(position, -1.0f));
+            velocity = Vector3Add(velocity, Vector3Scale(directionToOrigin, gravity * dt));
+        } else {
+            velocity.y -= gravity * dt;
+        }
     }
 
     // boundsHalfSize is the current map's walls.halfSize (set per match by
