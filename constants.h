@@ -175,6 +175,12 @@ const float PLAYER_SPEED_JETPACK = 45.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 45.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
 // THRUST sliders (MatchOptions in options.h) multiply them per match.
+// Default for the OPTIONS COAST MODE toggle. ON = frictionless: releasing the
+// keys coasts instead of easing to a stop, and momentum is never braked away
+// just because the speed cap dropped (jetpack released, tank empty). Thrust can
+// still redirect that momentum, it just can't grow it past the cap. See the two
+// branches in Player::updateVelocity.
+const bool COAST_MODE = true;
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;

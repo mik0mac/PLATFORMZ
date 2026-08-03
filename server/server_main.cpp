@@ -228,6 +228,7 @@ std::atomic<int>   pendingFuelRegen{FUEL_REGEN_PCT_DEFAULT};    // OPTIONS FUEL 
 std::atomic<bool>  pendingWallsEnabled{WALLS_ENABLED};
 std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
 std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
+std::atomic<bool>  pendingCoastMode{COAST_MODE};
 
 static const char* phaseString(Phase p) {
     switch (p) {
@@ -743,6 +744,7 @@ static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
     s += ",\"walls\":"    + jb(pendingWallsEnabled.load());
     s += ",\"phys\":"     + jb(pendingRocketsPhysics.load());
     s += ",\"ff\":"       + jb(pendingFriendlyFire.load());
+    s += ",\"coast\":"    + jb(pendingCoastMode.load());
     s += "}";
 
     s += "}";
@@ -795,7 +797,8 @@ static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
     nb::putU8(b, (uint8_t)pendingFuelRegen.load());
     nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0)
                           | (pendingRocketsPhysics.load() ? 2 : 0)
-                          | (pendingFriendlyFire.load() ? 4 : 0)));
+                          | (pendingFriendlyFire.load() ? 4 : 0)
+                          | (pendingCoastMode.load() ? 8 : 0)));
 
     // Players (fixed roster; u8 count is plenty).
     auto& players = gameSpace.getPlayers();
@@ -1182,6 +1185,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingWallsEnabled = parseBool(msg, "walls", WALLS_ENABLED);
         pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);
         pendingFriendlyFire = parseBool(msg, "ff", FRIENDLY_FIRE);
+        pendingCoastMode = parseBool(msg, "coast", COAST_MODE);
         startRequested = true; // release: set after the preset values above
         return;
     }
@@ -1220,6 +1224,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
         pendingWallsEnabled = parseBool(msg, "walls", pendingWallsEnabled.load());
         pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
         pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
+        pendingCoastMode = parseBool(msg, "coast", pendingCoastMode.load());
         return;
     }
 
@@ -1451,6 +1456,7 @@ void SimulationLoop() {
                     o.wallsEnabled        = pendingWallsEnabled.load();
                     o.rocketsObeyPhysics  = pendingRocketsPhysics.load();
                     o.friendlyFire        = pendingFriendlyFire.load();
+                    o.coastMode           = pendingCoastMode.load();
                     gameSpace.applyOptions(o);
                 }
                 // Issue #5 order: platforms -> players (spread) -> asteroids

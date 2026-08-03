@@ -60,6 +60,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
     player.earthGravityEnabled = in.earthGravity; // mirror gravity mode onto the player for collision rules (main.cpp:664 / bot_controller.h derive `gravity` from the same flag)
     player.speedBoost = gameSpace.speedBoost;       // mirror the OPTIONS speed multipliers onto the player
     player.jetpackThrust = gameSpace.jetpackThrust; // so updateVelocity can scale movement (covers bots too)
+    player.coastMode = gameSpace.coastMode;         // and pick the friction vs coast branch (this is updateVelocity's only call site, so bots and the server sim get it too)
     player.updateVelocity(dt, in.moveAxis, gravity);
     player.updateFuel(dt, player.isUsingJetpack, gameSpace.fuelConsumptionRate, gameSpace.fuelRegenRate());
 

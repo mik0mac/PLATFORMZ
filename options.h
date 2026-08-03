@@ -36,4 +36,5 @@ struct MatchOptions {
     bool wallsEnabled       = WALLS_ENABLED;
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;
     bool friendlyFire       = FRIENDLY_FIRE;
+    bool coastMode          = COAST_MODE;
 };

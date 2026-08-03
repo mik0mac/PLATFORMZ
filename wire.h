@@ -164,6 +164,7 @@ inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
     j["walls"]    = o.wallsEnabled;         // OPTIONS: boundary walls on vs open space
     j["phys"]     = o.rocketsObeyPhysics;   // OPTIONS: rockets obey gravity + inherit shooter velocity
     j["ff"]       = o.friendlyFire;         // OPTIONS: a player's own blast can self-damage
+    j["coast"]    = o.coastMode;            // OPTIONS: frictionless movement (no slow-down on release / cap drop)
 }
 
 inline std::string serializeOptions(const MatchOptions& o) {
@@ -303,6 +304,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     msg.opt.wallsEnabled       = (optFlags & 1) != 0;
     msg.opt.rocketsObeyPhysics = (optFlags & 2) != 0;
     msg.opt.friendlyFire       = (optFlags & 4) != 0;
+    msg.opt.coastMode          = (optFlags & 8) != 0;
 
     // Players - fixed slots, never erased; hide slots the server stopped sending.
     {
@@ -553,6 +555,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.opt.wallsEnabled         = o.value("walls",    d.wallsEnabled);
         msg.opt.rocketsObeyPhysics   = o.value("phys",     d.rocketsObeyPhysics);
         msg.opt.friendlyFire         = o.value("ff",       d.friendlyFire);
+        msg.opt.coastMode            = o.value("coast",    d.coastMode);
     }
 
     // Players - a fixed, persistent set of slots; never erased (also Player
