@@ -45,6 +45,7 @@ public:
     bool wallsEnabled = WALLS_ENABLED;                                             // boundary walls drawn + collide; OFF = open space, out-of-bounds rules apply
     bool rocketsObeyPhysics = ROCKETS_OBEY_PHYSICS;                                // fired rockets obey gravity + inherit shooter velocity (input.h sets each rocket from this)
     bool friendlyFire = FRIENDLY_FIRE;                                            // OFF => a player's own blast deals no self-damage (self-knockback still applies)
+    bool coastMode = COAST_MODE;                                                   // frictionless movement: no slow-down on key release or when the speed cap drops (mirrored onto players in ApplyPlayerInput)
 
     // OPTIONS sliders (MatchOptions in options.h; stamped by applyOptions).
     // Elasticities are PLAYER-only - asteroid bounce keeps its constants
@@ -68,6 +69,7 @@ public:
         wallsEnabled           = o.wallsEnabled;
         rocketsObeyPhysics     = o.rocketsObeyPhysics;
         friendlyFire           = o.friendlyFire;
+        coastMode              = o.coastMode;
         wallElasticityPlayer   = o.wallElasticity;
         platformElasticityPlayer = o.platformElasticity;
         speedBoost             = o.speedBoost;

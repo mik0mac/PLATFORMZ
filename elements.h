@@ -183,6 +183,9 @@ public:
     // updateVelocity can scale movement without a GameSpace dependency.
     float speedBoost = 1.0f;    // scales walk AND jetpack speed/accel
     float jetpackThrust = 1.0f; // scales jetpack speed/accel on top of speedBoost
+    // Mirror of the OPTIONS COAST MODE toggle (also set in ApplyPlayerInput):
+    // frictionless movement, see the two branches in updateVelocity below.
+    bool coastMode = COAST_MODE;
 
     // Full look-direction vector (includes pitch) - used for aiming/shooting.
     Vector3 Forward() const {
@@ -236,26 +239,70 @@ public:
         Vector3 desiredHorizontal{0, 0, 0};
         if (moveInput.y != 0.0f) desiredHorizontal = Vector3Add(desiredHorizontal, Vector3Scale(fwd, moveInput.y));
         if (moveInput.x != 0.0f) desiredHorizontal = Vector3Add(desiredHorizontal, Vector3Scale(right, moveInput.x));
-        if (Vector3LengthSqr(desiredHorizontal) > 0.0f) {
-            desiredHorizontal = Vector3Scale(Vector3Normalize(desiredHorizontal), targetSpeed);
-        }
 
-        // Accelerate horizontal velocity toward desired, same easing approach
-        // as before - just split out from vertical so gravity/jetpack on the
-        // Y axis isn't fighting this every frame.
-        Vector3 currentHorizontal{velocity.x, 0, velocity.z};
-        Vector3 horizontalChange = Vector3Subtract(desiredHorizontal, currentHorizontal);
-        if (Vector3LengthSqr(horizontalChange) > 0.0f) {
-            Vector3 accelVec = Vector3Scale(Vector3Normalize(horizontalChange), acceleration * dt);
-            // don't overshoot past desired in one frame
-            if (Vector3Length(accelVec) > Vector3Length(horizontalChange)) {
-                currentHorizontal = desiredHorizontal;
-            } else {
-                currentHorizontal = Vector3Add(currentHorizontal, accelVec);
+        if (!coastMode) {
+            // MARK: FRICTION MODE
+            // The OG mode.  Player slows down when not actively moving in a direction.
+            if (Vector3LengthSqr(desiredHorizontal) > 0.0f) {
+                desiredHorizontal = Vector3Scale(Vector3Normalize(desiredHorizontal), targetSpeed);
             }
+
+            // Accelerate horizontal velocity toward desired, same easing approach
+            // as before - just split out from vertical so gravity/jetpack on the
+            // Y axis isn't fighting this every frame.
+            Vector3 currentHorizontal{velocity.x, 0, velocity.z};
+            Vector3 horizontalChange = Vector3Subtract(desiredHorizontal, currentHorizontal);
+
+            if (Vector3LengthSqr(horizontalChange) > 0.0f) {
+                Vector3 accelVec = Vector3Scale(Vector3Normalize(horizontalChange), acceleration * dt);
+                // don't overshoot past desired in one frame
+                if (Vector3Length(accelVec) > Vector3Length(horizontalChange)) {
+                    currentHorizontal = desiredHorizontal;
+                } else {
+                    currentHorizontal = Vector3Add(currentHorizontal, accelVec);
+                }
+            }
+            velocity.x = currentHorizontal.x;
+            velocity.z = currentHorizontal.z;
         }
-        velocity.x = currentHorizontal.x;
-        velocity.z = currentHorizontal.z;
+        else {
+            // MARK: COAST MODE
+            // Frictionless: nothing in here ever removes speed. With no input,
+            // Vector3Normalize returns {0,0,0} for the zero vector, so velocity
+            // is left untouched and the player drifts until a wall or a rocket
+            // says otherwise.
+            //
+            // The speed bound is a CEILING on the result, not a gate on the
+            // input direction. Gating the direction (skip accel whenever it
+            // points along the current velocity) also throws away the
+            // perpendicular half of a diagonal push, so an over-speed player
+            // couldn't steer. Instead: accelerate freely in any direction, then
+            // clamp the magnitude to whichever is larger - the target speed, or
+            // the speed we came in with. Grandfathering speedBefore is what
+            // makes it frictionless: momentum from a rocket jump, a bounce, or a
+            // cap that just dropped (jetpack released, tank empty) is kept
+            // rather than braked away. Above the cap, thrust can only ROTATE the
+            // velocity, never grow it, so |v| is non-increasing up there and
+            // can't run away. Pushing against your motion still slows you - the
+            // result is shorter, so the clamp simply doesn't fire.
+            Vector3 currentHorizontal{velocity.x, 0, velocity.z};
+            Vector3 accelDirection = Vector3Normalize(desiredHorizontal); // {0,0,0} when no input
+
+            float speedBefore  = Vector3Length(currentHorizontal);
+            float speedCeiling = fmaxf(targetSpeed, speedBefore);
+
+            currentHorizontal = Vector3Add(currentHorizontal,
+                                           Vector3Scale(accelDirection, acceleration * dt));
+
+            // speedCeiling >= 0, so this only runs when speedAfter > 0 - no divide by zero.
+            float speedAfter = Vector3Length(currentHorizontal);
+            if (speedAfter > speedCeiling) {
+                currentHorizontal = Vector3Scale(currentHorizontal, speedCeiling / speedAfter);
+            }
+
+            velocity.x = currentHorizontal.x;
+            velocity.z = currentHorizontal.z;
+        }
 
         // Vertical: jetpack thrust accelerates toward target speed rather
         // than snapping velocity.y directly - this matters because an

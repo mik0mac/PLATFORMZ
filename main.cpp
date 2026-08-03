@@ -460,6 +460,7 @@ int main(int argc, char** argv) {
     bool  optSentWalls = opt.wallsEnabled;
     bool  optSentPhys  = opt.rocketsObeyPhysics;
     bool  optSentFf    = opt.friendlyFire;
+    bool  optSentCoast = opt.coastMode;
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -619,6 +620,7 @@ int main(int argc, char** argv) {
                     if (m.opt.wallsEnabled       != optSentWalls) { opt.wallsEnabled = m.opt.wallsEnabled; optSentWalls = m.opt.wallsEnabled; }
                     if (m.opt.rocketsObeyPhysics != optSentPhys)  { opt.rocketsObeyPhysics = m.opt.rocketsObeyPhysics; optSentPhys = m.opt.rocketsObeyPhysics; }
                     if (m.opt.friendlyFire       != optSentFf)    { opt.friendlyFire = m.opt.friendlyFire; optSentFf = m.opt.friendlyFire; }
+                    if (m.opt.coastMode          != optSentCoast) { opt.coastMode = m.opt.coastMode; optSentCoast = m.opt.coastMode; }
                 }
             }
         }
@@ -1095,13 +1097,16 @@ int main(int argc, char** argv) {
                     // control below (labels are long, so keep them off the control's
                     // line). Each defaults to its constants.h value; applied at match
                     // start. Sliders use an 85px rhythm; this row sits just below them.
-                    // Three explicit x positions (not the slider columns) so the
+                    // Four explicit x positions (not the slider columns) so the
                     // widest label - ROCKETS OBEY PHYSICS, ~230px at font 18 -
-                    // clears its neighbors on both sides.
+                    // clears its neighbors on both sides. COAST MODE is last and
+                    // still fits: ~90px of label from 770 ends well short of the
+                    // panel's right edge at m.x + m.width = 890.
                     int y6 = y5 + 85;
                     float txBoundary = lxL;        // 150
                     float txPhysics  = lxL + 190.0f; // 340
                     float txFriendly = lxL + 450.0f; // 600
+                    float txCoast    = lxL + 620.0f; // 770
 
                     DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
                     if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
@@ -1116,6 +1121,11 @@ int main(int argc, char** argv) {
                     DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
                     if (UiToggle({txFriendly, (float)(y6 + 26), 100, 24}, opt.friendlyFire)) {
                         optChanged = true; optSentFf = opt.friendlyFire;
+                    }
+
+                    DrawText("COAST MODE", (int)txCoast, y6, 18, RAYWHITE);
+                    if (UiToggle({txCoast, (float)(y6 + 26), 100, 24}, opt.coastMode)) {
+                        optChanged = true; optSentCoast = opt.coastMode;
                     }
 
                     // Push the change to the server (it re-broadcasts to all clients).
