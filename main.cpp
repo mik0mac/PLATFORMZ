@@ -781,19 +781,21 @@ int main(int argc, char** argv) {
         PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions));
 
         // MARK: AUDIO VOLUME
-        // game volume adjustment. Handled here - ahead of every screen branch,
-        // each of which ends in `continue` - so the keys work on the title,
-        // countdown and game-over screens too, not just in a match. The title
-        // screen's VOLUME slider drives the same raylib master volume.
-        float currentVolume = GetMasterVolume();
+        // game volume adjustment, in MASTER_VOLUME_STEP_DB (3 dB) steps so every
+        // press is the same perceived change - a fixed amplitude step would be
+        // barely audible up top and a cliff down low. Handled here - ahead of
+        // every screen branch, each of which ends in `continue` - so the keys
+        // work on the title, countdown and game-over screens too, not just in a
+        // match. The title screen's VOLUME slider drives the same dB value.
+        // Clamping to [MASTER_VOLUME_MIN_DB, 0] happens inside the conversion.
+        float currentDb = MasterVolumeAmpToDb(GetMasterVolume());
         if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
-            if (currentVolume < 1.0f) PlaySound(volumeChange); // feedback for the change
-            SetMasterVolume(std::min(currentVolume + 0.1f, 1.0f));
-
+            if (currentDb < 0.0f) PlaySound(volumeChange); // feedback for the change
+            SetMasterVolume(MasterVolumeDbToAmp(currentDb + MASTER_VOLUME_STEP_DB));
         }
         if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
             PlaySound(volumeChange); // feedback for the change
-            SetMasterVolume(std::max(currentVolume - 0.1f, 0.0f));
+            SetMasterVolume(MasterVolumeDbToAmp(currentDb - MASTER_VOLUME_STEP_DB));
         }
 
         // MARK: TITLE SCREEN
@@ -962,20 +964,24 @@ int main(int argc, char** argv) {
                     if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
                 }
 
-                // Master volume, pinned bottom-right. Reads and writes raylib's
-                // master volume directly (no shadow copy), so the slider and the
-                // +/- keys can never disagree about the level.
+                // Master volume, pinned bottom-right. The slider rides the dB
+                // scale (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left),
+                // so track travel matches perceived loudness instead of bunching
+                // everything audible into the top of the range. It reads and
+                // writes raylib's master volume directly (no shadow copy), so it
+                // and the +/- keys can never disagree about the level.
                 const float volW = 200.0f;
                 Rectangle volTrack = {screenWidth - volW - 30.0f, screenHeight - 44.0f, volW, 22.0f};
-                float vol = GetMasterVolume();
+                float volDb = MasterVolumeAmpToDb(GetMasterVolume());
                 DrawText("VOLUME", (int)volTrack.x, (int)volTrack.y - 26, 18, RAYWHITE);
-                const char* volVal = TextFormat("%d%%", (int)roundf(vol * 100.0f));
+                const char* volVal = volDb <= MASTER_VOLUME_MIN_DB ? "MUTE"
+                                   : TextFormat("%d dB", (int)roundf(volDb));
                 DrawText(volVal, (int)(volTrack.x + volW - MeasureText(volVal, 18)),
                          (int)volTrack.y - 26, 18, ui::OUTLINE);
                 // No feedback blip here (unlike the +/- keys): the slider shows
                 // the level on screen, and a drag would machine-gun the sound.
-                if (uiEnabled && UiSlider(volTrack, vol, 0.0f, 1.0f, sliderVolumeActive))
-                    SetMasterVolume(vol);
+                if (uiEnabled && UiSlider(volTrack, volDb, MASTER_VOLUME_MIN_DB, 0.0f, sliderVolumeActive))
+                    SetMasterVolume(MasterVolumeDbToAmp(volDb));
 
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
@@ -1097,25 +1103,21 @@ int main(int argc, char** argv) {
                     // control below (labels are long, so keep them off the control's
                     // line). Each defaults to its constants.h value; applied at match
                     // start. Sliders use an 85px rhythm; this row sits just below them.
-                    // Four explicit x positions (not the slider columns) so the
-                    // widest label - ROCKETS OBEY PHYSICS, ~230px at font 18 -
-                    // clears its neighbors on both sides. COAST MODE is last and
-                    // still fits: ~90px of label from 770 ends well short of the
-                    // panel's right edge at m.x + m.width = 890.
+                    // Four explicit x positions (not the slider columns), spaced by
+                    // measured label width at font 18 - 157 / 134 / 115 / 220 px
+                    // left to right - so no label runs into its neighbor. The
+                    // widest, ROCKETS OBEY PHYSICS, goes last, where it has the
+                    // panel's right edge (m.x + m.width = 890) to grow into: it
+                    // ends at 870. Each toggle sits under its label's left edge.
                     int y6 = y5 + 85;
-                    float txBoundary = lxL;        // 150
-                    float txPhysics  = lxL + 190.0f; // 340
-                    float txFriendly = lxL + 450.0f; // 600
-                    float txCoast    = lxL + 620.0f; // 770
+                    float txBoundary = lxL;          // 150
+                    float txFriendly = lxL + 190.0f; // 340
+                    float txCoast    = lxL + 350.0f; // 500
+                    float txPhysics  = lxL + 500.0f; // 650
 
                     DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
                     if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
                         optChanged = true; optSentWalls = opt.wallsEnabled;
-                    }
-
-                    DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
-                    if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
-                        optChanged = true; optSentPhys = opt.rocketsObeyPhysics;
                     }
 
                     DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
@@ -1126,6 +1128,11 @@ int main(int argc, char** argv) {
                     DrawText("COAST MODE", (int)txCoast, y6, 18, RAYWHITE);
                     if (UiToggle({txCoast, (float)(y6 + 26), 100, 24}, opt.coastMode)) {
                         optChanged = true; optSentCoast = opt.coastMode;
+                    }
+
+                    DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
+                    if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
+                        optChanged = true; optSentPhys = opt.rocketsObeyPhysics;
                     }
 
                     // Push the change to the server (it re-broadcasts to all clients).

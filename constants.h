@@ -29,6 +29,12 @@ enum AudioFXId {
 const float AUDIO_MAX_DISTANCE = 80.0f; // max distance for audio attenuation.  The distance at which the sound is the softest.
 const float AUDIO_MIN_VOLUME = 0.125f; // minimum volume for audio attenuation.  The volume at the max distance.
 
+// Master volume is driven in decibels rather than raylib's linear amplitude, so
+// the title-screen slider and the +/- keys move in perceptually even steps (see
+// MasterVolumeDbToAmp in audio.h). 0 dB is full scale; the floor is true silence.
+const float MASTER_VOLUME_MIN_DB  = -40.0f; // slider floor / mute point (amplitude 0.01 before the snap to 0)
+const float MASTER_VOLUME_STEP_DB = 3.0f;   // +/- key step: ~14 presses from full to mute
+
 // MARK: MUSIC
 
 // One id per music file (shared client+server wire contract): the server's

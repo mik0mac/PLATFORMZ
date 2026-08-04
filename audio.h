@@ -11,6 +11,23 @@
 #include "random.h"
 #include "constants.h"
 
+// MARK: Master volume (dB)
+// raylib stores master volume as a linear amplitude, but loudness is perceived
+// logarithmically - halving the amplitude is about -6 dB, not "half as loud", so
+// a linear slider dumps most of its useful range into the top of the track. The
+// volume UI therefore works in dB and converts only at the raylib boundary,
+// which makes both a slider drag and a fixed-dB key step feel even end to end.
+// The dB range is [MASTER_VOLUME_MIN_DB, 0]; at or below the floor the level
+// snaps to true silence (log10 has no zero).
+inline float MasterVolumeDbToAmp(float db) {
+    if (db <= MASTER_VOLUME_MIN_DB) return 0.0f;
+    return powf(10.0f, Clamp(db, MASTER_VOLUME_MIN_DB, 0.0f) / 20.0f);
+}
+inline float MasterVolumeAmpToDb(float amp) {
+    if (amp <= 0.0f) return MASTER_VOLUME_MIN_DB;
+    return Clamp(20.0f * log10f(amp), MASTER_VOLUME_MIN_DB, 0.0f);
+}
+
 // MARK: Audio FX
 // Each audioFX owns a small pool of alias voices (LoadSoundAlias) so repeated
 // triggers overlap instead of cutting each other off. Options:
