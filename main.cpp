@@ -788,14 +788,24 @@ int main(int argc, char** argv) {
         // work on the title, countdown and game-over screens too, not just in a
         // match. The title screen's VOLUME slider drives the same dB value.
         // Clamping to [MASTER_VOLUME_MIN_DB, 0] happens inside the conversion.
-        float currentDb = MasterVolumeAmpToDb(GetMasterVolume());
-        if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
-            if (currentDb < 0.0f) PlaySound(volumeChange); // feedback for the change
-            SetMasterVolume(MasterVolumeDbToAmp(currentDb + MASTER_VOLUME_STEP_DB));
-        }
-        if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
-            PlaySound(volumeChange); // feedback for the change
-            SetMasterVolume(MasterVolumeDbToAmp(currentDb - MASTER_VOLUME_STEP_DB));
+        // Suppressed while the NAME field has the keyboard: '-' and '=' (and the
+        // numpad pair) are typable characters, and the field is focused by
+        // default, so typing a name would otherwise ride the volume with it.
+        // Gated on the screen as well as the flag - nameFocused is only cleared
+        // by a click elsewhere, so a networked client the host pulled into a
+        // match without it ever clicking would carry a stale `true` into PLAYING
+        // and lose the keys for the whole match.
+        const bool typingName = (screen == GameScreen::TITLE && nameFocused);
+        if (!typingName) {
+            float currentDb = MasterVolumeAmpToDb(GetMasterVolume());
+            if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
+                if (currentDb < 0.0f) PlaySound(volumeChange); // feedback for the change
+                SetMasterVolume(MasterVolumeDbToAmp(currentDb + MASTER_VOLUME_STEP_DB));
+            }
+            if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
+                PlaySound(volumeChange); // feedback for the change
+                SetMasterVolume(MasterVolumeDbToAmp(currentDb - MASTER_VOLUME_STEP_DB));
+            }
         }
 
         // MARK: TITLE SCREEN
