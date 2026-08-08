@@ -9,6 +9,21 @@ shoot drifting asteroids with rockets, dodge them, manage jetpack fuel.
 - `make run` — build (if needed) and run.
 - `make clean` — remove the binary.
 
+Handout build (see `docs/deploy-vultr.md` for the full walkthrough):
+- `make app` — unsigned `dist/PLATFORMZ.app`. No credentials needed.
+- `make sign` — Developer ID + hardened runtime + secure timestamp.
+- `make notarize` — submit to Apple, wait, staple the ticket.
+- `make dist-pack` — the whole chain → `dist/PLATFORMZ-mac-arm64.zip`, the
+  warning-free handout. Recipients double-click; no Gatekeeper prompt, no `xattr`.
+
+Two things the handout build needs that a dev build doesn't, both **one-time and
+both Mike's to do** (the second needs a secret typed in, so never script it):
+- raylib built from source at `~/raylib-macos13` with
+  `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`. Homebrew's bottle is `minos 15.0`, which
+  would lock the handout to Sequoia. **Not** `~/raylib` — that's the Emscripten build.
+- `xcrun notarytool store-credentials "platformz-notary"` (Apple ID
+  mike@michaelmacallister.com, Team ID 9WM486296X, an app-specific password).
+
 Toolchain is **macOS + Homebrew raylib**:
 `g++ -std=c++17 -I/opt/homebrew/include … -L/opt/homebrew/lib -lraylib
 -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo`.
@@ -150,3 +165,13 @@ on the web but not native (see `docs/multiplayer-testing.md` for the full setup)
   (`gravityEnabled`), inheritance once at spawn in `input.h` (`velocityInheritance`).
   Both default OFF, so rockets fly straight unless the toggle is on.
 - This builds/runs on macOS with Homebrew paths only; no cross-platform build.
+- Assets load by **relative** path (`assets/sounds/…`), so `main.cpp` anchors the
+  working directory right after `InitWindow`: `ChangeDirectory(GetApplicationDirectory())`,
+  then a guarded hop to `../Resources` when that directory exists. That second line
+  is what makes the `.app` bundle work — codesign treats everything under
+  `Contents/MacOS/` as nested *code*, so assets must live in `Contents/Resources/`.
+  The loose dev build has no `../Resources` and is unaffected. Don't switch asset
+  loading to absolute paths without revisiting both.
+- `main.cpp` references `assets/sounds/player_hit.wav` and
+  `assets/sounds/rocket_through_wall.wav`, neither of which exists. raylib logs a
+  warning and returns an empty `Sound`; those two FX are silent. Pre-existing.

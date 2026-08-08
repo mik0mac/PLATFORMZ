@@ -18,8 +18,16 @@ IX_OBJS := $(patsubst $(IX_DIR)/ixwebsocket/%.cpp,build/ix/%.o,$(IX_SRCS))
 IX_LIB  := build/ix/libixwebsocket_local.a
 IX_DEFS := -DIXWEBSOCKET_USE_TLS -DIXWEBSOCKET_USE_SECURE_TRANSPORT
 
+# macOS deployment target. Empty for dev builds (whatever the SDK defaults to);
+# the `app` target sets it to 13.0 so handout builds run on Ventura and later.
+# NOTE: this has to be threaded into the IX object rule by hand - that rule
+# spells out its own flags and does not use CXXFLAGS. The IX objects are also
+# cached in build/ix with no dependency on this flag, so `app` wipes build/ix.
+MACOS_MIN ?=
+MACOS_MIN_FLAG := $(if $(MACOS_MIN),-mmacos-version-min=$(MACOS_MIN))
+
 # -I/opt/homebrew/include also resolves nlohmann/json.hpp (brew nlohmann-json).
-CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR)
+CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR) $(MACOS_MIN_FLAG)
 # Extra compile flags for one-off/release builds without editing sources. Mainly
 # for baking a server address into a distribution binary (see docs/deploy-vultr.md):
 #   make EXTRA_CXXFLAGS='-DPLATFORMZ_DEFAULT_SERVER_HOST=\"203.0.113.10\"'
@@ -46,7 +54,7 @@ build/ix:
 	mkdir -p build/ix
 
 build/ix/%.o: $(IX_DIR)/ixwebsocket/%.cpp | build/ix
-	$(CXX) -std=c++17 -O2 -I$(IX_DIR) $(IX_DEFS) -c $< -o $@
+	$(CXX) -std=c++17 -O2 -I$(IX_DIR) $(MACOS_MIN_FLAG) $(IX_DEFS) -c $< -o $@
 
 $(IX_LIB): $(IX_OBJS)
 	ar rcs $@ $(IX_OBJS)
@@ -85,24 +93,123 @@ dist:
 	fi
 	$(MAKE) -B DIST_CXXFLAGS='$(if $(HOST),-DPLATFORMZ_DEFAULT_SERVER_HOST=\"$(HOST)\")$(if $(PORT), -DPLATFORMZ_DEFAULT_SERVER_PORT=\"$(PORT)\")'
 
-# Self-contained handout zip: static raylib (recipient needs NO Homebrew),
-# assets bundled beside the binary, and a double-clickable PLAY.command that
-# cd's next to itself first (the game loads assets/ by relative path). Apple
-# Silicon Macs only - the binary is arm64. Server host + join key are baked
-# from secrets.mk exactly like a normal build. Output: dist/PLATFORMZ-mac-arm64.zip
-RAYLIB_STATIC := /opt/homebrew/opt/raylib/lib/libraylib.a
-dist-pack:
+# --- macOS handout: .app bundle, Developer ID signing, notarization -------
+# Self-contained handout: static raylib (recipient needs NO Homebrew), assets
+# sealed into Contents/Resources, signed with Developer ID + hardened runtime,
+# notarized by Apple and stapled - so the recipient just double-clicks and
+# plays. No Gatekeeper warning, no xattr incantation, no instructions.
+#
+# Apple Silicon, macOS 13.0+ only. Server host + join key bake in from
+# secrets.mk exactly like a normal build.
+#
+#   make app            unsigned bundle, no credentials needed (quick test)
+#   make pack-unsigned  zip of the above, named so it can't be confused
+#                       with the real handout
+#   make sign           Developer ID + hardened runtime + secure timestamp
+#   make notarize       submit to Apple, wait, staple the ticket
+#   make dist-pack      the full handout: build -> sign -> notarize -> zip
+#
+# One-time setup before `make notarize` ever works (needs a secret typed in,
+# so it can't live in this file):
+#   xcrun notarytool store-credentials "platformz-notary"
+#     Apple ID: mike@michaelmacallister.com   Team ID: 9WM486296X
+#     password: an app-specific password from account.apple.com
+#
+# raylib is built from source rather than taken from Homebrew because the brew
+# bottle is compiled with a 15.0 deployment target, which would lock out anyone
+# not on Sequoia. See docs/deploy-vultr.md for the one-time build command.
+RAYLIB_STATIC  := $(HOME)/raylib-macos13/build-mac/raylib/libraylib.a
+APP_NAME       := PLATFORMZ
+APP_ID         := space.platformz.game
+APP_VERSION    ?= 0.1.0
+APP_BUILD      ?= $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+APP_MIN_OS     := 13.0
+APP_DIR        := dist/$(APP_NAME).app
+APP_ZIP        := dist/$(APP_NAME)-mac-arm64.zip
+NOTARY_ZIP     := dist/$(APP_NAME)-notarize.zip
+APP_ICON       := packaging/$(APP_NAME).icns
+# Not secrets: the cert's private key and the app-specific password both live
+# in the login keychain, so only the *names* appear here. Override on the
+# command line (or in secrets.mk) if the cert is ever reissued.
+CODESIGN_ID    ?= Developer ID Application: Michael MacAllister (9WM486296X)
+NOTARY_PROFILE ?= platformz-notary
+
+app:
 	rm -f $(TARGET)
-	$(MAKE) RAYLIB_LINK='$(RAYLIB_STATIC) -framework CoreAudio -framework AudioToolbox'
-	rm -rf dist/PLATFORMZ dist/PLATFORMZ-mac-arm64.zip
-	mkdir -p dist/PLATFORMZ
-	cp $(TARGET) dist/PLATFORMZ/
-	cp -R assets dist/PLATFORMZ/assets
-	printf '#!/bin/sh\ncd "$$(dirname "$$0")"\nexec ./platformz\n' > dist/PLATFORMZ/PLAY.command
-	chmod +x dist/PLATFORMZ/PLAY.command
-	printf 'PLATFORMZ (macOS, Apple Silicon)\n\nTo play: double-click PLAY.command.\n\nFirst launch: macOS may block it ("unidentified developer").\nRight-click PLAY.command -> Open -> Open. If the game itself is\nblocked too, run this once in Terminal from this folder:\n  xattr -dr com.apple.quarantine .\n\nKeep platformz and the assets folder together.\n' > dist/PLATFORMZ/README.txt
-	cd dist && zip -qr PLATFORMZ-mac-arm64.zip PLATFORMZ
-	@echo "==> dist/PLATFORMZ-mac-arm64.zip"
+	rm -rf build/ix          # cached IX objects have no dep on MACOS_MIN
+	$(MAKE) MACOS_MIN=$(APP_MIN_OS) \
+	        RAYLIB_LINK='$(RAYLIB_STATIC) -framework CoreAudio -framework AudioToolbox'
+	rm -rf $(APP_DIR) $(APP_ZIP) $(NOTARY_ZIP)
+	mkdir -p $(APP_DIR)/Contents/MacOS $(APP_DIR)/Contents/Resources
+	cp $(TARGET) $(APP_DIR)/Contents/MacOS/$(TARGET)
+	cp -R assets $(APP_DIR)/Contents/Resources/assets
+	printf 'APPL????' > $(APP_DIR)/Contents/PkgInfo
+	sed -e 's/@APP_NAME@/$(APP_NAME)/g'     -e 's/@APP_ID@/$(APP_ID)/g' \
+	    -e 's/@APP_EXE@/$(TARGET)/g'        -e 's/@APP_VERSION@/$(APP_VERSION)/g' \
+	    -e 's/@APP_BUILD@/$(APP_BUILD)/g'   -e 's/@APP_MIN_OS@/$(APP_MIN_OS)/g' \
+	    packaging/Info.plist.in > $(APP_DIR)/Contents/Info.plist
+	@if [ -f "$(APP_ICON)" ]; then \
+	  cp "$(APP_ICON)" $(APP_DIR)/Contents/Resources/$(APP_NAME).icns; \
+	else \
+	  echo "note: no $(APP_ICON) - shipping with the generic app icon"; \
+	fi
+	find $(APP_DIR) -name '.DS_Store' -delete
+	xattr -cr $(APP_DIR)
+	@echo "==> $(APP_DIR) (UNSIGNED - do not hand out)"
+
+# Deliberately a different filename from $(APP_ZIP) so an unsigned build can
+# never be mistaken for the real handout.
+pack-unsigned: app
+	rm -f dist/$(APP_NAME)-UNSIGNED-mac-arm64.zip
+	ditto -c -k --keepParent $(APP_DIR) dist/$(APP_NAME)-UNSIGNED-mac-arm64.zip
+	@echo "==> dist/$(APP_NAME)-UNSIGNED-mac-arm64.zip (UNSIGNED - local test only)"
+
+# One codesign call, not --deep: there is no nested code (raylib and
+# IXWebSocket are static, otool -L shows only Apple libraries). --deep is a
+# *verify* flag; Apple deprecates it for signing.
+sign: app
+	@security find-identity -v -p codesigning | grep -qF "$(CODESIGN_ID)" || { \
+	  echo "ERROR: signing identity not in keychain:"; \
+	  echo "       $(CODESIGN_ID)"; \
+	  echo "       check with: security find-identity -v -p codesigning"; exit 1; }
+	codesign --force --options runtime --timestamp \
+	  --sign "$(CODESIGN_ID)" $(APP_DIR)
+	codesign --verify --deep --strict --verbose=2 $(APP_DIR)
+	@codesign -dv --verbose=4 $(APP_DIR) 2>&1 | grep -q 'flags=.*runtime' || { \
+	  echo "ERROR: hardened runtime missing - notarization would reject this"; exit 1; }
+	@codesign -dv --verbose=4 $(APP_DIR) 2>&1 | grep -q '^Timestamp=' || { \
+	  echo "ERROR: no secure timestamp (saw 'Signed Time'?)."; \
+	  echo "       Without one the app stops launching when the cert expires."; \
+	  echo "       Check network access to timestamp.apple.com and re-run."; exit 1; }
+	@echo "==> signed, hardened runtime + secure timestamp (NOT yet notarized)"
+
+# Hits Apple's servers; usually 1-5 minutes. `notarytool submit --wait` exits
+# non-zero on anything but Accepted, so a rejection stops the build here.
+notarize: sign
+	@xcrun notarytool history --keychain-profile "$(NOTARY_PROFILE)" >/dev/null 2>&1 || { \
+	  echo "ERROR: no notarytool keychain profile '$(NOTARY_PROFILE)'."; \
+	  echo "       One-time setup (answer the prompts; do NOT pass --password,"; \
+	  echo "       it would land in your shell history):"; \
+	  echo "         xcrun notarytool store-credentials \"$(NOTARY_PROFILE)\""; \
+	  echo "       Apple ID: mike@michaelmacallister.com   Team ID: 9WM486296X"; \
+	  echo "       Password: an app-specific password from account.apple.com"; exit 1; }
+	rm -f $(NOTARY_ZIP)
+	ditto -c -k --keepParent $(APP_DIR) $(NOTARY_ZIP)
+	xcrun notarytool submit $(NOTARY_ZIP) --keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun stapler staple $(APP_DIR)
+	xcrun stapler validate $(APP_DIR)
+	rm -f $(NOTARY_ZIP)
+	@echo "==> notarized + stapled"
+
+# Gatekeeper-asserts BEFORE zipping, so a bundle that would warn on someone
+# else's Mac never reaches a zip named like the real handout.
+dist-pack: notarize
+	@spctl -a -vvv -t exec $(APP_DIR) 2>&1 | tee /dev/stderr | \
+	  grep -q 'source=Notarized Developer ID' || { \
+	  echo "ERROR: Gatekeeper did not report 'Notarized Developer ID'"; exit 1; }
+	rm -f $(APP_ZIP)
+	ditto -c -k --keepParent $(APP_DIR) $(APP_ZIP)
+	@echo "==> $(APP_ZIP)  (signed, notarized, stapled)"
 
 # --- Web (Emscripten / WASM) build ----------------------------------------
 # Builds the browser client. Requires the emsdk toolchain (emcc on PATH) and a
@@ -160,4 +267,9 @@ webdir:
 clean-web:
 	rm -f web/platformz.html web/platformz.js web/platformz.wasm web/platformz.data
 
-.PHONY: all run clean clean-all dist web webdir clean-web
+.PHONY: all run clean clean-all dist app pack-unsigned sign notarize dist-pack \
+        web webdir clean-web
+# The handout chain (dist-pack -> notarize -> sign -> app) is not parallel-safe:
+# each step must see the exact bits the previous one produced, and a stale
+# binary inheriting a fresh signature is the failure mode most worth avoiding.
+.NOTPARALLEL:

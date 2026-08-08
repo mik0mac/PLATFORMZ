@@ -202,6 +202,13 @@ int main(int argc, char** argv) {
     // ~) makes every asset load fail and the game runs fully silent. On the
     // web build GetApplicationDirectory() is "/", where the preloaded FS lives.
     ChangeDirectory(GetApplicationDirectory());
+    // Inside a macOS .app the executable sits in Contents/MacOS/ but the assets
+    // are sealed into Contents/Resources/ - codesign treats everything under
+    // Contents/MacOS/ as nested *code*, so data can't live there. Hop up when
+    // that layout is present. The loose dev build (./platformz beside assets/)
+    // has no ../Resources and is unaffected; on web GetApplicationDirectory()
+    // is "/" so this is likewise false.
+    if (DirectoryExists("../Resources/assets")) ChangeDirectory("../Resources");
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
                           // quit key - quit via the window close button or Cmd+Q.

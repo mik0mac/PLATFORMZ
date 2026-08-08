@@ -224,6 +224,114 @@ filtered. `./platformz local` is the single-player escape hatch.
 > other Mac users. Everyone else uses the browser client (Step 7). Rebuild per code
 > change like any native build.
 
+`make dist` produces a bare `./platformz` for your own use. To hand something to
+someone else, use `make dist-pack` — see the next section.
+
+---
+
+## Hand out a signed, notarized `PLATFORMZ.app`
+
+`make dist-pack` produces `dist/PLATFORMZ-mac-arm64.zip`: a real `.app` bundle,
+signed with Developer ID, notarized by Apple and stapled. The recipient downloads
+it, double-clicks, and plays. No "unidentified developer" warning, no right-click →
+Open, no `xattr` incantation.
+
+**Requirements:** Apple Silicon, **macOS 13.0 (Ventura) or later**.
+
+### One-time setup
+
+**1. Build raylib from source.** Homebrew's raylib bottle is compiled with a
+**15.0** deployment target, which would lock the handout to Sequoia. Build it
+against 13.0 instead — into its own directory, *not* `~/raylib` (that's the
+Emscripten/WebGL1 build `make web` uses):
+
+```bash
+git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git ~/raylib-macos13
+cmake -S ~/raylib-macos13 -B ~/raylib-macos13/build-mac \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF
+cmake --build ~/raylib-macos13/build-mac -j8
+otool -l ~/raylib-macos13/build-mac/raylib/libraylib.a | grep -m1 -A3 LC_BUILD_VERSION
+#   expect: minos 13.0
+```
+
+(`CMAKE_POLICY_VERSION_MINIMUM` is needed because Homebrew's cmake is 4.x, which
+rejects the older policy versions raylib's bundled GLFW declares.)
+
+**2. Store notarization credentials.** This needs a secret typed in, so it can't
+live in the repo. Generate an app-specific password at
+<https://account.apple.com> → Sign-In and Security → App-Specific Passwords, then:
+
+```bash
+xcrun notarytool store-credentials "platformz-notary"
+#   Apple ID: mike@michaelmacallister.com
+#   Team ID:  9WM486296X
+#   Password: <the app-specific password>
+```
+
+Don't pass `--password` on the command line — it would land in your shell history.
+Verify with `xcrun notarytool history --keychain-profile platformz-notary`.
+
+**3. Keep Dropbox off the build output.** The repo lives in Dropbox, and Dropbox
+rewriting file metadata between `codesign` and `stapler staple` will silently
+invalidate the signature. Run once:
+
+```bash
+xattr -w com.dropbox.ignored 1 dist
+```
+
+### The targets
+
+| command | does | needs credentials |
+| --- | --- | --- |
+| `make app` | unsigned `dist/PLATFORMZ.app` | no |
+| `make pack-unsigned` | zips it as `…-UNSIGNED-…` for local testing | no |
+| `make sign` | Developer ID + hardened runtime + secure timestamp | Developer ID cert |
+| `make notarize` | submits to Apple, waits, staples the ticket | notarytool profile |
+| `make dist-pack` | the whole chain → `dist/PLATFORMZ-mac-arm64.zip` | both |
+
+Notarization hits Apple's servers and usually takes 1–5 minutes. If it's rejected,
+`xcrun notarytool log <submission-id> --keychain-profile platformz-notary` gives the
+exact reason — rejections are almost always mechanical (missing hardened runtime,
+missing timestamp), not a judgement about the code.
+
+Server host and join key bake in from `secrets.mk` exactly as they do for `make dist`.
+
+### Proving it actually works
+
+Local checks (`spctl`, `stapler validate`) pass on **your** machine even for an
+unsigned build, because your Mac trusts your own certificate. The only test that
+counts uses a real quarantine flag, which only a browser, Mail, Messages or AirDrop
+applies — **not** `curl`, `scp`, or a USB stick:
+
+1. Download the zip through Safari/Chrome on a **different Mac** (second best: a
+   freshly created user account, which defeats the per-user Gatekeeper cache).
+2. Confirm the flag is there: `xattr -p com.apple.quarantine ~/Downloads/PLATFORMZ-mac-arm64.zip`
+3. Unzip and double-click. Expect **at most one** "downloaded from the Internet,
+   are you sure you want to open it?" dialog **with an Open button** — that one is
+   normal for any downloaded app, first launch only. The failure dialog is the one
+   with *no* Open button.
+4. Turn Wi-Fi off before first launch and repeat. Stapling is what makes this work
+   offline; without it, first launch needs a round-trip to Apple that can fail.
+
+### Caveats
+
+- **Apple Silicon only.** Intel Macs get "not supported on this type of Mac". A
+  universal build is possible (`-DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"` plus
+  `-arch` flags on our objects) but nobody has needed it yet.
+- **The Developer ID certificate expires 2027-02-01.** Builds notarized before then
+  keep launching forever — `--timestamp` embeds a countersignature and Gatekeeper
+  judges the cert as of that moment. What expires is the ability to sign *new*
+  builds. Renew in the Developer portal.
+- **Notarization needs an active paid Developer Program membership** at submit time.
+  Already-stapled builds keep working if it lapses.
+- **Console output disappears** when launched from Finder. Anyone who needs
+  connection logs runs `PLATFORMZ.app/Contents/MacOS/platformz` from Terminal —
+  which is also the only way to pass `local` or an explicit server URL, since a
+  double-clicked `.app` takes no arguments.
+
 ---
 
 ## Redeploying after code changes
