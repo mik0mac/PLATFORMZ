@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for PLATFORMZ.app/Contents/Info.plist. The @PLACEHOLDERS@ are filled
+  in by sed in the Makefile's `app` target (make 3.81 has no $(file >...), so a
+  committed template + sed is the way this gets generated).
+
+  CFBundleIdentifier is the one value that must never change once a build has
+  been handed out - it is what codesign stamps as the signature Identifier and
+  what Gatekeeper/quarantine key off on the recipient's machine.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>@APP_ID@</string>
+    <key>CFBundleExecutable</key>
+    <string>@APP_EXE@</string>
+    <key>CFBundleName</key>
+    <string>@APP_NAME@</string>
+    <key>CFBundleDisplayName</key>
+    <string>@APP_NAME@</string>
+    <key>CFBundleIconFile</key>
+    <string>@APP_NAME@</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>@APP_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@APP_BUILD@</string>
+
+    <!-- Forced by the toolchain: the raylib archive we link is built with a
+         13.0 deployment target. Claiming anything lower here would not help -
+         dyld rejects the load anyway, just with an uglier error. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>@APP_MIN_OS@</string>
+
+    <!-- Without this macOS runs the GL context through the 2x magnification
+         path: blurry on every Retina display. -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.action-games</string>
+</dict>
+</plist>
