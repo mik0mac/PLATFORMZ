@@ -229,13 +229,11 @@ int main(int argc, char** argv) {
         audioFX("assets/sounds/rocket_launch.wav",  0.5f, false, true,  8, 0.08f),     // FX_ROCKET_LAUNCH
         audioFX("assets/sounds/explosion.wav",      1.0f, false, true,  8, 0.08f),     // FX_EXPLOSION
         audioFX("assets/sounds/asteroid_bonus.wav", 1.0f, true,  false, 2),            // FX_ASTEROID_BONUS
-        audioFX("assets/sounds/player_hit.wav",     1.0f, true,  false, 2),            // FX_PLAYER_HIT (local only)
         audioFX("assets/sounds/player_death.wav",   1.0f, true,  false, 1),            // FX_PLAYER_DEATH (local only)
         audioFX("assets/sounds/no_ammo.wav",        1.0f, true,  false, 1),            // FX_NO_AMMO
         audioFX("assets/sounds/no_fuel.wav",        0.25f, true,  false, 1),            // FX_NO_FUEL
         audioFX("assets/sounds/firerate_choke.wav", 1.0f, true,  false, 1),            // FX_FIRERATE_CHOKE
         audioFX("assets/sounds/wall_bounce_player.wav", 0.6f, false, true, 2),         // FX_WALL_BOUNCE_PLAYER (spatial)
-        audioFX("assets/sounds/rocket_through_wall.wav", 1.0f, false, true, 4),        // FX_ROCKET_THROUGH_WALL (spatial)
         audioFX({ "assets/sounds/move_through_platform_0.wav",
                   "assets/sounds/move_through_platform_1.wav",
                   "assets/sounds/move_through_platform_2.wav",
@@ -1487,7 +1485,7 @@ int main(int argc, char** argv) {
                 // predicts our own events (the local host produces every event
                 // via the sim and predicts nothing, so it must play them all).
                 bool predicted = networked && ev.owner == myId && myId != 0u &&
-                    (ev.fx == FX_ROCKET_LAUNCH || ev.fx == FX_PLAYER_HIT || ev.fx == FX_PLAYER_DEATH);
+                    (ev.fx == FX_ROCKET_LAUNCH || ev.fx == FX_PLAYER_DEATH);
                 if (predicted) continue;
                 // Mark the event as local when we own it, so AudioQueue::push
                 // doesn't drop our own localPlayerOnly sounds (e.g. FX_NO_AMMO,

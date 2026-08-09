@@ -809,8 +809,6 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
                 if (player.isAlive) {
                     space.emitAudio(FX_PLAYER_LOCAL_DAMAGE, player.position, player.id);
                     if (explosion.ownerId != player.id) {
-                        // don't play the sound if the player hit themself.
-                        space.emitAudio(FX_PLAYER_HIT, explosion.position, explosion.ownerId);
                         // award points (but not on a self-hit)
                         awardPoints(owner, points);
                     }
