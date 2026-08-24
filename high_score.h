@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 
 // Create an alias for convenience
 using json = nlohmann::json;
@@ -25,29 +26,55 @@ struct rankingByScore
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(rankingByScore, Score, Name)
 
-// struct rankingByName
-// {
-//     std::string Name;
-//     int Score;
-// };
 
-// class that stores the high scores in a multiset.  Read into memory from a file and update as needed.
-// Usage:
-// 1. Create an instance of HighScore.
-// 2. Read the existing high scores from the file if needed.
-// 3. Use addScore(<score>, <name>) to add new scores.
-// 4. updateTopScoreString() to update the string representation of the top scores once all scores are added.
-// 5. save() to save the scores to a file after updating.
-// 6. getTopScoreString() to retrieve the current string representation of the top scores.
-// 7. clearTopScores() to clear all high scores and the top score string.
 
-class HighScore {
+class Scoreboard
+{
 public:
-    std::multiset<rankingByScore> byScore;
-    // std::set<rankingByName> byName;
-    std::string topScoreStr;
+    std::map<std::string, int> scores;
+    int numOfScores = 0;
+    std::vector<rankingByScore> leaderboard;
+    std::string leaderboardString;
+    
     std::string filePath;
 
+    void generateLeaderboard(int count) {
+        leaderboard.reserve(scores.size());
+
+        for (const auto& [name, score] : scores) {
+            rankingByScore rbs;
+            rbs.Score = score;
+            rbs.Name = name;
+            leaderboard.push_back(rbs);
+        }
+        std::partial_sort(leaderboard.begin(), leaderboard.begin() + count, leaderboard.end());
+        updateLeaderboardString(count);
+    }
+
+    void updateLeaderboardString(int count) {
+        leaderboardString.clear();
+        for (int i = 0; i < count; i++) {
+            leaderboardString += std::to_string(i + 1) + ". " + leaderboard[i].Name + " " + std::to_string(leaderboard[i].Score) + "\n";
+        }
+    }
+
+    std::string getLeaderboardString() const {
+        return leaderboardString;
+    }
+
+    // adds the score to the player's existing score.  Creates a new key/value pair if player's name doesn't exist.
+    void addScore(std::string name, int score) {scores[name] += score; numOfScores = scores.size();}
+    void changeScore(std::string name, int score) {scores[name] = score; numOfScores = scores.size();}
+    void removeScore(std::string name) {scores.erase(name); numOfScores = scores.size();}
+    void clearScores() {
+        scores.clear();
+        leaderboard.clear();
+        leaderboardString.clear();
+        numOfScores = 0;
+    }
+
+
+    // MARK: File, load, save
     void setFilePath(const std::string& path) {
         filePath = path;
     }
@@ -67,92 +94,36 @@ public:
         file.close();
 
         // clear byScore in memory
-        clearTopScores();
+        clearScores();
 
         // parse json data into byScore
         for (const auto& item : data) {
-            rankingByScore rbs;
-            rbs.Score = item["Score"];
-            rbs.Name = item["Name"];
-            // add to byScore
-            byScore.insert(rbs);
+            scores[item["Name"]] = item["Score"];
         }
+        numOfScores = scores.size();
 
-        // update string
-        updateTopScoreString();
+        // generate leaderboard and update string
+        generateLeaderboard(defaultCount);
+        updateLeaderboardString(defaultCount);
     }
 
-    void save() {
-        json jsonData = byScore;
-        
-        // Open a file stream
-        std::ofstream file(filePath);
-        
-        if (file.is_open()) {
-            // Write formatted JSON (4 spaces indentation)
-            file << jsonData.dump(4); 
-            file.close();
-            std::cout << "JSON file written successfully!\n";
-        } else {
-            std::cerr << "Error opening file for writing!\n";
-        }
-    }
-
-    std::vector<rankingByScore> getTopScores(int count) {
-        int numOfEntries = static_cast<int>(byScore.size());
-        if (count > numOfEntries) { count = numOfEntries; }
-        std::vector<rankingByScore> topScores;
-        int i = 0;
-        for (const auto& entry : byScore) {
-            if (i >= count) {
-                break;
-            }
-            topScores.push_back(entry);
-            i++;
-        }
-        return topScores;
-    }
-
-    std::string updateTopScoreString(int count = defaultCount) {
-        std::vector<rankingByScore> topScores;
-        topScores = getTopScores(count);
-        // format string like "<rank>. <playerName> <score>"
-        topScoreStr.clear();
-        for (int i = 0; i < static_cast<int>(topScores.size()); i++) {
-            topScoreStr += std::to_string(i + 1) + ". " + topScores[i].Name + " " + std::to_string(topScores[i].Score) + "\n";
-        }
-        return topScoreStr;
-    }
-
-    std::string getTopScoreString() const {
-        return topScoreStr;
-    }
-
-    void addScore(int score, std::string name) {
-        rankingByScore rbs;
-        rbs.Score = score;
-        rbs.Name = name;
-        
-        bool nameExists = false;
-        // check if the name already exists in the high score list
-        for (rankingByScore s : byScore) {
-            if (s.Name == name) {
-                byScore.erase(s);
-                byScore.insert(rbs);
-                nameExists = true;
-                break;
+        void save() {
+            json jsonData = scores;
+            
+            // Open a file stream
+            std::ofstream file(filePath);
+            
+            if (file.is_open()) {
+                // Write formatted JSON (4 spaces indentation)
+                file << jsonData.dump(4); 
+                file.close();
+                std::cout << "JSON file written successfully!\n";
+            } else {
+                std::cerr << "Error opening file for writing!\n";
             }
         }
-        // name was found.  All done.
-        if (nameExists) return;
-        // name was not in the high score list.  Add it.
-        byScore.insert(rbs);
-    }
 
-    void clearTopScores() {
-        byScore.clear();
-        topScoreStr.clear();
-    }
+    
 
 private:
     static constexpr int defaultCount = 10;
