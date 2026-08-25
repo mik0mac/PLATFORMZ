@@ -5,14 +5,11 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
-#include <nlohmann/json.hpp>
 #include <algorithm>
-#include <cstdio>   // std::rename, std::remove (atomic save)
-#include <cstring>  // std::strerror
-#include <cerrno>   // errno
-
-// Create an alias for convenience
-using json = nlohmann::json;
+#include <cstdio>    // std::rename, std::remove (atomic save)
+#include <cstring>   // std::strerror
+#include <cerrno>    // errno
+#include <stdexcept> // std::invalid_argument / std::out_of_range from std::stoi
 
 struct rankingByScore
 {
@@ -30,8 +27,6 @@ struct rankingByScore
     }
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(rankingByScore, Score, Name)
-
 
 
 class Scoreboard
@@ -41,7 +36,7 @@ public:
     std::vector<rankingByScore> leaderboard;
     std::string leaderboardString;
     
-    std::string filePath;  // path to the JSON file for persistence
+    std::string filePath;  // path to the score file (one "<score>\t<name>" line per entry)
     size_t defaultCount = 10; // default number of top scores to display
 
     void generateLeaderboard(size_t count = 0) {
@@ -110,13 +105,37 @@ public:
         // straight into scores (or clearing first) would leave an empty or
         // half-loaded table behind if the file turned out to be truncated or the
         // wrong shape.
+        // Read line by line, each one "<score>\t<name>". A damaged line is skipped
+        // rather than abandoning the load - that resilience is the main reason this
+        // format beats JSON here, where one bad byte costs the whole file.
         std::map<std::string, int> parsed;
-        try {
-            json data;
-            file >> data;                                    // throws on malformed JSON
-            parsed = data.get<std::map<std::string, int>>();  // throws on the wrong shape
-        } catch (const json::exception& e) {
-            std::cerr << "[scoreboard] could not read " << filePath << ": " << e.what()
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+
+            size_t tabPos = line.find('\t');
+            if (tabPos == std::string::npos) {
+                std::cerr << "[scoreboard] skipping malformed line: " << line << "\n";
+                continue;
+            }
+
+            int score = 0;
+            try {
+                score = std::stoi(line.substr(0, tabPos));
+            } catch (const std::exception&) {
+                // invalid_argument (not a number) or out_of_range (too big for int).
+                std::cerr << "[scoreboard] skipping line with an unreadable score: " << line << "\n";
+                continue;
+            }
+
+            // Score first, name last: the name is the only field that can hold
+            // arbitrary text, so everything past the first tab is the name and
+            // nothing needs escaping.
+            parsed[line.substr(tabPos + 1)] = score;
+        }
+
+        if (parsed.empty()) {
+            std::cerr << "[scoreboard] " << filePath << " held no readable scores"
                       << " - keeping the current table\n";
             return false;
         }
@@ -146,12 +165,10 @@ public:
                 return false;
             }
 
-            try {
-                file << json(scores).dump(4) << "\n"; // 4-space indent, human-editable
-            } catch (const json::exception& e) {
-                std::cerr << "[scoreboard] could not serialize scores: " << e.what() << "\n";
-                std::remove(tmpPath.c_str());
-                return false;
+            // One "<score>\t<name>" line per entry, streamed straight out rather than
+            // accumulated - no reason to build the whole file in memory first.
+            for (const auto& [name, score] : scores) {
+                file << score << '\t' << name << '\n';
             }
 
             // is_open() only proved the file opened. A full disk fails at write time,
