@@ -75,6 +75,15 @@ enum MessageType {
     COUNT
 };
 
+// MARK: Scoreboard
+// SERVER-SIDE ONLY. The all-time score table is owned, credited and persisted by
+// the game server (see server_main.cpp); the client just renders what the server
+// sends it. Relative on purpose so it resolves against the systemd
+// WorkingDirectory (/opt/PLATFORMZ/server); PLATFORMZ_SCORES overrides it.
+// Never load this from the client: main.cpp chdirs into Contents/Resources inside
+// the signed .app bundle, so writing there would break the notarized signature.
+const std::string SCOREBOARD_FILEPATH = "scores";
+
 //MARK: Physics Constants
 const float GRAVITY_SCALE = 4.0f;
 const float MOON_GRAVITY = 1.62f * GRAVITY_SCALE; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)

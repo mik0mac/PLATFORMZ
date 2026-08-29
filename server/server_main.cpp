@@ -28,6 +28,7 @@
 #include "../input.h"     // PlayerInput, ApplyPlayerInput() - reused directly
 #include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
+#include "../scoreboard.h" // cumulative all-time score table, persisted between runs
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>       // read the upgrade request (join-key gate)
@@ -144,6 +145,13 @@ GameSpace     gameSpace;
 CollisionGrid collisionGrid;
 std::mutex    gameMutex;
 std::atomic<uint32_t> serverTick{0};
+// Cumulative all-time score table (scoreboard.h). Credited once per match on the
+// PLAYING -> GAMEOVER edge in SimulationLoop, then saved and broadcast. Its own
+// mutex: it is touched by the sim thread (credit) and by io threads (the join
+// path builds a leaderboard packet), and it is unrelated to the world state.
+// Lock order where both are needed: gameMutex -> clientMutex -> scoreboardMutex.
+Scoreboard    scoreboard;
+std::mutex    scoreboardMutex;
 // Join key gate (#33): set PLATFORMZ_KEY in the server's environment and every
 // join attempt must present it - in the ws:// URL query (checked during the
 // HTTP upgrade) or in the UDP hello's "key" field. Wrong/missing key gets NO
@@ -468,10 +476,17 @@ static std::string parseString(const std::string& json, const std::string& key,
     return out;
 }
 
-// Clamp a client-supplied display name to the shared cap (constants.h). The
-// stock client's entry field already enforces this; this is the backstop so a
-// modified client can't ship a name that overflows everyone else's UI.
+// Clamp a client-supplied display name to the shared cap (constants.h) and drop
+// anything outside printable ASCII. The stock client's entry field already enforces
+// both, so this is the backstop against a modified client: an overlong name would
+// overflow everyone else's UI, and a control character would corrupt two things
+// downstream - a tab or newline breaks the scoreboard's one-line-per-entry file,
+// and js() (which only escapes " and \) would emit invalid JSON for the rest.
+// Strip first, then clamp, so removing characters can't leave it over the cap.
 static std::string clampName(std::string name) {
+    name.erase(std::remove_if(name.begin(), name.end(),
+                              [](unsigned char c) { return c < 32 || c > 126; }),
+               name.end());
     if (name.size() > PLAYER_NAME_MAX_CHARS) name.resize(PLAYER_NAME_MAX_CHARS);
     return name;
 }
@@ -581,6 +596,33 @@ static std::string welcomeFor(const ConnectedClient& c) {
 // Sent instead of silently dropping the connection, so the client can show
 // "match in progress" rather than a generic connect failure and keep retrying
 // in the background.
+//MARK: Leaderboard packet
+// The all-time table. Sent as entries rather than Scoreboard's preformatted
+// leaderboardString: that string is newline-separated and js() only escapes " and
+// \, so shipping it would emit invalid JSON. The client formats the rows itself.
+//
+// Plain JSON on purpose - it goes out through SendToClient, which ships text over
+// BOTH transports (chunking oversized UDP datagrams), and the client's applyMessage
+// only treats a packet as binary when it leads with a binary tag byte. So this
+// reaches WS and UDP clients alike without touching the binary welcome format.
+//
+// Only the first defaultCount entries are meaningfully ordered: generateLeaderboard
+// uses partial_sort, which sorts exactly that many and leaves the tail unordered.
+static std::string buildLeaderboard() {
+    std::string s = "{\"type\":\"leaderboard\",\"lb\":[";
+    {
+        std::lock_guard<std::mutex> lk(scoreboardMutex);
+        const auto& lb = scoreboard.leaderboard;
+        const size_t n = std::min(lb.size(), scoreboard.defaultCount);
+        for (size_t i = 0; i < n; ++i) {
+            if (i) s += ",";
+            s += "{\"n\":" + js(lb[i].Name) + ",\"s\":" + ji(lb[i].Score) + "}";
+        }
+    }
+    s += "]}";
+    return s;
+}
+
 static std::string buildFull() {
     return "{\"type\":\"full\"}";
 }
@@ -988,6 +1030,10 @@ public:
             // (empty in the lobby; the client renders from it instead of running
             // generate()). Re-sent to everyone when a match (re)starts.
             self->Send(buildWelcome(playerId));
+            // All-time table, right behind the welcome. The client's LEADERBOARD
+            // modal lives on the title screen, so a client that has just joined and
+            // never seen a match end still needs it.
+            self->Send(buildLeaderboard());
 
             self->Read();
         });
@@ -1373,6 +1419,7 @@ void SimulationLoop() {
     using Duration = std::chrono::duration<double>;
     auto lastTick  = Clock::now();
     Clock::time_point countdownEnd; // when the pre-match COUNTDOWN flips to PLAYING (valid only while COUNTDOWN)
+    Phase prevPhase = gamePhase.load(); // previous tick's phase, for the match-end edge (scoreboard credit)
 
     while (true) {
         auto now     = Clock::now();
@@ -1387,6 +1434,7 @@ void SimulationLoop() {
         uint32_t tick;
         size_t   asteroidCount = 0;
         bool     justStarted = false; // a match began this tick -> resend welcomes below
+        bool     leaderboardDirty = false; // scoreboard credited this tick -> broadcast below
         bool     wentLive    = false; // COUNTDOWN -> PLAYING flipped THIS tick -> drop every
                                       // client's stale input latch before the first apply
         {
@@ -1677,6 +1725,45 @@ void SimulationLoop() {
                 }
             }
 
+            //MARK: Scoreboard credit
+            // One-shot on the PLAYING -> GAMEOVER edge. Detected here rather than at
+            // either site that sets GAMEOVER, because those two hold different locks:
+            // the host's endmatch handler runs on a session strand with no gameMutex,
+            // while last-player-standing (just above) runs here holding it. Watching
+            // the edge from the sim loop gives one site and one lock discipline, and
+            // catches both causes.
+            //
+            // Timing is load-bearing: a match start calls generate(), which zeroes
+            // every player's score, so the credit has to happen before the next one.
+            {
+                Phase nowPhase = gamePhase.load();
+                if (prevPhase == Phase::PLAYING && nowPhase == Phase::GAMEOVER) {
+                    std::lock_guard<std::mutex> gc(clientMutex);
+                    std::set<int> claimed = gatherClaimedSlots();
+                    auto& ps = gameSpace.getPlayers();
+                    std::lock_guard<std::mutex> sb(scoreboardMutex);
+                    for (int i = 0; i < (int)ps.size(); ++i) {
+                        // Same "active" rule the state packet uses (see buildState):
+                        // a slot a client holds, or one a bot is driving. Player's
+                        // isConnected is CLIENT-side state - the server never sets it,
+                        // so testing it here would filter nothing. Unoccupied slots
+                        // still carry a name and a zero score, and would otherwise
+                        // litter the table with 0-point entries every match.
+                        if (claimed.count(i) == 0 && !ps[i].isBot) continue;
+                        scoreboard.addScore(ps[i].name, ps[i].score);
+                    }
+                    scoreboard.generateLeaderboard();
+                    scoreboard.save(); // match end is infrequent and is exactly when
+                                       // the data changes, so this doubles as the
+                                       // periodic flush - and keeps the worst case at
+                                       // a restart to one in-progress match.
+                    leaderboardDirty = true;
+                    std::cout << "Scoreboard: credited match, " << scoreboard.scores.size()
+                              << " names total\n";
+                }
+                prevPhase = nowPhase;
+            }
+
             tick = ++serverTick;
             asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
         }
@@ -1688,6 +1775,15 @@ void SimulationLoop() {
             std::lock_guard<std::mutex> gc(clientMutex);
             for (auto& [cid, client] : clients)
                 SendToClient(client, welcomeFor(client));
+        }
+
+        // Match just credited: push the updated table to everyone. Built before
+        // taking clientMutex so scoreboardMutex is already released (lock order).
+        // Off gameMutex, like the welcome resend above and BroadcastState below.
+        if (leaderboardDirty) {
+            std::string lb = buildLeaderboard();
+            std::lock_guard<std::mutex> gc(clientMutex);
+            for (auto& [cid, client] : clients) SendToClient(client, lb);
         }
 
         // Broadcast authoritative state to all clients every tick.
@@ -1830,6 +1926,7 @@ private:
         // locks (welcomeStaticMutex / udpSendMutex), unlike gameMutex/clientMutex.
         if (playerId != -1) {
             SendToClient(sink, welcomeFor(sink));
+            SendToClient(sink, buildLeaderboard()); // see the WS join path
         } else {
             std::cout << "Server full, rejecting UDP client\n";
             // Reply so the client can show "match in progress" instead of
@@ -1870,6 +1967,20 @@ int main() {
         std::cout << "Join key: REQUIRED (PLATFORMZ_KEY is set)\n";
     } else {
         std::cout << "Join key: none (open server; set PLATFORMZ_KEY to require one)\n";
+    }
+
+    // Cumulative all-time scores. The default path is RELATIVE on purpose, so it
+    // resolves against the systemd WorkingDirectory (/opt/PLATFORMZ/server - see
+    // docs/deploy-vultr.md); PLATFORMZ_SCORES overrides it, following the
+    // PLATFORMZ_KEY precedent above. A missing file is a normal cold start.
+    {
+        const char* sp = std::getenv("PLATFORMZ_SCORES");
+        std::lock_guard<std::mutex> lk(scoreboardMutex);
+        scoreboard.setFilePath((sp && *sp) ? sp : SCOREBOARD_FILEPATH);
+        scoreboard.load();
+        scoreboard.generateLeaderboard(); // seed the table sent to clients on join
+        std::cout << "Scoreboard: " << scoreboard.scores.size() << " names from "
+                  << scoreboard.filePath << "\n";
     }
 
     {
