@@ -1,7 +1,7 @@
 # PLATFORMZ → multi-match hosting + find-a-match
 
 *Plan of record, written 2026-08-29. Every numbered item below is filed as a
-GitHub issue (#71-#96) across milestones 1-4; the table near the end maps them.*
+GitHub issue (#71-#97) across milestones 1-4; the table near the end maps them.*
 
 ## Context
 
@@ -28,7 +28,8 @@ CREATE MATCH.
 |---|---|
 | Multi-match architecture | **Rooms in one process.** Hoist the globals into a `Match`; one `MatchRegistry`. One systemd unit, one port, unchanged deploy. |
 | Discovery UX | **Match browser + QUICK MATCH + CREATE**, plus join-by-code for friends. |
-| Identity | **Local profile file** — persistent name + random `clientId` + settings. No accounts, no backend. |
+| Identity | **Local profile file** — persistent name + `clientId` + settings, no accounts and no backend — plus a **server-signed token** (D3) so "same player as last time" is verifiable. Pseudonymous, not authenticated. |
+| Leaderboards | **Deferred, not designed out.** D3 removes the identity blocker; the remaining one is that the server is deliberately stateless. The match-end seam is where persistence would attach. |
 | Publish target | **Steam (macOS + Windows)**, web build maintained. Tracked as a separate epic (F) — it is a build/packaging problem, not a matchmaking one. |
 
 ## Architecture target
@@ -55,6 +56,66 @@ endpoint) stays open for the whole session; a `join`/`leave` message re-binds it
 between the Directory and a Match. This keeps UDP endpoints stable, avoids port
 juggling and firewall ranges, and means the browser client needs no second
 WebSocket.
+
+## Layering — what a `Match` is, and is not
+
+A `Match` is **not** a server. There is one server process, one port, one
+`io_context`, one WS listener and one UDP socket for the whole box. A `Match` is a
+*room inside* that process — the gameplay layer only.
+
+| Layer | Owns | Lifetime |
+|---|---|---|
+| **Transport** — `Listener`, `UdpListener`, `Session` | sockets, the WS handshake, the join-key gate | process |
+| **Connection** — the `Conn` table | who is attached: transport sink, `clientId`, name, and an atomic `matchId` | one socket |
+| **Directory** — `MatchRegistry` | which rooms exist, codes, `list`/`create`/`join`/`quick`/`leave`, caps, reaping | process |
+| **Match** (N of these) | `GameSpace`, `CollisionGrid`, `BotController`, phase, epoch, `MatchOptions`, roster, the 60 Hz tick | one match |
+
+**The inversion that makes it work: a connection outlives its match membership.**
+That is the whole reason A3 splits the `Conn` table from the per-match roster. A
+match can be created, played and reaped while the same socket stays open
+throughout; match membership is a *mutable property of a live connection*, not a
+property of the socket. Get that backwards and you are back to reconnecting.
+
+So, concern by concern:
+
+- **Finding/joining** — entirely above `Match`. A `Match` never knows it is
+  discoverable; the Directory owns that.
+- **Player identity** — spans the Connection layer, never the Match. D1 puts the
+  profile in a local file on the client; the hello carries `clientId` plus D3's
+  server-signed token, and the verified result lives on `Conn`, because your
+  identity outlives any one match. Its only job today is D2: matching a
+  reconnecting player back to their held-open slot. `Match` never sees it.
+- **Leaderboards** — deferred, but deliberately **unblocked**. See below.
+
+### Leaderboards: deferred, not designed out
+
+Two things stood between here and a leaderboard. **One is now being handled up
+front (D3), because it is cheap now and expensive to retrofit; the other stays
+deferred.**
+
+1. **Identity — handled by D3.** `clientId` is a UUID the *client* generates and
+   stores in a JSON file it owns: editable, copyable, re-mintable per match. Fine
+   for D2 (restoring your own slot inside a 15-second window is low-stakes and
+   self-defeating to cheat), useless as the key for a persistent ranking. D3 adds
+   a **server-signed token** so "same player as last time" becomes verifiable.
+2. **Persistence — still deferred.** The server is pure in-memory: no
+   `ofstream`/`fopen`/`sqlite` anywhere in `server/server_main.cpp`, and
+   `docs/deploy-vultr.md` states it twice as a deliberate property ("reads no
+   files, writes no files"). A leaderboard needs a datastore, and with it backup
+   and migration concerns the deploy story does not currently have. That is a
+   genuinely new fifth layer and it is out of scope here.
+
+Worth being precise about what is and isn't trustworthy: **the scores are.**
+`awardPoints` runs server-side in `collisions.cpp` and the client never asserts
+its own score. It was only ever the **who**, not the **what**, that needed fixing.
+
+**The seam is already in the right place.** `Player::score` (`elements.h:480`)
+lives inside the Match and is wiped every match by `resetPlayersForMatch()`
+(`gamespace.h:269`), so results are ephemeral by construction. The match-end block
+(`server/server_main.cpp:~1661`) is where a Match would hand a result record
+outward — a clean boundary that does not require `Match` to know what happens
+next. Per the decision to keep the Match boundary as planned, **no result-emit
+hook is being added speculatively**; when persistence arrives it attaches there.
 
 ---
 
@@ -469,27 +530,63 @@ persistence layer anywhere in the project.
   `PlatformzSetModalOpen` at `main.cpp:23`)
 
 Holds `name`, a random `clientId` (UUID, generated once), master volume, last
-`MatchOptions`, last server. **Must not write next to the binary** — inside the
-signed `.app`, `Contents/MacOS/` is code (see the cwd-anchoring note in
-`CLAUDE.md`).
+`MatchOptions`, last server, last match — **plus a `token` field, empty until the
+server issues one (D3).** Reserve the field now even though D3 fills it; the
+format is much easier to get right before the first build ships than after.
+**Must not write next to the binary** — inside the signed `.app`,
+`Contents/MacOS/` is code (see the cwd-anchoring note in `CLAUDE.md`).
 
 **Files:** new `profile.h`, `main.cpp`.
 
 ---
 
-### D2. Reconnect into your own slot via `clientId`
+### D3. Server-issued identity token
+**Why:** `clientId` alone proves nothing — the client generates it and owns the
+file. That is fine for D2's 15-second slot restore, and useless for anything
+persistent. A server-signed token makes "same player as last time" verifiable, and
+it is far cheaper to design in now than to retrofit around a shipped profile
+format and a shipped hello.
+
+**Scope — stateless, no database:**
+- Server holds a secret in `PLATFORMZ_IDENTITY_SECRET`, alongside `PLATFORMZ_KEY`
+  in `/etc/platformz.env`.
+- `hello` with **no** token → mint `token = base64(uuid ‖ HMAC(secret, uuid))`,
+  return it; the client stores it in its profile.
+- `hello` **with** a token → verify the HMAC. Valid ⇒ identity trusted. Invalid or
+  from an old secret ⇒ treat as no token and mint fresh (never hard-fail a join
+  over it).
+- The server stores **nothing** — it just verifies its own signature. Same trick
+  as E1's cookie, and the two should share the secret-loading code.
+
+**Be honest about what this does and doesn't buy.** It proves *continuity* — the
+same client as before — not that a human is who they claim. Someone can still copy
+their own token to a second machine, or run several clients to farm. That is
+enough for a friends-and-family ranking; a competitive public leaderboard would
+still want real accounts. Pseudonymous, not authenticated.
+
+Note the secret must be **persisted**, not regenerated at boot, or every token
+invalidates on restart. That is the one piece of server state this introduces.
+Nothing is baked into the web build — browser tokens live in `localStorage`.
+
+**Files:** `server/server_main.cpp`, `wire.h`, `profile.h`, `docs/deploy-vultr.md`.
+**Depends on:** D1.
+
+---
+
+### D2. Reconnect into your own slot
 **Why:** the machinery already exists and is unused — a mid-match leaver's body is
 held open for `MID_MATCH_LEAVE_GRACE_SEC = 15 s` (`constants.h:118`,
 `HandleMidMatchLeavers` L382), but nothing can prove "I am that player", so a
 dropped player comes back as a new slot while their body drifts off.
 
-**Scope:** carry `clientId` in the hello; the match remembers it per slot; on
-rejoin within grace, restore the original slot (with its score and body) instead
-of claiming a fresh one. Also makes the UDP-endpoint-change case
-(laptop sleep, new NAT mapping — already called out at L1806) actually work.
+**Scope:** carry the D3 token (and `clientId`) in the hello; the match remembers
+the **verified** identity per slot; on rejoin within grace, restore the original
+slot with its score and body instead of claiming a fresh one. Also makes the
+UDP-endpoint-change case (laptop sleep, new NAT mapping — already called out at
+L1806) actually work.
 
 **Files:** `wire.h`, `server/server_main.cpp`, `elements.h`.
-**Depends on:** D1, A3.
+**Depends on:** D1, D3, A3.
 
 ---
 
@@ -625,7 +722,10 @@ deployable checkpoints before anything a player can see.
 B1 → B2+B3 → A3 → A5 → C1 → C2 → C3 → C4 → C5
 
 **Milestone 3 — safe to advertise publicly**
-E1 → E2 → A4-implement → E3 → E4 → D1 → D2
+E1 → E2 → A4-implement → E3 → E4 → D1 → D3 → D2
+
+D3 shares its HMAC-over-a-server-secret machinery with E1's cookie, so land E1
+first and reuse the secret-loading code.
 
 **E1 is a prerequisite for Milestone 2, not a follow-up, if the server ever runs
 without `PLATFORMZ_KEY`.**
@@ -641,7 +741,7 @@ that are far easier to review on their own branches than mixed into a shared one
 
 ## Issue list
 
-Filed 2026-08-30 as [#71-#96](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3Aissue+label%3Aserver%2Cclient%2Cprotocol%2Csecurity%2Cbuild%2Cops), grouped into milestones 1-4.
+Filed 2026-08-30 as [#71-#97](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3Aissue+label%3Aserver%2Cclient%2Cprotocol%2Csecurity%2Cbuild%2Cops), grouped into milestones 1-4.
 
 | # | Issue | Title | Epic | Depends on |
 |---|---|---|---|---|
@@ -660,8 +760,9 @@ Filed 2026-08-30 as [#71-#96](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | C3 | #83 | Client: split `LOBBY` off the title screen, add LEAVE | client | C1, A3 |
 | C4 | #84 | Client: QUICK MATCH and CREATE MATCH | client | C2, B1 |
 | C5 | #85 | Client: invite links (`?match=`) and join-by-code | client | C2 |
-| D1 | #86 | Client: persistent local profile (name, `clientId`, volume, options) | client | — |
-| D2 | #87 | Reconnect into your own slot via `clientId` (use the existing 15 s grace) | server, client | D1, A3 |
+| D1 | #86 | Client: persistent local profile (name, `clientId`, `token`, volume, options) | client | — |
+| D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
+| D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |
 | E1 | #88 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
 | E2 | #89 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
 | E3 | #90 | Load harness + CI smoke test for multi-match | testing | A3 |
