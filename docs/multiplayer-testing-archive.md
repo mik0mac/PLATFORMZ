@@ -1,3 +1,28 @@
+> **ARCHIVED 2026-08-29 — stale, kept for the parts that still hold.**
+>
+> The build and browser-setup steps below are still accurate and are the reason
+> this file survives: §0's Emscripten/`EMSDK_PYTHON` gotcha, §1's three builds,
+> §4's two-servers-at-once browser setup, and §6's troubleshooting table.
+>
+> **What is wrong with it now:**
+> - "supports **2 player slots**" — the cap has been `GAMESPACE_NUMBER_OF_PLAYERS
+>   = 8` for a while (`constants.h`).
+> - The §2 expected output predates the lobby. The server now boots with **no
+>   world at all** (`GameSpace: lobby ready, N player slots (waiting for a player
+>   to start)`) and prints `Protocol:` and `Join key:` lines the doc doesn't show.
+>   Connecting no longer drops you into a match — a host has to press START.
+> - "Both speak the exact same JSON wire protocol" — no longer true. UDP carries
+>   the quantized binary format in `netbin.h`; only WebSocket is JSON.
+> - §3b's "frees a UDP client's slot after ~5 s" — it's `UDP_CLIENT_TIMEOUT = 10`
+>   in a match, `UDP_CLIENT_TIMEOUT_LOBBY = 3` in the lobby.
+> - No mention of the `PLATFORMZ_KEY` join gate, which now exists.
+> - §5's controls omit `M` (host ends the match).
+>
+> A replacement covering the lobby, the join key and multi-match testing is
+> tracked as issue **E4** in `docs/matchmaking-plan.md`.
+
+---
+
 # Multiplayer testing — native LAN & browser LAN
 
 How to build and test PLATFORMZ multiplayer. There is **one authoritative

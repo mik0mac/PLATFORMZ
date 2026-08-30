@@ -32,14 +32,6 @@ Toolchain is **macOS + Homebrew raylib**:
 - Editing a header or an existing `.cpp` needs **no** Makefile change.
 - Adding a **new** `.cpp` requires adding it to `SRCS` in the `Makefile`.
 
-## IMPORTANT: Git workflow — commit to the current branch
-**Always commit to whatever branch is currently checked out.** Never create a new
-branch on your own initiative. If — and only if — you genuinely believe a change
-should not go on the current branch, do **not** silently make one: stop and say so
-overtly, addressing Mike by name and being blunt about it, e.g. _"Mike, this change
-should really go on a new branch. You would be dumb to commit this to main right
-now."_ Then wait for his go-ahead. No new branch without his explicit OK.
-
 ## IMPORTANT: IDE diagnostics are false positives
 The clang/clangd language server isn't configured with `-I/opt/homebrew/include`,
 so it reports things like `'raylib.h' file not found`, `Unknown type name
@@ -135,7 +127,8 @@ cursor capture.
 `make web RAYLIB_WEB_DIR=$HOME/raylib` builds the browser client; the shell is
 `shell.html` (baked in at compile time, so re-run after editing it). The web raylib
 at `~/raylib` is built as **OpenGL ES2 / WebGL1** (GLSL ES 100). Things that bite
-on the web but not native (see `docs/multiplayer-testing.md` for the full setup):
+on the web but not native (build setup: `docs/multiplayer-testing-archive.md`
+— archived/stale, but its Emscripten steps still hold):
 
 - **Shaders need a GLSL ES 100 variant.** A desktop `#version 330` shader will not
   compile under WebGL1, leaving `BeginShaderMode` with no valid program — which
