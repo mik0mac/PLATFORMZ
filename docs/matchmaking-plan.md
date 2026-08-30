@@ -1,7 +1,7 @@
 # PLATFORMZ → multi-match hosting + find-a-match
 
-*Plan of record, written 2026-08-29. Each numbered item below is meant to
-become one GitHub issue; the table near the end is the conversion list.*
+*Plan of record, written 2026-08-29. Every numbered item below is filed as a
+GitHub issue (#71-#96) across milestones 1-4; the table near the end maps them.*
 
 ## Context
 
@@ -639,40 +639,42 @@ follows — do them first and separately, so the risky changes land on a clean b
 Branch per issue. A1, A1b, C1 and A3 in particular are large mechanical diffs
 that are far easier to review on their own branches than mixed into a shared one.
 
-## Issue list (ready to convert)
+## Issue list
 
-| # | Title | Epic | Depends on |
-|---|---|---|---|
-| A1 | Server: extract match state into a `Match` struct (no behaviour change) | server | — |
-| A1b | Server: kill per-tick allocation churn (grid reuse, GAMEOVER idle, bitmask slots) | server, perf | A1 |
-| A2 | Server: `MatchRegistry` — match codes, creation, empty-match reaping, `MAX_MATCHES` | server | A1 |
-| A3 | Server: route connections to matches without reconnecting (WS + UDP) | server | A1, A2, B1 |
-| A4 | Server: measure tick cost **and egress**, then pick the sim scheduler and the caps | server, perf | A1b |
-| A5 | Server: join-in-progress by taking over a bot slot | server | A1, A3 |
-| A6 | Server: per-match heartbeat + `GET /status` (and fix the Actions idle watchdog) | server, ops | A2 |
-| B1 | Protocol: directory messages — `list`/`create`/`join`/`quick`/`leave` + `matchlist`/`joinfail` | protocol | A2 |
-| B2 | Protocol: welcome carries the match code (`WELCOME_BIN_VERSION` 0x02→0x0A) + server-wide epoch | protocol | B1 |
-| B3 | Protocol: move map size into `MatchOptions` so the lobby shows it before start | protocol | B2 |
-| C1 | Client: lift the game shell out of `main()` into `screens.h` (no behaviour change) | client | — |
-| C2 | Client: `BROWSE` screen — match list, refresh, join | client | B1, C1 |
-| C3 | Client: split `LOBBY` off the title screen, add LEAVE | client | C1, A3 |
-| C4 | Client: QUICK MATCH and CREATE MATCH | client | C2, B1 |
-| C5 | Client: invite links (`?match=`) and join-by-code | client | C2 |
-| D1 | Client: persistent local profile (name, `clientId`, volume, options) | client | — |
-| D2 | Reconnect into your own slot via `clientId` (use the existing 15 s grace) | server, client | D1, A3 |
-| E1 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
-| E2 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
-| E3 | Load harness + CI smoke test for multi-match | testing | A3 |
-| E4 | Docs: multi-match deploy, matchmaking reference, fix the stale "2 player slots" | docs | A3 |
-| F1 | Build: CMake covering macOS, Windows and the Linux server | build | — |
-| F2 | Windows port of the client (Winsock `UdpTransport`, paths, DPI) | build | F1 |
-| F3 | Windows packaging + Authenticode signing | build | F2 |
-| F4 | Steamworks: distribution, overlay, friend invite → join code | steam | F2, C5 |
-| F5 | CI: build the Emscripten web client so protocol changes can't break it | build, ci | — |
+Filed 2026-08-30 as [#71-#96](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3Aissue+label%3Aserver%2Cclient%2Cprotocol%2Csecurity%2Cbuild%2Cops), grouped into milestones 1-4.
 
-Suggested labels beyond the repo's existing set: `server`, `client`, `protocol`,
-`security`, `build`, `ops`. A1, A3, B1 and E1 are the ones worth writing an
-explicit design comment on before coding.
+| # | Issue | Title | Epic | Depends on |
+|---|---|---|---|---|
+| A1 | #71 | Server: extract match state into a `Match` struct (no behaviour change) | server | — |
+| A1b | #72 | Server: kill per-tick allocation churn (grid reuse, GAMEOVER idle, bitmask slots) | server, perf | A1 |
+| A2 | #73 | Server: `MatchRegistry` — match codes, creation, empty-match reaping, `MAX_MATCHES` | server | A1 |
+| A3 | #74 | Server: route connections to matches without reconnecting (WS + UDP) | server | A1, A2, B1 |
+| A4 | #75 | Server: measure tick cost **and egress**, then pick the sim scheduler and the caps | server, perf | A1b |
+| A5 | #76 | Server: join-in-progress by taking over a bot slot | server | A1, A3 |
+| A6 | #77 | Server: per-match heartbeat + `GET /status` (and fix the Actions idle watchdog) | server, ops | A2 |
+| B1 | #78 | Protocol: directory messages — `list`/`create`/`join`/`quick`/`leave` + `matchlist`/`joinfail` | protocol | A2 |
+| B2 | #79 | Protocol: welcome carries the match code (`WELCOME_BIN_VERSION` 0x02→0x0A) + server-wide epoch | protocol | B1 |
+| B3 | #80 | Protocol: move map size into `MatchOptions` so the lobby shows it before start | protocol | B2 |
+| C1 | #81 | Client: lift the game shell out of `main()` into `screens.h` (no behaviour change) | client | — |
+| C2 | #82 | Client: `BROWSE` screen — match list, refresh, join | client | B1, C1 |
+| C3 | #83 | Client: split `LOBBY` off the title screen, add LEAVE | client | C1, A3 |
+| C4 | #84 | Client: QUICK MATCH and CREATE MATCH | client | C2, B1 |
+| C5 | #85 | Client: invite links (`?match=`) and join-by-code | client | C2 |
+| D1 | #86 | Client: persistent local profile (name, `clientId`, volume, options) | client | — |
+| D2 | #87 | Reconnect into your own slot via `clientId` (use the existing 15 s grace) | server, client | D1, A3 |
+| E1 | #88 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
+| E2 | #89 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
+| E3 | #90 | Load harness + CI smoke test for multi-match | testing | A3 |
+| E4 | #91 | Docs: multi-match deploy, matchmaking reference, fix the stale "2 player slots" | docs | A3 |
+| F1 | #92 | Build: CMake covering macOS, Windows and the Linux server | build | — |
+| F2 | #93 | Windows port of the client (Winsock `UdpTransport`, paths, DPI) | build | F1 |
+| F3 | #94 | Windows packaging + Authenticode signing | build | F2 |
+| F4 | #95 | Steamworks: distribution, overlay, friend invite → join code | steam | F2, C5 |
+| F5 | #96 | CI: build the Emscripten web client so protocol changes can't break it | build, ci | — |
+
+Labels created for this work: `server`, `client`, `protocol`, `security`,
+`build`, `ops`, `perf`, `testing`, `steam`, `ci`. A1, A3, B1 and E1 are the ones
+worth writing an explicit design comment on before coding.
 
 ## Verification
 
