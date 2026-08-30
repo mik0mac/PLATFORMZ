@@ -83,6 +83,5 @@ Left Shift for stronger (earth) gravity · Esc toggle cursor capture.
 | Blank canvas / no audio | Click the canvas once (pointer lock + audio need a user gesture). |
 
 ## See also
-- `docs/multiplayer-testing-archive.md` — local/LAN testing (native + browser)
-  without GitHub. **Archived/stale**; the build + browser setup steps still hold.
+- `docs/multiplayer-testing.md` — local/LAN testing (native + browser) without GitHub.
 - `.github/workflows/gameserver.yml` — the server + tunnel job.

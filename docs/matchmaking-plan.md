@@ -719,13 +719,14 @@ no files, writes no files" twice. Once `high-score` lands that is false — ther
 a `scores` file to back up, and the redeploy steps must stop implying the box
 holds nothing worth keeping.
 
-**Write a fresh `docs/multiplayer-testing.md`.** The old one was archived
-(2026-08-29) as `docs/multiplayer-testing-archive.md` — it predated the lobby, so
-its "connect and you're playing" narrative, its expected server output, its
-"2 player slots" and its "both speak JSON" were all wrong. Its banner lists what's
-still accurate (Emscripten setup, the three builds, the two-servers browser test,
-troubleshooting); lift those forward rather than rewriting them, and add the
-lobby/START flow, the join key, and multi-match testing.
+**~~Write a fresh `docs/multiplayer-testing.md`~~ — DONE 2026-08-30.** Covers the
+lobby/START flow, both transports and how they differ, the `PLATFORMZ_KEY` gate,
+the scoreboard, and the trap that a bare `./platformz` connects to the *live*
+server because `secrets.mk` bakes the host in. The pre-lobby version stays at
+`docs/multiplayer-testing-archive.md` for its Emscripten build record.
+
+**Still owed here:** a "two matches, four clients, one server" section, once
+multi-match actually exists.
 
 Also add a short `docs/matchmaking.md` describing the directory protocol as the
 reference for both ends.

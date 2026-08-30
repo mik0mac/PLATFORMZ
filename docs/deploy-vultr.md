@@ -407,6 +407,5 @@ changes — the scheme-aware default is baked into the wasm.
 
 ## See also
 - `docs/play-web-via-github.md` — the GitHub Actions + cloudflared tunnel setup.
-- `docs/multiplayer-testing-archive.md` — local/LAN testing (native + browser).
-  **Archived/stale**; the build + browser setup steps still hold.
+- `docs/multiplayer-testing.md` — local/LAN testing (native + browser).
 - `server/Makefile` — the Linux server build (Boost + stub, no raylib).

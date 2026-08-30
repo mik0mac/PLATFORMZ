@@ -18,8 +18,9 @@
 > - No mention of the `PLATFORMZ_KEY` join gate, which now exists.
 > - §5's controls omit `M` (host ends the match).
 >
-> A replacement covering the lobby, the join key and multi-match testing is
-> tracked as issue **E4** in `docs/matchmaking-plan.md`.
+> **The replacement is `docs/multiplayer-testing.md`** — use that one. This file
+> is kept only because the Emscripten/raylib-web build steps here are the fullest
+> written record of that setup.
 
 ---
 

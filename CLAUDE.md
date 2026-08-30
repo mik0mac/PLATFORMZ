@@ -127,8 +127,7 @@ cursor capture.
 `make web RAYLIB_WEB_DIR=$HOME/raylib` builds the browser client; the shell is
 `shell.html` (baked in at compile time, so re-run after editing it). The web raylib
 at `~/raylib` is built as **OpenGL ES2 / WebGL1** (GLSL ES 100). Things that bite
-on the web but not native (build setup: `docs/multiplayer-testing-archive.md`
-— archived/stale, but its Emscripten steps still hold):
+on the web but not native (see `docs/multiplayer-testing.md` for the full setup):
 
 - **Shaders need a GLSL ES 100 variant.** A desktop `#version 330` shader will not
   compile under WebGL1, leaving `BeginShaderMode` with no valid program — which
