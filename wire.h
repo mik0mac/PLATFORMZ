@@ -50,8 +50,17 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 }
 
 //MARK: Inbound - parsed result
+// One row of the server's all-time score table. Shipped as entries rather than a
+// preformatted string: the server hand-rolls its JSON and its escaper only handles
+// " and \, so a newline-separated block would emit invalid JSON. The client renders
+// these itself (see the LEADERBOARD modal in main.cpp).
+struct LeaderboardEntry {
+    std::string name;
+    int         score = 0;
+};
+
 struct ServerMessage {
-    enum class Type { None, Welcome, State, Full, VersionMismatch, Unknown };
+    enum class Type { None, Welcome, State, Full, VersionMismatch, Leaderboard, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -75,6 +84,11 @@ struct ServerMessage {
     // false unless the packet carried an "opt" object.
     bool         hasOptions = false;
     MatchOptions opt;
+
+    // Leaderboard only: the server's all-time table, best-first. Sent once just
+    // behind the welcome (so a fresh client can open the modal immediately) and
+    // again to everyone whenever a finished match is credited.
+    std::vector<LeaderboardEntry> leaderboard;
 };
 
 //MARK: Outbound - start request
@@ -522,6 +536,21 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         return msg;
     }
     if (type == "full") { msg.type = ServerMessage::Type::Full; return msg; }
+
+    // All-time score table. Rows arrive already ranked best-first (the server
+    // partial_sorts before sending), so the client renders them in order as-is.
+    if (type == "leaderboard") {
+        msg.type = ServerMessage::Type::Leaderboard;
+        if (j.contains("lb") && j["lb"].is_array()) {
+            for (const auto& jo : j["lb"]) {
+                LeaderboardEntry e;
+                e.name  = jo.value("n", std::string());
+                e.score = jo.value("s", 0);
+                msg.leaderboard.push_back(e);
+            }
+        }
+        return msg;
+    }
     if (type != "state") { msg.type = ServerMessage::Type::Unknown; return msg; }
 
     msg.type = ServerMessage::Type::State;
