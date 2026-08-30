@@ -29,7 +29,7 @@ CREATE MATCH.
 | Multi-match architecture | **Rooms in one process.** Hoist the globals into a `Match`; one `MatchRegistry`. One systemd unit, one port, unchanged deploy. |
 | Discovery UX | **Match browser + QUICK MATCH + CREATE**, plus join-by-code for friends. |
 | Identity | **Local profile file** — persistent name + `clientId` + settings, no accounts and no backend — plus a **server-signed token** (D3) so "same player as last time" is verifiable. Pseudonymous, not authenticated. |
-| Leaderboards | **Deferred, not designed out.** D3 removes the identity blocker; the remaining one is that the server is deliberately stateless. The match-end seam is where persistence would attach. |
+| Leaderboards | **Mostly built already** on the `high-score` branch (persistence, server-side credit at match end, wire + client modal). D3 supplies the identity it needs; D4 re-keys it off display names. |
 | Publish target | **Steam (macOS + Windows)**, web build maintained. Tracked as a separate epic (F) — it is a build/packaging problem, not a matchmaking one. |
 
 ## Architecture target
@@ -87,35 +87,58 @@ So, concern by concern:
   reconnecting player back to their held-open slot. `Match` never sees it.
 - **Leaderboards** — deferred, but deliberately **unblocked**. See below.
 
-### Leaderboards: deferred, not designed out
+### Leaderboards: already largely built on `high-score`
 
-Two things stood between here and a leaderboard. **One is now being handled up
-front (D3), because it is cheap now and expensive to retrofit; the other stays
-deferred.**
+**This section was wrong in the first draft.** It called persistence deferred and
+the match-end result hook hypothetical. Both already exist, on the **`high-score`**
+branch — 5 commits, branched off current `main`, last touched 2026-08-29. It is
+newer than `main` and does **not** overlap any file `publishing-start` touches, so
+it merges cleanly today.
 
-1. **Identity — handled by D3.** `clientId` is a UUID the *client* generates and
-   stores in a JSON file it owns: editable, copyable, re-mintable per match. Fine
-   for D2 (restoring your own slot inside a 15-second window is low-stakes and
-   self-defeating to cheat), useless as the key for a persistent ranking. D3 adds
-   a **server-signed token** so "same player as last time" becomes verifiable.
-2. **Persistence — still deferred.** The server is pure in-memory: no
-   `ofstream`/`fopen`/`sqlite` anywhere in `server/server_main.cpp`, and
-   `docs/deploy-vultr.md` states it twice as a deliberate property ("reads no
-   files, writes no files"). A leaderboard needs a datastore, and with it backup
-   and migration concerns the deploy story does not currently have. That is a
-   genuinely new fifth layer and it is out of scope here.
+**What is already done there:**
 
-Worth being precise about what is and isn't trustworthy: **the scores are.**
-`awardPoints` runs server-side in `collisions.cpp` and the client never asserts
-its own score. It was only ever the **who**, not the **what**, that needed fixing.
+- **`scoreboard.h`** (195 lines) — a `Scoreboard` class with an in-memory table,
+  `generateLeaderboard()` (`partial_sort` with an inverted comparator, so it comes
+  out best-first), a `<score>\t<name>` TSV file, **atomic save** (write `.tmp`,
+  then `rename` — an interrupted save can never leave a half-file), and a tolerant
+  load that skips malformed lines and commits only on full success.
+- **Server-owned and server-credited.** `Scoreboard scoreboard` + `scoreboardMutex`
+  in `server_main.cpp`, credited **once per match on the match-end phase edge**
+  (tracked via a `prevPhase` local) and `save()`d there. That is exactly the seam
+  this plan predicted — it is already cut, in the right place.
+- **Wire + client.** A JSON-only `leaderboard` message (`lb: [{n, s}]`) and
+  `ServerMessage::Type::Leaderboard`, sent just behind the welcome and again on
+  each credit; the client renders a LEADERBOARD modal. JSON-only means it is
+  already byte-0-dispatch compatible and needs no binary tag.
+- **Path handling.** `SCOREBOARD_FILEPATH = "scores"`, relative so it resolves
+  against the systemd `WorkingDirectory`, with a `PLATFORMZ_SCORES` override.
+  Name sanitization rejects tab/newline so a display name cannot corrupt the TSV.
 
-**The seam is already in the right place.** `Player::score` (`elements.h:480`)
-lives inside the Match and is wiped every match by `resetPlayersForMatch()`
-(`gamespace.h:269`), so results are ephemeral by construction. The match-end block
-(`server/server_main.cpp:~1661`) is where a Match would hand a result record
-outward — a clean boundary that does not require `Match` to know what happens
-next. Per the decision to keep the Match boundary as planned, **no result-emit
-hook is being added speculatively**; when persistence arrives it attaches there.
+**What has to change to use the D3 identity (tracked as D4):**
+
+1. **The key.** `std::map<std::string /*name*/, int>` is keyed by *display name*.
+   Names are neither unique nor owned: two players typing `MIKE` share one row, and
+   anyone can take someone else's row by typing their name. Re-key on the D3
+   identity, and demote the display name to a *property* of the row — so renaming
+   yourself keeps your history and the board shows your current name.
+2. **File format.** `<score>\t<name>` becomes `<score>\t<id>\t<name>`. Any
+   existing `scores` file needs a migration path, or a deliberate one-time reset —
+   worth deciding rather than defaulting into.
+3. **Multi-match.** The scoreboard is correctly a **process-level global** — it
+   belongs above the Match layer — so it survives A1 unchanged as a global. But the
+   credit fires per match-end, so with N matches `scoreboardMutex` is contended by
+   every sim thread and up to N full-file rewrites can land together. A1/A3 must
+   slot `scoreboardMutex` innermost in the lock order (the branch already documents
+   `gameMutex -> clientMutex -> scoreboardMutex`), and `save()` likely wants
+   debouncing rather than a synchronous rewrite per match end.
+
+**Knock-on for the deploy story:** the server is no longer stateless once this
+lands. `docs/deploy-vultr.md` asserts "reads no files, writes no files" **twice**,
+and there is now a `scores` file to back up. E4 must fix that.
+
+Still deliberately absent: any notion of an *account*. D3 gives pseudonymous
+continuity, which is the right strength for this board — see the honesty note in
+D3 about what a copied token still allows.
 
 ---
 
@@ -590,6 +613,37 @@ L1806) actually work.
 
 ---
 
+### D4. Re-key the `high-score` scoreboard onto the identity token
+**Why:** the leaderboard is already built on the **`high-score`** branch, but its
+table is `std::map<std::string /*display name*/, int>`. Display names are neither
+unique nor owned — two players typing `MIKE` share a row, and anyone can claim
+someone else's row by typing their name. D3 supplies the identity that fixes it.
+
+**Scope:**
+- Re-key the table on the D3 identity; the display name becomes a **property** of
+  the row rather than its key, so renaming keeps your history and the board shows
+  your current name.
+- File format `<score>\t<name>` → `<score>\t<id>\t<name>`. **Decide the
+  migration** for an existing `scores` file — carry names forward as
+  provisional ids, or take a deliberate one-time reset. Do not default into it.
+- Keep the good parts as they are: atomic `.tmp` + `rename` save, the tolerant
+  skip-a-bad-line load, the JSON-only `leaderboard` wire message, the
+  `PLATFORMZ_SCORES` override.
+- **Multi-match:** keep `scoreboard` a process-level global (it lives above the
+  Match layer, so A1 leaves it alone), slot `scoreboardMutex` innermost in A3's
+  lock order, and debounce `save()` — with N matches, N match-ends can each
+  trigger a full-file rewrite in quick succession.
+
+**Merge note:** `high-score` is 5 commits off current `main`, newer than `main`,
+and shares no changed file with `publishing-start`. It merges cleanly as of
+2026-08-30; the longer it waits, the less true that stays.
+
+**Files:** `scoreboard.h`, `server/server_main.cpp`, `constants.h`,
+`docs/deploy-vultr.md`.
+**Depends on:** D3, and merging `high-score`.
+
+---
+
 # Epic E — Ops, abuse, and proof it scales
 
 ### E1. UDP handshake token (anti-spoof / anti-amplification) — **do not skip**
@@ -659,6 +713,11 @@ matches, assert state packets flow and the protocol tags match.
 ### E4. Docs refresh
 **Scope:** `docs/deploy-vultr.md` (multi-match section, `/status`, capacity
 numbers from A4, the key-vs-code distinction) and `docs/play-web-via-github.md`.
+
+**Correct the "stateless server" claim.** `docs/deploy-vultr.md` asserts "reads
+no files, writes no files" twice. Once `high-score` lands that is false — there is
+a `scores` file to back up, and the redeploy steps must stop implying the box
+holds nothing worth keeping.
 
 **Write a fresh `docs/multiplayer-testing.md`.** The old one was archived
 (2026-08-29) as `docs/multiplayer-testing-archive.md` — it predated the lobby, so
@@ -763,6 +822,7 @@ Filed 2026-08-30 as [#71-#97](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | D1 | #86 | Client: persistent local profile (name, `clientId`, `token`, volume, options) | client | — |
 | D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
 | D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |
+| D4 | *to file* | Re-key the `high-score` scoreboard onto the identity token | server | D3 + merge `high-score` |
 | E1 | #88 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
 | E2 | #89 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
 | E3 | #90 | Load harness + CI smoke test for multi-match | testing | A3 |
