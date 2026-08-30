@@ -1,7 +1,7 @@
 # PLATFORMZ → multi-match hosting + find-a-match
 
 *Plan of record, written 2026-08-29. Every numbered item below is filed as a
-GitHub issue (#71-#97) across milestones 1-4; the table near the end maps them.*
+GitHub issue (#71-#98) across milestones 1-4; the table near the end maps them.*
 
 ## Context
 
@@ -634,9 +634,8 @@ someone else's row by typing their name. D3 supplies the identity that fixes it.
   lock order, and debounce `save()` — with N matches, N match-ends can each
   trigger a full-file rewrite in quick succession.
 
-**Merge note:** `high-score` is 5 commits off current `main`, newer than `main`,
-and shares no changed file with `publishing-start`. It merges cleanly as of
-2026-08-30; the longer it waits, the less true that stays.
+**Merge status:** `high-score` was merged into `publishing-start` on 2026-08-30
+(`c210f47`), so the scoreboard code is already here — this is purely the re-key.
 
 **Files:** `scoreboard.h`, `server/server_main.cpp`, `constants.h`,
 `docs/deploy-vultr.md`.
@@ -801,7 +800,7 @@ that are far easier to review on their own branches than mixed into a shared one
 
 ## Issue list
 
-Filed 2026-08-30 as [#71-#97](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3Aissue+label%3Aserver%2Cclient%2Cprotocol%2Csecurity%2Cbuild%2Cops), grouped into milestones 1-4.
+Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3Aissue+label%3Aserver%2Cclient%2Cprotocol%2Csecurity%2Cbuild%2Cops), grouped into milestones 1-4.
 
 | # | Issue | Title | Epic | Depends on |
 |---|---|---|---|---|
@@ -823,7 +822,7 @@ Filed 2026-08-30 as [#71-#97](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | D1 | #86 | Client: persistent local profile (name, `clientId`, `token`, volume, options) | client | — |
 | D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
 | D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |
-| D4 | *to file* | Re-key the `high-score` scoreboard onto the identity token | server | D3 + merge `high-score` |
+| D4 | #98 | Re-key the scoreboard onto the identity token (display names collide today) | server, security | D3 |
 | E1 | #88 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
 | E2 | #89 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
 | E3 | #90 | Load harness + CI smoke test for multi-match | testing | A3 |
