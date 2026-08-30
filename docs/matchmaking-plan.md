@@ -167,12 +167,19 @@ Every free function that touches those globals becomes a `Match` method or takes
 `main()` creates exactly one `Match` and runs exactly one sim thread. **No
 behaviour change, no protocol change.**
 
-**Locking:** each `Match` owns one mutex covering *both* its sim state and its
-client list, replacing today's `gameMutex → clientMutex` pair. That ordering
-discipline is spread across every call site and does not survive N of each. One
-mutex per match is simpler, and the contention it removes is the whole point of
-splitting matches up. Globals that survive: `nextConnId`, `g_udp` +
-`udpSendMutex`, `joinKey`, and the new registry.
+**Locking — this plan was wrong, corrected during implementation.** It called for
+merging `gameMutex` and `clientMutex` into one mutex per match. **Don't.** Several
+call sites take `gameMutex` and then `clientMutex` *inside* it (the sim tick does
+it five times), so one mutex would self-deadlock on the second acquire — and the
+heartbeat takes `clientMutex` alone precisely so it can't deadlock against the
+sim. Merging is not a mechanical change; it means hunting down every nested
+acquisition, which is exactly the kind of risk A1 exists to avoid.
+
+The stated reason for merging — "that ordering discipline does not survive N of
+each" — was also just wrong. Nothing ever locks two matches at once, so the order
+stays per-match and the existing discipline holds unchanged. **Keep both mutexes
+as `Match` members.** Globals that survive: `nextConnId`, `g_udp` +
+`udpSendMutex`, `joinKey`, `scoreboard` + `scoreboardMutex`, and the new registry.
 
 **Files:** `server/server_main.cpp`, new `server/match.h`.
 **Done when:** `make -C server` clean; the native + browser LAN tests in
