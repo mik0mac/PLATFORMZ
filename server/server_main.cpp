@@ -1245,9 +1245,9 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
     }
 }
 
-// Router: find the match this connection belongs to, and forward. With exactly
-// one match that is always g_match; A3 turns this into a real lookup (connId ->
-// match) and handles the directory verbs ahead of it.
+// Router: find the match this connection belongs to, and forward. Only the
+// default room exists today, so that lookup is a constant; A3 turns it into a
+// real one (connId -> match) and handles the directory verbs ahead of it.
 static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     g_defaultMatch->HandleMessage(connId, msg);
 }
