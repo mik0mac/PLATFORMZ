@@ -17,6 +17,7 @@
 #include "raymath.h"
 #include <vector>
 #include <unordered_map>
+#include <cstdint>
 
 #include "elements.h"
 #include "gamespace.h"
@@ -53,6 +54,12 @@ struct GridCell {
     std::vector<int> rocketIndices;
     std::vector<int> playerIndices;
     std::vector<int> platformIndices;
+    // Generation this cell was last filled for. Rebuild() bumps a counter rather
+    // than clearing the map, so a cell whose stamp is stale is LOGICALLY EMPTY -
+    // FindCell() reports it as absent. Its vectors still hold last generation's
+    // indices, and (the whole point) still own their heap buffers, so the next
+    // Touch() reuses them instead of asking the allocator for new ones.
+    uint32_t stamp = 0;
 };
 
 class CollisionGrid {
@@ -61,10 +68,17 @@ public:
                            // reach so the 27-cell neighbor search can't miss a
                            // contact: asteroid radius (4) + player sphere (2) = 6.
 
-    // Rebuilds the grid from scratch using GameSpace's current object
-    // positions. Must be called once per frame, before any collision
-    // queries - the grid is fully transient state, not incrementally
-    // updated as objects move.
+    // Rebuilds the grid using GameSpace's current object positions. Must be
+    // called once per frame, before any collision queries - the grid is fully
+    // transient state, not incrementally updated as objects move.
+    //
+    // "Rebuild" no longer means "throw everything away". It used to open with
+    // cells.clear(), which destroyed every GridCell and freed all four of its
+    // vector buffers, then immediately rebuilt near-identical contents: a
+    // platform spans ~4-32 cells at cellSize 8, so an XL map (576 platforms) ran
+    // thousands of malloc/free pairs per frame, 60 times a second, per match.
+    // Now it bumps a generation counter and lets Touch() wipe each cell in place
+    // the first time this frame reaches it. Steady state allocates nothing.
     void Rebuild(GameSpace& space);
 
     // Calls fn(CellKey) for the cell containing `position` and all 26
@@ -81,10 +95,21 @@ public:
         }
     }
 
+    // A cell not touched this generation is empty as far as callers are
+    // concerned, even though the map entry still exists - see GridCell::stamp.
     const GridCell* FindCell(const CellKey& key) const {
         auto it = cells.find(key);
-        return (it != cells.end()) ? &it->second : nullptr;
+        if (it == cells.end() || it->second.stamp != generation) return nullptr;
+        return &it->second;
     }
+
+    // Live cell count (this generation only) - for tests and instrumentation.
+    size_t LiveCellCount() const {
+        size_t n = 0;
+        for (const auto& [key, cell] : cells) if (cell.stamp == generation) n++;
+        return n;
+    }
+    size_t RetainedCellCount() const { return cells.size(); }
 
     // Appends the platform indices bucketed in the 27-cell neighborhood around
     // `position` into `out`, then de-duplicates `out`. Platforms span multiple
@@ -103,8 +128,38 @@ public:
     }
 
 private:
+    // Fetch a cell for writing this generation, wiping it in place if the last
+    // thing that wrote it was an earlier frame. vector::clear() keeps capacity,
+    // which is what makes the reuse free.
+    GridCell& Touch(const CellKey& key) {
+        GridCell& c = cells[key];
+        if (c.stamp != generation) {
+            c.asteroidIndices.clear();
+            c.rocketIndices.clear();
+            c.playerIndices.clear();
+            c.platformIndices.clear();
+            c.stamp = generation;
+        }
+        return c;
+    }
+
+    // Reuse keeps buffers alive forever, which is the trade: a cell that saw one
+    // rocket fly through it in minute two still owns its buffer in minute twenty.
+    // The arena is bounded but big - XL is 720 units across at cellSize 8, ~90
+    // cells per axis, so ~729k cells if moving objects eventually visit
+    // everywhere. Left alone that is tens of MB per match on a 1 GB box. So drop
+    // cells nothing has touched for a while; infrequent enough to be free.
+    void EvictStale();
+
     std::unordered_map<CellKey, GridCell, CellKeyHash> cells;
+    uint32_t generation    = 0; // bumped once per Rebuild; 0 is never a live value
+    uint32_t lastEvictGen  = 0;
 };
+
+// Eviction tuning. Sweep every EVICT_INTERVAL frames, dropping cells untouched
+// for EVICT_AGE frames (both ~10 s at 60 Hz).
+const uint32_t GRID_EVICT_INTERVAL = 600;
+const uint32_t GRID_EVICT_AGE      = 600;
 
 //MARK: Narrow-phase geometry
 // Pure geometry, no game-rule knowledge. Sphere-sphere covers

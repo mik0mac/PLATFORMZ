@@ -76,25 +76,32 @@ OPTS = {"half": 120.0, "plat": 128, "roid": 18, "nplayers": 4, "diff": 0.2,
         "xradius": 1.0, "jthrust": 1.0, "fburn": 5, "fregen": 40,
         "walls": True, "phys": False, "ff": True, "coast": True}
 
-a = C("ALPHA"); a.hello = lambda: a.send({"type": "hello", "name": "ALPHA"})
-time.sleep(0.3)
-b = C("BRAVO"); b.hello = lambda: b.send({"type": "hello", "name": "BRAVO"})
-a.hello(); time.sleep(0.3); b.hello()
-step("1 joined (lobby)", [a, b])
+# Guarded so probe_idle.py (and anything else) can import C/OPTS without
+# running this whole scenario as a side effect of the import.
+def main():
+    a = C("ALPHA"); a.hello = lambda: a.send({"type": "hello", "name": "ALPHA"})
+    time.sleep(0.3)
+    b = C("BRAVO"); b.hello = lambda: b.send({"type": "hello", "name": "BRAVO"})
+    a.hello(); time.sleep(0.3); b.hello()
+    step("1 joined (lobby)", [a, b])
 
-b.send({"type": "start", **OPTS});  step("2 non-host start", [a, b])
-a.send({"type": "start", **OPTS});  step("3 host start", [a, b], 1.0)
-step("4 countdown->playing", [a, b], 5.0)
+    b.send({"type": "start", **OPTS});  step("2 non-host start", [a, b])
+    a.send({"type": "start", **OPTS});  step("3 host start", [a, b], 1.0)
+    step("4 countdown->playing", [a, b], 5.0)
 
-for i in range(60):
-    for c in (a, b):
-        c.seq += 1
-        c.send({"seq": c.seq, "ep": c.epoch, "mx": 0.0, "mz": 1.0, "jp": False,
-                "grav": False, "fire": i == 5, "yaw": -1.57, "pitch": 0.0})
-    time.sleep(0.016)
-step("5 after input", [a, b], 1.0)
+    for i in range(60):
+        for c in (a, b):
+            c.seq += 1
+            c.send({"seq": c.seq, "ep": c.epoch, "mx": 0.0, "mz": 1.0, "jp": False,
+                    "grav": False, "fire": i == 5, "yaw": -1.57, "pitch": 0.0})
+        time.sleep(0.016)
+    step("5 after input", [a, b], 1.0)
 
-b.send({"type": "endmatch"}); step("6 non-host endmatch", [a, b])
-a.send({"type": "endmatch"}); step("7 host endmatch", [a, b])
-a.send({"type": "start", **OPTS}); step("8 restart", [a, b], 7.0)
-b.alive = False; b.send({"type": "goodbye"}); step("9 bravo left", [a], 1.5)
+    b.send({"type": "endmatch"}); step("6 non-host endmatch", [a, b])
+    a.send({"type": "endmatch"}); step("7 host endmatch", [a, b])
+    a.send({"type": "start", **OPTS}); step("8 restart", [a, b], 7.0)
+    b.alive = False; b.send({"type": "goodbye"}); step("9 bravo left", [a], 1.5)
+
+
+if __name__ == "__main__":
+    main()

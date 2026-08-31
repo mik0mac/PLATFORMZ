@@ -148,10 +148,10 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg);
 // full. Caller MUST hold gameMutex (reads players) AND clientMutex (reads clients).
 int Match::ClaimFreeSlot() {
     auto& players = gameSpace.getPlayers();
-    std::set<int> claimed;
-    for (auto& [cid, c] : clients) claimed.insert(c.playerId);
+    SlotMask claimed = 0;
+    for (auto& [cid, c] : clients) SlotAdd(claimed, c.playerId);
     for (int i = 0; i < (int)players.size(); i++)
-        if (claimed.find(i) == claimed.end()) return i;
+        if (!SlotSet(claimed, i)) return i;
     return -1;
 }
 
@@ -228,10 +228,10 @@ std::vector<uint64_t> Match::CompactConnectedSlots() {
 // GAMEOVER, though, the client is already back on the roster-showing screen
 // (see returnToTitle in main.cpp), so a leaver's slot is relabeled right away
 // instead of sitting on their stale name until the next match start.
-void Match::refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
+void Match::refreshBotSlots(SlotMask claimed, bool allowBotify) {
     auto& players = gameSpace.getPlayers();
     for (int i = 0; i < (int)players.size(); ++i) {
-        bool bot = claimed.count(i) == 0;
+        bool bot = !SlotSet(claimed, i);
         if (!bot) { players[i].isBot = false; continue; }
         if (!allowBotify) continue; // mid-match leaver: leave the slot open
         players[i].isBot = true;
@@ -255,12 +255,12 @@ void Match::refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
 // (indirectly, via the already-gathered `claimed` set - this helper itself
 // never touches `clients`). No-ops entirely while `allowBotify` (LOBBY/
 // COUNTDOWN/GAMEOVER): those slots become bots instead via refreshBotSlots.
-void Match::HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify, float dt) {
+void Match::HandleMidMatchLeavers(SlotMask claimed, bool allowBotify, float dt) {
     if (allowBotify) return;
     auto& players = gameSpace.getPlayers();
     for (int i = 0; i < (int)players.size(); ++i) {
         Player& p = players[i];
-        if (claimed.count(i) > 0) {
+        if (SlotSet(claimed, i)) {
             p.leaveGraceSec = -1.0f; // reclaimed (reconnect or new joiner) - cancel any countdown
             continue;
         }
@@ -280,9 +280,9 @@ void Match::HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify
 }
 
 // Gather the claimed-slot set. Caller must hold clientMutex.
-std::set<int> Match::gatherClaimedSlots() {
-    std::set<int> claimed;
-    for (auto& [cid, c] : clients) claimed.insert(c.playerId);
+SlotMask Match::gatherClaimedSlots() {
+    SlotMask claimed = 0;
+    for (auto& [cid, c] : clients) SlotAdd(claimed, c.playerId);
     return claimed;
 }
 
@@ -510,7 +510,7 @@ static std::string buildFullBinary() {
 // `connectedSlots` are the player indices currently occupied by a client; each
 // player carries an "active" flag so clients can skip rendering empty slots.
 // -------------------------------------------------------------------------
-std::string Match::buildStateBodyJson(const std::set<int>& connectedSlots) {
+std::string Match::buildStateBodyJson(SlotMask connectedSlots) {
     std::string s;
     s.reserve(1024);
     s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
@@ -545,7 +545,7 @@ std::string Match::buildStateBodyJson(const std::set<int>& connectedSlots) {
         // A slot is shown if a human occupies it, a bot drives it, or - once a
         // match is underway (roster final) - unconditionally, so a mid-match
         // leaver's open body stays visible/killable instead of going invisible.
-        s += ",\"active\":" + jb(connectedSlots.count(i) > 0 || p.isBot
+        s += ",\"active\":" + jb(SlotSet(connectedSlots, i) || p.isBot
                                  || gamePhase.load() != Phase::LOBBY);
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
         s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
@@ -686,7 +686,7 @@ std::string Match::buildStatePacket(uint32_t tick, uint32_t lastSeq,
 // Same once-per-tick split as buildStateBodyJson: this body excludes the
 // header (tag/tick/lastSeq), which buildStateBinary below prepends per client.
 // -------------------------------------------------------------------------
-std::string Match::buildStateBodyBinary(const std::set<int>& connectedSlots) {
+std::string Match::buildStateBodyBinary(SlotMask connectedSlots) {
     std::string b;
     b.reserve(768);
     nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
@@ -727,7 +727,7 @@ std::string Match::buildStateBodyBinary(const std::set<int>& connectedSlots) {
         nb::putU16(b, (uint16_t)p.score);
         // Same rule as the JSON builder: in-match slots stay visible even when
         // their human left (open body awaiting a reconnect).
-        bool active = connectedSlots.count(i) > 0 || p.isBot
+        bool active = SlotSet(connectedSlots, i) || p.isBot
                       || gamePhase.load() != Phase::LOBBY;
         nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)
                               | (p.isOutOfBounds ? 16 : 0)));
@@ -1226,10 +1226,10 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
 void Match::BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
     // Which player slots are occupied, so clients can hide empty ones.
-    std::set<int> connectedSlots;
+    SlotMask connectedSlots = 0;
     bool haveWs = false, haveUdp = false;
     for (auto& [cid, client] : clients) {
-        connectedSlots.insert(client.playerId);
+        SlotAdd(connectedSlots, client.playerId);
         if (client.transport == Transport::UDP) haveUdp = true;
         else haveWs = true;
     }
@@ -1292,7 +1292,7 @@ static void ApplyInputToPlayer(Player& player, const PlayerInput& in,
 // so the driver below can eventually beat several matches per tick (A4) - the
 // body itself is unchanged.
 // -------------------------------------------------------------------------
-void Match::Tick() {
+void Match::Tick(CollisionGrid& scratchGrid) {
     using Duration = std::chrono::duration<double>;
     const auto now = Clock::now();   // was the driver loop's local
 
@@ -1395,6 +1395,8 @@ void Match::Tick() {
             // Every input still stamped with the old epoch is now rejected.
             // Skips 0, which is reserved for "client didn't stamp one".
             if (++matchEpoch == 0) matchEpoch = 1;
+            gameOverStamped = false; // fresh match: no wind-down pending
+            gameOverSimIdle = false;
             gamePhase = Phase::COUNTDOWN;
             countdownEnd = now + std::chrono::duration_cast<Clock::duration>(
                                      std::chrono::duration<double>(COUNTDOWN_SECONDS));
@@ -1493,7 +1495,7 @@ void Match::Tick() {
             Phase ph = gamePhase.load();
             bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN || ph == Phase::GAMEOVER);
             std::lock_guard<std::mutex> gc(clientMutex);
-            std::set<int> claimed = gatherClaimedSlots();
+            SlotMask claimed = gatherClaimedSlots();
             refreshBotSlots(claimed, allowBotify);
             HandleMidMatchLeavers(claimed, allowBotify, TICK_DT);
         }
@@ -1505,7 +1507,35 @@ void Match::Tick() {
         // the sim runs every frame of that countdown (issue #2). The match-end
         // detection below stays PLAYING-only so it fires exactly once.
         Phase phase = gamePhase.load();
-        if (phase == Phase::PLAYING || phase == Phase::GAMEOVER) {
+        // Wind an ended match down instead of simulating it forever. Both
+        // thresholds are far past GAME_OVER_TIMER (5 s), so a client still
+        // running its death-FX countdown sees exactly what it always did.
+        bool simThisTick = (phase == Phase::PLAYING);
+        if (phase == Phase::GAMEOVER && gameOverStamped) {
+            double since = Duration(now - gameOverAt).count();
+            simThisTick = since < GAMEOVER_SIM_SECONDS;
+            if (!simThisTick && !gameOverSimIdle) {
+                gameOverSimIdle = true;
+                std::cout << "Match sim idle after " << (int)GAMEOVER_SIM_SECONDS
+                          << "s in GAMEOVER (world kept, still broadcasting)\n";
+            }
+            if (since >= GAMEOVER_LOBBY_SECONDS) {
+                // Nobody is watching: drop the world and go back to being an
+                // empty lobby, exactly as at boot. Frees the platform/asteroid
+                // vectors, and the grid's cells age out on their own sweep.
+                gameSpace.clear();
+                gameSpace.spawnPlayers();
+                rebuildWelcomeStatic();
+                gamePhase       = Phase::LOBBY;
+                gameOverStamped = false;
+                gameOverSimIdle = false;
+                phase           = Phase::LOBBY;
+                simThisTick     = false;
+                std::cout << "Match world freed after " << (int)GAMEOVER_LOBBY_SECONDS
+                          << "s in GAMEOVER; back to lobby\n";
+            }
+        }
+        if (simThisTick) {
             // Apply each client's latest input to their player slot
             {
                 std::lock_guard<std::mutex> gc(clientMutex);
@@ -1557,7 +1587,7 @@ void Match::Tick() {
             botController.drive(gameSpace, TICK_DT);
 
             gameSpace.updatePositions(TICK_DT);
-            RunCollisionChecks(gameSpace, collisionGrid);
+            RunCollisionChecks(gameSpace, scratchGrid);
             gameSpace.updateActiveObjects();
 
             //MARK: Match end
@@ -1603,8 +1633,12 @@ void Match::Tick() {
         {
             Phase nowPhase = gamePhase.load();
             if (prevPhase == Phase::PLAYING && nowPhase == Phase::GAMEOVER) {
+                // Same edge the credit uses, so the wind-down clock below has one
+                // origin however the match ended (host request or last player).
+                gameOverAt      = now;
+                gameOverStamped = true;
                 std::lock_guard<std::mutex> gc(clientMutex);
-                std::set<int> claimed = gatherClaimedSlots();
+                SlotMask claimed = gatherClaimedSlots();
                 auto& ps = gameSpace.getPlayers();
                 std::lock_guard<std::mutex> sb(scoreboardMutex);
                 for (int i = 0; i < (int)ps.size(); ++i) {
@@ -1614,7 +1648,7 @@ void Match::Tick() {
                     // so testing it here would filter nothing. Unoccupied slots
                     // still carry a name and a zero score, and would otherwise
                     // litter the table with 0-point entries every match.
-                    if (claimed.count(i) == 0 && !ps[i].isBot) continue;
+                    if (!SlotSet(claimed, i) && !ps[i].isBot) continue;
                     scoreboard.addScore(ps[i].name, ps[i].score);
                 }
                 scoreboard.generateLeaderboard();
@@ -1679,6 +1713,10 @@ void SimulationLoop() {
     using Duration = std::chrono::duration<double>;
     auto lastTick  = Clock::now();
     g_match.prevPhase = g_match.gamePhase.load();
+    // One scratch grid for every match this thread drives - see the note in
+    // match.h. Lives here (not in Match) so it stays warm across matches, and so
+    // a future worker pool gets one per worker for free.
+    CollisionGrid scratchGrid;
 
     while (true) {
         auto now     = Clock::now();
@@ -1689,7 +1727,7 @@ void SimulationLoop() {
             continue;
         }
         lastTick = now;
-        g_match.Tick();
+        g_match.Tick(scratchGrid);
     }
 }
 

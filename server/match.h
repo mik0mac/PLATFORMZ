@@ -78,6 +78,23 @@ struct ConnectedClient {
     double        lastSeenSec  = 0.0;
 };
 
+//MARK: Slot mask
+// Which player slots are occupied, as one byte: slot i is bit i. Replaces the
+// std::set<int> this used to be - a red-black tree, separately allocating a node
+// per entry, built twice per tick to track at most 8 small integers. Membership
+// is now a shift and a mask on a register.
+using SlotMask = uint8_t;
+static_assert(GAMESPACE_NUMBER_OF_PLAYERS <= 8,
+              "SlotMask is a uint8_t - widen it (and everything typed SlotMask) "
+              "before raising GAMESPACE_NUMBER_OF_PLAYERS past 8");
+
+inline bool SlotSet(SlotMask m, int slot) {
+    return slot >= 0 && slot < 8 && ((m >> slot) & 1u) != 0;
+}
+inline void SlotAdd(SlotMask& m, int slot) {
+    if (slot >= 0 && slot < 8) m |= (SlotMask)(1u << slot);
+}
+
 //MARK: Match phase
 // The world doesn't exist until a client starts a match; after one ends, any
 // client can start another. The sim only ticks while PLAYING; LOBBY and GAMEOVER
@@ -107,8 +124,14 @@ struct Match {
 
     // ---- World + sim ----------------------------------------------------
     GameSpace     gameSpace;
-    CollisionGrid collisionGrid;
     std::mutex    gameMutex;
+    // NOTE: no CollisionGrid member. The grid is pure scratch - built at the top
+    // of the collision step, finished with by the end, never read between ticks -
+    // so one shared instance serves every match on a thread and is passed into
+    // Tick(). That keeps a single grid warm (its cells' buffers already
+    // allocated) instead of N cold ones, and it is per-THREAD, not per-match: if
+    // A4 later shards matches across a pool, each worker brings its own scratch
+    // and nothing here changes.
     std::atomic<uint32_t> serverTick{0};
     // Drives the bot slots (every player slot with no connected client). Same
     // tree and per-slot state the local client uses, so networked bots == local
@@ -180,15 +203,25 @@ struct Match {
     // the match now that the tick body is a method.
     Clock::time_point countdownEnd;      // when COUNTDOWN flips to PLAYING (valid only while COUNTDOWN)
     Phase             prevPhase = Phase::LOBBY; // previous tick's phase, for the match-end edge (scoreboard credit)
+    // When PLAYING -> GAMEOVER fired, and whether it has been stamped yet. The
+    // stamp happens in the match-end edge block, which runs AFTER the sim block
+    // that reads it - so on the very first GAMEOVER tick the timestamp does not
+    // exist yet. Without the flag that tick reads a default-constructed
+    // time_point (the clock epoch, decades ago), concludes the wind-down is long
+    // overdue, and tears the world down immediately - taking the scoreboard
+    // credit with it, since the credit needs the same edge this just destroyed.
+    Clock::time_point gameOverAt;
+    bool              gameOverStamped = false;
+    bool              gameOverSimIdle = false; // logged the sim-stop once for this episode
 
     // ---- Roster helpers -------------------------------------------------
     int  ClaimFreeSlot();
     void ReapIdleUdpClients();
     std::vector<uint64_t> CompactConnectedSlots();
-    std::set<int> gatherClaimedSlots();
+    SlotMask gatherClaimedSlots();
     bool isHostConn(uint64_t connId);
-    void refreshBotSlots(const std::set<int>& claimed, bool allowBotify);
-    void HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify, float dt);
+    void refreshBotSlots(SlotMask claimed, bool allowBotify);
+    void HandleMidMatchLeavers(SlotMask claimed, bool allowBotify, float dt);
 
     // ---- Packet builders ------------------------------------------------
     std::string buildPlatformsArray();
@@ -196,16 +229,16 @@ struct Match {
     std::string buildWelcome(int playerId);
     std::string buildWelcomeBinary(int playerId);
     std::string welcomeFor(const ConnectedClient& c);
-    std::string buildStateBodyJson(const std::set<int>& connectedSlots);
+    std::string buildStateBodyJson(SlotMask connectedSlots);
     std::string buildStatePacket(uint32_t tick, uint32_t lastSeq, const std::string& body);
-    std::string buildStateBodyBinary(const std::set<int>& connectedSlots);
+    std::string buildStateBodyBinary(SlotMask connectedSlots);
     std::string buildStateBinary(uint32_t tick, uint32_t lastSeq, const std::string& body);
 
     // ---- Tick + dispatch ------------------------------------------------
     // One 60 Hz step: consume a pending start, advance the countdown, reap, tick
     // the sim, then broadcast. Split from the driver loop (SimulationLoop in
     // server_main.cpp) so that loop can later drive several matches per beat.
-    void Tick();
+    void Tick(CollisionGrid& scratchGrid);
     void BroadcastState(uint32_t tick);
     // Dispatch one inbound text frame from a client already in this match's
     // roster. The free HandleClientMessage() in server_main.cpp is the router

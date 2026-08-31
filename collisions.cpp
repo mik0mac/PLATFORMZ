@@ -6,24 +6,29 @@
 
 //MARK: CollisionGrid::Rebuild
 void CollisionGrid::Rebuild(GameSpace& space) {
-    cells.clear();
+    // Deliberately NOT cells.clear() - see GridCell::stamp in collisions.h.
+    // Bumping the generation invalidates every cell at once; Touch() wipes each
+    // one in place the first time this frame writes to it, keeping the vectors'
+    // heap buffers. Skip 0: it is the default stamp of a freshly inserted cell,
+    // so a live generation of 0 would make a brand new cell look already-filled.
+    if (++generation == 0) ++generation;
 
     auto& asteroids = space.getAsteroids();
     for (int i = 0; i < (int)asteroids.size(); i++) {
         CellKey key = KeyForPosition(asteroids[i].position);
-        cells[key].asteroidIndices.push_back(i);
+        Touch(key).asteroidIndices.push_back(i);
     }
 
     auto& rockets = space.getRockets();
     for (int i = 0; i < (int)rockets.size(); i++) {
         CellKey key = KeyForPosition(rockets[i].position);
-        cells[key].rocketIndices.push_back(i);
+        Touch(key).rocketIndices.push_back(i);
     }
 
     auto& players = space.getPlayers();
     for (int i = 0; i < (int)players.size(); i++) {
         CellKey key = KeyForPosition(players[i].position);
-        cells[key].playerIndices.push_back(i);
+        Touch(key).playerIndices.push_back(i);
     }
 
     // Platforms are larger than a cell, so bucket each one into every cell its
@@ -38,7 +43,23 @@ void CollisionGrid::Rebuild(GameSpace& space) {
         for (int cx = lo.x; cx <= hi.x; cx++)
             for (int cy = lo.y; cy <= hi.y; cy++)
                 for (int cz = lo.z; cz <= hi.z; cz++)
-                    cells[CellKey{cx, cy, cz}].platformIndices.push_back(i);
+                    Touch(CellKey{cx, cy, cz}).platformIndices.push_back(i);
+    }
+
+    EvictStale();
+}
+
+// Drop cells nothing has touched in a while, so reuse doesn't mean "grow to the
+// arena's full cell count and stay there". Runs once every GRID_EVICT_INTERVAL
+// frames, so its cost is amortised to nothing.
+void CollisionGrid::EvictStale() {
+    if (generation - lastEvictGen < GRID_EVICT_INTERVAL) return;
+    lastEvictGen = generation;
+    for (auto it = cells.begin(); it != cells.end(); ) {
+        // stamp <= generation always (generation only ever grows), so this
+        // subtraction is safe unsigned arithmetic.
+        if (generation - it->second.stamp > GRID_EVICT_AGE) it = cells.erase(it);
+        else ++it;
     }
 }
 
