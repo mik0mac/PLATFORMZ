@@ -121,7 +121,6 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     // netbin.h) so a full tick fits one unfragmented datagram.
     {"XL",     {360.0f, 576, 36}}
 };
-
 // After a match ends the server keeps simulating so networked play matches local,
 // where the sim runs every frame of the client's death-FX countdown. That only
 // needs to outlast GAME_OVER_TIMER; past these thresholds nobody is watching, and
@@ -129,6 +128,27 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
 // the client is already back on its roster screen well before either fires.
 const double GAMEOVER_SIM_SECONDS   = 15.0; // stop ticking the world
 const double GAMEOVER_LOBBY_SECONDS = 60.0; // free the world, return to LOBBY
+
+//MARK: Match lifecycle (server-side)
+// How long a match with nobody in it survives before the registry destroys it.
+// Longer while PLAYING so a lobby-wide network blip can't tear down a match that
+// still has bodies held open for reconnects (MID_MATCH_LEAVE_GRACE_SEC).
+const double MATCH_EMPTY_GRACE_IDLE_SEC = 30.0; // LOBBY / GAMEOVER
+const double MATCH_EMPTY_GRACE_LIVE_SEC = 60.0; // COUNTDOWN / PLAYING
+// Backstop so a wedged room can never leak a tick slot forever.
+const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
+// Concurrent matches the process will hold. A real default comes from A4's
+// measurements (tick budget AND egress); this is a placeholder that is
+// deliberately low. Override with PLATFORMZ_MAX_MATCHES.
+const int    MATCH_MAX_CONCURRENT = 8;
+
+//MARK: Public room governance
+// A public room has no meaningful host: whoever holds the lowest connected slot
+// would otherwise control everyone's options and START button, and that control
+// migrates to another stranger when they leave. So public rooms lock their
+// options at creation and start themselves.
+const int    PUBLIC_MIN_PLAYERS      = 2;    // humans needed before the countdown arms
+const double PUBLIC_AUTOSTART_SECONDS = 20.0; // lobby countdown once that many are present
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.

@@ -188,6 +188,25 @@ struct Match {
     std::string welcomeStaticBin;   // binary: f32 half, u16 count, count*(6 f32)
     std::mutex  welcomeStaticMutex;
 
+    // ---- Governance -----------------------------------------------------
+    // A public room has no meaningful host. isHostConn() hands host to whoever
+    // holds the lowest connected slot, so without this an arbitrary stranger
+    // controls everyone's options and START button - and that control migrates
+    // to another stranger when they leave. Public rooms therefore lock their
+    // rules at creation and start themselves.
+    //
+    // optionsLocked rejects "options"/"start"/"endmatch" from EVERYONE, not just
+    // non-hosts. autoStart is what replaces the missing START button; the two
+    // must travel together, because a locked room without auto-start would sit
+    // in the lobby forever with nothing able to begin it.
+    bool optionsLocked = false;
+    bool autoStart     = false;
+
+    // Auto-start countdown, LOBBY only. Armed once connectedCount reaches
+    // PUBLIC_MIN_PLAYERS, disarmed if the room empties back below it.
+    bool              autoStartArmed = false;
+    Clock::time_point autoStartAt{};
+
     // ---- Roster ---------------------------------------------------------
     // connId -> client record. Keyed by a monotonic id (not a socket pointer) so
     // WS and UDP clients share one registry; the id order is stable
@@ -197,6 +216,12 @@ struct Match {
     // UDP only. Protected by clientMutex (same lock as `clients`).
     std::map<boost::asio::ip::udp::endpoint, uint64_t> udpIndex;
     std::mutex clientMutex;
+
+    // Connected human count, mirrored out of `clients` so the directory can list
+    // this match WITHOUT taking clientMutex. Listing runs on an io thread while
+    // the sim holds that lock every tick; making the browser wait on it would put
+    // directory latency behind the simulation. Maintained wherever clients is.
+    std::atomic<int> connectedCount{0};
 
     // ---- Sim-loop carried state -----------------------------------------
     // Were locals of SimulationLoop; they persist across ticks, so they belong to
@@ -239,6 +264,41 @@ struct Match {
     // the sim, then broadcast. Split from the driver loop (SimulationLoop in
     // server_main.cpp) so that loop can later drive several matches per beat.
     void Tick(CollisionGrid& scratchGrid);
+    // LOBBY-only: arm/advance the public-room auto-start countdown.
+    // No-op unless autoStart. Caller holds gameMutex.
+    void ServiceAutoStart(Clock::time_point now);
+    // Seed this match's rules from a named preset (options.h). Defined inline
+    // rather than in server_main.cpp because the REGISTRY calls it at creation,
+    // and the registry is linked by tools that have their own main() - the
+    // A2 registry test caught this as an undefined symbol.
+    //
+    // The values are COPIED in, so the 60 Hz state packet reads them straight off
+    // the match and never has to reach into registry storage under the registry
+    // lock to build its "opt" block. Creation-time only.
+    void ApplyPreset(const MatchPreset& preset) {
+        const MatchOptions& o = preset.options;
+        pendingPlayers        = o.numPlayers;
+        pendingDiff           = o.botDifficulty;
+        pendingWallElast      = o.wallElasticity;
+        pendingPlatElast      = o.platformElasticity;
+        pendingBoost          = o.speedBoost;
+        pendingRocketSpeed    = o.rocketSpeedScale;
+        pendingXRadius        = o.explosionRadiusScale;
+        pendingJThrust        = o.jetpackThrust;
+        pendingFuelBurn       = o.fuelConsumption;
+        pendingFuelRegen      = o.fuelRegenPct;
+        pendingWallsEnabled   = o.wallsEnabled;
+        pendingRocketsPhysics = o.rocketsObeyPhysics;
+        pendingFriendlyFire   = o.friendlyFire;
+        pendingCoastMode      = o.coastMode;
+
+        auto it = mapSizePresets.find(preset.mapSize);
+        const mapSizePreset& m = it != mapSizePresets.end() ? it->second
+                                                            : mapSizePresets.at("MEDIUM");
+        pendingHalf = m.halfSize;
+        pendingPlat = m.numPlatforms;
+        pendingRoid = m.numAsteroids;
+    }
     void BroadcastState(uint32_t tick);
     // Dispatch one inbound text frame from a client already in this match's
     // roster. The free HandleClientMessage() in server_main.cpp is the router
