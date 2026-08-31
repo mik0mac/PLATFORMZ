@@ -122,6 +122,14 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     {"XL",     {360.0f, 576, 36}}
 };
 
+// After a match ends the server keeps simulating so networked play matches local,
+// where the sim runs every frame of the client's death-FX countdown. That only
+// needs to outlast GAME_OVER_TIMER; past these thresholds nobody is watching, and
+// at N concurrent matches idle GAMEOVER worlds are pure waste. Server-side only -
+// the client is already back on its roster screen well before either fires.
+const double GAMEOVER_SIM_SECONDS   = 15.0; // stop ticking the world
+const double GAMEOVER_LOBBY_SECONDS = 60.0; // free the world, return to LOBBY
+
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.
 const float MID_MATCH_LEAVE_GRACE_SEC = 15.0f; // seconds a mid-match leaver's body stays open for a reconnect before being eliminated (see Player::leaveGraceSec)
