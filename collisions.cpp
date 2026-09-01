@@ -1,5 +1,6 @@
 #include <vector>
 #include <algorithm>
+#include <chrono>
 #include "collisions.h"
 #include "messages.h"
 
@@ -862,8 +863,16 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 }
 
 //MARK: RunCollisionChecks
-void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
-    grid.Rebuild(space);
+void RunCollisionChecks(GameSpace& space, CollisionGrid& grid,
+                        double* outRebuildMs) {
+    if (outRebuildMs) {
+        auto t0 = std::chrono::steady_clock::now();
+        grid.Rebuild(space);
+        *outRebuildMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - t0).count();
+    } else {
+        grid.Rebuild(space);
+    }
 
     CheckRocketAsteroidCollisions(space, grid);
     CheckRocketPlatformCollisions(space, grid);

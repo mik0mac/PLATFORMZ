@@ -33,6 +33,7 @@
 #include "../input.h"           // PlayerInput
 #include "../bot_controller.h"
 #include "../options.h"         // MatchOptions defaults via constants.h
+#include "perf.h"               // A4 tick/egress instrumentation
 
 #include <boost/asio/ip/udp.hpp>
 
@@ -222,6 +223,13 @@ struct Match {
     // the sim holds that lock every tick; making the browser wait on it would put
     // directory latency behind the simulation. Maintained wherever clients is.
     std::atomic<int> connectedCount{0};
+
+    // ---- A4 instrumentation ---------------------------------------------
+    // Sim-thread only, so plain PerfStats need no lock. Split three ways because
+    // "the tick is slow" is not actionable - the cap depends on WHICH part is.
+    PerfStat statSim;        // the whole gameMutex block
+    PerfStat statBroadcast;  // serialize + hand to sockets, off gameMutex
+    PerfStat statGrid;       // CollisionGrid::Rebuild alone, inside statSim
 
     // ---- Sim-loop carried state -----------------------------------------
     // Were locals of SimulationLoop; they persist across ticks, so they belong to

@@ -200,7 +200,13 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid);
 // Runs all collision checks for one frame, in order: rebuild grid, then
 // each pair-type check. Call this from main.cpp's update step, after
 // updatePositions(dt) and before updateActiveObjects().
-void RunCollisionChecks(GameSpace& space, CollisionGrid& grid);
+//
+// `outRebuildMs`, if given, receives the time the grid rebuild alone took. A4
+// needs the rebuild broken out from the rest of the collision work to size the
+// match cap (docs/matchmaking-plan.md); the server passes a pointer, the client
+// passes nothing and pays only a null check.
+void RunCollisionChecks(GameSpace& space, CollisionGrid& grid,
+                        double* outRebuildMs = nullptr);
 
 
 
