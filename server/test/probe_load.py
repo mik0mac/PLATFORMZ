@@ -5,8 +5,10 @@ Connects N clients, starts a match at a chosen map size with the roster maxed to
 8, and holds it while everyone sends input at 60 Hz. Empty slots fill with bots,
 so an 8-slot match is exercised whether 2 clients connect or 8.
 
+    # on the box
     cd server && PLATFORMZ_PERF=1 ./gameserver &
-    python3 test/probe_load.py --clients 8 --map XL --seconds 60
+    # from ANOTHER machine - the point is not to compete with what you measure
+    python3 test/probe_load.py --host platformz.space --clients 8 --map XL --seconds 60
 
 Egress scales with connected CLIENTS, tick cost with the ROSTER. Both matter:
 use --clients 8 for a realistic egress figure, since the server sends a full
@@ -14,6 +16,7 @@ state packet to each one 60 times a second.
 """
 import argparse, time, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe
 from probe import C, OPTS
 
 MAPS = {"SMALL":  (90.0,  64, 12),
@@ -22,16 +25,22 @@ MAPS = {"SMALL":  (90.0,  64, 12),
         "XL":     (360.0, 576, 36)}
 
 ap = argparse.ArgumentParser()
+ap.add_argument("--host", default=None,
+                help="server to drive (default localhost, or $PLATFORMZ_HOST)")
+ap.add_argument("--port", type=int, default=None)
 ap.add_argument("--clients", type=int, default=8)
 ap.add_argument("--map", choices=list(MAPS), default="MEDIUM")
 ap.add_argument("--seconds", type=int, default=45)
 a = ap.parse_args()
 
+if a.host: probe.set_target(a.host, a.port)
+print(f"target {probe.HOST}:{probe.PORT}")
+
 half, plat, roid = MAPS[a.map]
 cs = []
 for i in range(a.clients):
     c = C(f"LOAD{i}")
-    c.send({"type": "hello", "name": f"LOAD{i}"})
+    c.hello()
     cs.append(c)
     time.sleep(0.15)
 
@@ -41,7 +50,7 @@ for _ in range(10):
     time.sleep(0.4)
     missing = [c for c in cs if c.slot is None]
     if not missing: break
-    for c in missing: c.send({"type": "hello", "name": c.name})
+    for c in missing: c.hello()
 joined = sum(1 for c in cs if c.slot is not None)
 print(f"{joined}/{a.clients} clients joined")
 if joined < a.clients:

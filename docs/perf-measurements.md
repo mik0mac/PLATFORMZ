@@ -32,10 +32,23 @@ state packet to each, 60 times a second.
 
 ## Results — 2026-08-31, Mike's Mac, 8 clients, 8-slot roster
 
+**After #99** (static platform layer):
+
 | Map | sim p95 | grid p95 | broadcast p95 | total p95 | egress | fits |
 |---|---|---|---|---|---|---|
-| MEDIUM | 1.9 ms | 1.6 ms | 0.3 ms | **2.2 ms** | ~300 KB/s | ~4 |
-| XL | 6.8 ms | 5.9 ms | 0.3 ms | **7.0 ms** | ~550 KB/s | ~1 |
+| MEDIUM | 0.7 ms | 0.05 ms | 0.4 ms | **1.1 ms** | ~270 KB/s | ~9 |
+| XL | 2.6 ms | 0.11 ms | 0.5 ms | **3.0 ms** | ~490 KB/s | ~3 |
+
+Before #99, for comparison:
+
+| Map | sim p95 | grid p95 | total p95 | fits |
+|---|---|---|---|---|
+| MEDIUM | 1.9 ms | 1.6 ms | 2.2 ms | ~4 |
+| XL | 6.8 ms | 5.9 ms | 7.0 ms | ~1 |
+
+The grid went from ~80 % of the tick to ~4 % of it, and **broadcast is now the
+largest single line item**. That matters for what to optimise next: serialization
+and socket writes, not physics.
 
 > ⚠️ **These are Mac numbers and they are not the deployment numbers.** A 1 vCPU
 > shared Vultr instance is substantially slower and loses another 10–30 % to steal
@@ -48,7 +61,7 @@ The `max` column stays pinned at one large value (18 ms MEDIUM, 79 ms XL) across
 consecutive reports — it is the match-start tick (`generate()` plus the first grid
 build) sitting in the 900-sample window, not a steady-state stall.
 
-## Finding 1 — the grid rebuild is still ~80 % of the tick
+## Finding 1 — the grid rebuild was ~80 % of the tick (FIXED in #99)
 
 A1b removed the grid's *allocation* churn (13,037 → 0 allocs/tick on XL). It did
 not remove the *work*. Rebuild is still the single most expensive thing in a tick.
@@ -61,10 +74,23 @@ LARGE   platforms=256  | rebuild 0.048 ms | dynamic-only 0.000 ms | platforms 99
 XL      platforms=576  | rebuild 0.200 ms | dynamic-only 0.000 ms | platforms 100%
 ```
 
-Platforms are fixed once `generatePlatforms()` runs, yet all 576 are re-bucketed
-into their 4–32 cells apiece, every tick, 60 times a second. Bucketing them **once
-per match** and rebuilding only the dynamic objects should remove almost the whole
-cost. That is a separate issue, not part of A4.
+Platforms are fixed once `generatePlatforms()` runs, yet all 576 were re-bucketed
+into their 4–32 cells apiece, every tick, 60 times a second.
+
+**#99 fixed this**, bucketing them once per match into a separate `staticCells`
+layer, invalidated by a `platformEpoch` on `GameSpace`:
+
+```
+             before              after
+MEDIUM   0.017 ms/rebuild    0.001 ms   platforms 99% -> 8% of it
+XL       0.200 ms/rebuild    0.000 ms   platforms 100% -> 9% of it
+```
+
+Verified equivalent, not just faster: `server/test/grid_equiv_test.cpp` compares
+`GatherPlatformNeighbors` against a brute-force reference at 6,591 probe points
+across three map sizes — zero mismatches. A stale platform bucket would show up as
+"rockets occasionally pass through that one platform", which no phase transcript
+would ever catch.
 
 (The isolated bench reads far lower than the live p95 — 0.2 ms vs 5.9 ms on XL —
 because the bench runs alone while the live server contends with 8 local probe
