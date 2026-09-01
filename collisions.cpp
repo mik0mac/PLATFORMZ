@@ -47,9 +47,9 @@ void CollisionGrid::Rebuild(GameSpace& space) {
 // object near a platform's edge could miss it. That means one platform appears in
 // several cells, and readers must de-duplicate (see GatherPlatformNeighbors).
 //
-// Called only when GameSpace::getPlatformEpoch() moves: once per match in normal
-// play, or every tick if a platform ever actually moves, which degrades this
-// safely back to the old behaviour rather than serving stale buckets.
+// Called only when GameSpace::getPlatformEpoch() moves, which is once per match:
+// platforms are static, so the only thing that changes a layout is generating a
+// new one.
 void CollisionGrid::RebuildStatic(GameSpace& space) {
     // Clear each bucket in place, keeping capacity - the same trick the dynamic
     // cells use, and it matters on a restart into the same map size.

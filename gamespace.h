@@ -305,15 +305,6 @@ public:
 
     // MARK: Update Objects
     void updatePositions(float dt) {
-        // Update platforms (for moving platforms, future use). Any actual movement
-        // invalidates the grid's cached platform buckets - see getPlatformEpoch.
-        for (Platform& platform : platforms) {
-            if (platform.isMoving) {
-                platform.updatePos(dt);
-                ++platformEpoch;
-            }
-        }
-
         // Update players
         for (Player& player : players) {
             bool wasAlive = player.isAlive;
@@ -547,16 +538,13 @@ public:
     Walls& getWalls() { return walls; }
     std::vector<Platform>& getPlatforms() { return platforms; }
 
-    // Bumped whenever the platform LAYOUT changes. CollisionGrid buckets
-    // platforms once and re-does it only when this moves, instead of re-bucketing
-    // every platform every tick (A7 / #99) - platforms are static, and at XL they
-    // were ~99% of the rebuild cost.
+    // Bumped whenever the platform layout changes - which means a new match, and
+    // nothing else: platforms are static once generated. CollisionGrid buckets
+    // them once and re-does it only when this moves, instead of re-bucketing every
+    // platform every tick (A7 / #99), where at XL they were ~99% of the cost.
     //
-    // Bumped by generatePlatforms() and clear(), and every tick while any platform
-    // reports isMoving. That last one matters: isMoving is declared false and
-    // never set today, but updatePositions already has the branch wired, so
-    // switching it on must not silently leave the grid holding stale buckets. It
-    // degrades to the old per-tick behaviour instead.
+    // Bumped by generatePlatforms() and clear(). Those are the only two ways a
+    // platform's position can change.
     uint32_t getPlatformEpoch() const { return platformEpoch; }
     std::vector<Asteroid>& getAsteroids() { return asteroids; }
     std::vector<Player>& getPlayers() { return players; }

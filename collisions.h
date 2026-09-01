@@ -161,9 +161,10 @@ private:
     void EvictStale();
 
     // Re-bucket every platform into staticCells. Called from Rebuild only when
-    // GameSpace::getPlatformEpoch() differs from what was last built, which for a
-    // normal match means exactly once, at match start - instead of 576 platforms
-    // x their 4-32 cells apiece, 60 times a second, forever (#99).
+    // GameSpace::getPlatformEpoch() differs from what was last built - so exactly
+    // once per match, at match start, instead of 576 platforms x their 4-32 cells
+    // apiece, 60 times a second, forever (#99). Platforms do not move; the epoch
+    // changes only when a new layout is generated.
     void RebuildStatic(GameSpace& space);
 
     std::unordered_map<CellKey, GridCell, CellKeyHash> cells;

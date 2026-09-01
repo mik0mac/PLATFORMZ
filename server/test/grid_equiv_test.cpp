@@ -95,13 +95,10 @@ int main() {
         grid.GatherPlatformNeighbors({0,0,0}, after);
         check(after == reference(space, {0,0,0}, 8.0f), "regenerate is picked up");
 
-        // A moving platform bumps the epoch every tick, degrading safely to the
-        // old per-tick behaviour instead of serving a stale bucket.
-        auto& plats = space.getPlatforms();
-        plats[0].isMoving = true;
+        // clear() is the other way a layout goes away.
         uint32_t e0 = space.getPlatformEpoch();
-        space.updatePositions(1.0f / 60.0f);
-        check(space.getPlatformEpoch() != e0, "a moving platform invalidates the layer");
+        space.clear();
+        check(space.getPlatformEpoch() != e0, "clear() invalidates the layer");
     }
 
     printf("\n%s\n", failures ? "FAILURES" : "all grid equivalence checks passed");

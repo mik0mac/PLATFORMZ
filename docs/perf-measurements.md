@@ -92,6 +92,13 @@ across three map sizes — zero mismatches. A stale platform bucket would show u
 "rockets occasionally pass through that one platform", which no phase transcript
 would ever catch.
 
+The first version of this carried a hedge for future moving platforms — the epoch
+was re-bumped every tick if any platform reported `isMoving`, degrading back to
+per-tick bucketing. **Moving platforms were ruled out after gameplay testing
+(2026-08-31), so that is gone**, along with `Platform::isMoving` and the empty
+`Platform::updatePos`. The epoch now changes only when a layout is generated,
+which means once per match. Platforms are not ticked at all.
+
 (The isolated bench reads far lower than the live p95 — 0.2 ms vs 5.9 ms on XL —
 because the bench runs alone while the live server contends with 8 local probe
 clients and its own io threads. The *ratio* is the finding, not the absolute.)
