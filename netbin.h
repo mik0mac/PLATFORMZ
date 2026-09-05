@@ -18,6 +18,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -84,7 +85,20 @@ static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 static const size_t STATE_OVERHEAD  = 33;  // version/tick/seq/phase/options + section counts
 static const size_t PLAYER_BYTES    = 37;  // 29 fixed (quantized, incl. the OOB countdown byte) + a typical name (1 + ~6) + 1 slack
 static const size_t ASTEROID_BYTES  = 19;  // id + qpos + qvel + qsize + health + qflash
-static const size_t ACTION_HEADROOM = 65;  // in-flight rockets (16 B) / explosions (8 B) / audio events (12 B)
+// Room reserved for the variable-length sections: in-flight rockets (16 B each),
+// explosions (8 B), audio events (12 B), kill-feed messages.
+//
+// This was 65 B - about four rockets - which was fine for the 2-player roster this
+// started as. Measured on the box at 8 players (#100) the real figure was ~617 B,
+// 9.5x over, and state packets chunked during ordinary play at only 18 asteroids.
+//
+// 200 B is a deliberate middle. It is NOT a guarantee: a heavy 8-player firefight
+// still exceeds it and still chunks. Guaranteeing never-chunk would mean reserving
+// ~530 B, which at 8 players leaves room for just 17 asteroids and would gut XL
+// (36) - a worse trade than occasional chunking. What makes that acceptable is
+// that chunking is now SAFE: nb::ChunkReassembler handles interleaved messages,
+// where the old single-slot client could lose a welcome entirely.
+static const size_t ACTION_HEADROOM = 200;
 
 // Max asteroids that keep a full state tick under UDP_SAFE_DATAGRAM for a
 // roster of nPlayers. 6 players -> 46, 7 players -> 44, 8 players -> 42.
@@ -93,6 +107,83 @@ inline int MaxAsteroidsForRoster(int nPlayers) {
                 - (long)nPlayers * (long)PLAYER_BYTES;
     return budget > 0 ? (int)(budget / (long)ASTEROID_BYTES) : 0;
 }
+
+//MARK: Chunk reassembly
+// Rebuilds a chunked message from its datagrams. Lives here rather than in the
+// client because the framing does, and because it is worth testing without
+// dragging in a socket.
+//
+// MULTI-SLOT, and that is the whole point. The original held exactly one
+// half-built message and reset the moment a chunk arrived with a different gen -
+// documented as "chunks of one message never interleave with another's", which
+// was true while only oversized welcomes chunked, one at a time.
+//
+// #100 broke that assumption: with 8 players the per-tick STATE packet exceeds
+// the MTU too, so chunked state arrives 60x a second. Against the old code a
+// welcome (3 chunks on MEDIUM) could essentially never complete - each state
+// chunk wiped it - so a client joining a busy match would retry its hello
+// forever and never learn its slot.
+//
+// Four slots covers a welcome, a state and a leaderboard in flight together with
+// margin. A slot whose message never completes (a lost chunk) is eventually
+// reclaimed as the least-recently-touched.
+class ChunkReassembler {
+public:
+    // Feed one datagram whose first byte is CHUNK_VERSION. Returns true and fills
+    // `out` on the datagram that completes a message.
+    bool Feed(const char* buf, size_t n, std::string& out) {
+        if (n < CHUNK_HEADER) return false;
+        const uint8_t gen   = (uint8_t)buf[1];
+        const uint8_t index = (uint8_t)buf[2];
+        const uint8_t count = (uint8_t)buf[3];
+        if (count == 0 || index >= count) return false;   // malformed
+
+        Slot* slot = nullptr;
+        for (Slot& c : slots_)
+            if (c.inUse && c.gen == gen && c.parts.size() == count) { slot = &c; break; }
+        if (!slot) {
+            for (Slot& c : slots_) if (!c.inUse) { slot = &c; break; }
+            if (!slot) {                                   // all busy: drop the stalest
+                slot = &slots_[0];
+                for (Slot& c : slots_) if (c.touched < slot->touched) slot = &c;
+            }
+            slot->inUse = true;
+            slot->gen   = gen;
+            slot->have  = 0;
+            slot->parts.assign(count, {});
+        }
+        slot->touched = ++clock_;
+
+        if (!slot->parts[index].empty()) return false;     // duplicate datagram
+        slot->parts[index].assign(buf + CHUNK_HEADER, buf + n);
+        if (++slot->have < count) return false;
+
+        out.clear();
+        for (const std::string& p : slot->parts) out += p;
+        slot->inUse = false;
+        slot->parts.clear();
+        return true;
+    }
+
+    // Half-built messages currently held - for tests and diagnostics.
+    int InFlight() const {
+        int n = 0;
+        for (const Slot& c : slots_) if (c.inUse) n++;
+        return n;
+    }
+
+private:
+    struct Slot {
+        bool     inUse   = false;
+        uint8_t  gen     = 0;
+        size_t   have    = 0;
+        uint32_t touched = 0;                 // for least-recently-touched eviction
+        std::vector<std::string> parts;
+    };
+    static const int SLOT_COUNT = 4;
+    Slot     slots_[SLOT_COUNT];
+    uint32_t clock_ = 0;
+};
 
 // ---- writers: append to a std::string byte buffer ----
 inline void putU8 (std::string& b, uint8_t  v) { b.push_back((char)v); }

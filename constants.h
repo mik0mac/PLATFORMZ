@@ -97,7 +97,7 @@ const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game s
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~42 asteroids, comfortably above the XL preset's 36.
+const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~35 asteroids, so XL's 36 is clamped by one. (It was ~42 until #100 raised ACTION_HEADROOM to something the measured 8-player action volume justifies.)
 const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the OPTIONS slider and the server's pending config start at; the host can raise it up to the max above.
 
 struct mapSizePreset {

@@ -110,8 +110,20 @@ addressed, and the lever for that is broadcasting every 2nd–3rd tick with
 [server] state packet 1288 B > 1200 (chunking; lossy per-tick)
 ```
 
-At 18 asteroids, against a documented cap of 42. `ACTION_HEADROOM` is 65 B and the
-real action content was ~617 B — 9.5× over. Tracked as **#100**.
+At 18 asteroids, against a documented cap of 42. `ACTION_HEADROOM` was 65 B and
+the real action content was ~617 B — 9.5× over. **Fixed in #100**, in two parts:
+
+- `ACTION_HEADROOM` 65 → 200 B, so `MaxAsteroidsForRoster` stops lying. It is not
+  a guarantee — a heavy 8-player firefight still chunks. Reserving enough to
+  *guarantee* no chunking (~530 B) would leave 17 asteroids at 8 players and gut
+  XL. The cost of 200 B is one asteroid off XL at a full roster (36 → 35).
+- **Chunking made safe.** `nb::ChunkReassembler` now tracks several in-flight
+  messages instead of one. The old client held a single half-built message and
+  reset on any chunk from a different `gen` — so once state packets started
+  chunking 60×/s, a 3-chunk welcome could essentially never assemble, and a client
+  joining a busy match would retry its hello forever without ever learning its
+  slot. `server/test/reassembly_test.cpp` covers it, and the same test fails
+  against the old implementation.
 
 ## Finding 1 — the grid rebuild was ~80 % of the tick (FIXED in #99)
 
