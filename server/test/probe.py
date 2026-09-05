@@ -42,6 +42,10 @@ class C:
     def __init__(self, name):
         self.name, self.slot, self.seq, self.epoch = name, None, 0, 0
         self.phase, self.nplayers, self.alive = "(none)", 0, True
+        # Leaderboard arrivals, and the phase we believed we were in at the time.
+        # The server sends the table BEFORE the state packet announcing GAMEOVER,
+        # so a correct client must handle it while still in "playing".
+        self.leaderboards = []     # list of (phase_when_received, [(name, score)])
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.connect((HOST, PORT)); self.s.settimeout(0.2)
         self.parts = {}
@@ -80,6 +84,14 @@ class C:
                 self.nplayers = d[50]
             elif tag == FULL:
                 self.phase = "full"
+            elif tag == 0x7B:                      # '{' - a JSON message
+                try:
+                    j = json.loads(d.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if j.get("type") == "leaderboard":
+                    rows = [(e.get("n", ""), e.get("s", 0)) for e in j.get("lb", [])]
+                    self.leaderboards.append((self.phase, rows))
 
 def step(label, cs, secs=1.2):
     time.sleep(secs)
