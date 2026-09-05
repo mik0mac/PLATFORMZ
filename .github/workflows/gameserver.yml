@@ -83,10 +83,17 @@ jobs:
 
           # Idle watchdog: shut the server down after 15 min with no connected
           # players (the job's timeout-minutes is the separate hard 2h cap). The
-          # server prints a heartbeat "tick N  players C  asteroids A" once per
-          # second; any C > 0 counts as activity and resets the idle clock. A
-          # fresh server with nobody connected gets a full 15 min grace so there's
-          # time to connect after the tunnel URL is posted above.
+          # server prints a heartbeat once per second:
+          #   tick N  matches M (A active)  players C  worst X ms
+          # any C > 0 counts as activity and resets the idle clock. A fresh server
+          # with nobody connected gets a full 15 min grace so there's time to
+          # connect after the tunnel URL is posted above.
+          #
+          # C is the TOTAL across every match. The grep below takes the LAST
+          # "players <n>" in the log, so exactly one line per interval may carry
+          # that pattern - the per-match roll-call lines deliberately read
+          # "slots 3/8" instead. See ReportHeartbeat in server_main.cpp; changing
+          # either side without the other silently breaks this shutdown.
           IDLE_LIMIT=$((15 * 60))       # seconds of zero players before we quit
           last_active=$(date +%s)
 

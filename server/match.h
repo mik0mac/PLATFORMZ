@@ -230,6 +230,7 @@ struct Match {
     PerfStat statSim;        // the whole gameMutex block
     PerfStat statBroadcast;  // serialize + hand to sockets, off gameMutex
     PerfStat statGrid;       // CollisionGrid::Rebuild alone, inside statSim
+    size_t   lastAsteroidCount = 0;  // for the heartbeat, which now prints from the driver
 
     // ---- Sim-loop carried state -----------------------------------------
     // Were locals of SimulationLoop; they persist across ticks, so they belong to
