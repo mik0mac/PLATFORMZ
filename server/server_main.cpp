@@ -65,7 +65,13 @@ using tcp           = boost::asio::ip::tcp;
 using udp           = boost::asio::ip::udp;
 
 //MARK: Config
-const unsigned short PORT      = 9000;
+// Listen port, both TCP/WebSocket and UDP. Overridable with PLATFORMZ_PORT so a
+// second instance can run alongside the live one - measuring a server (A4) means
+// running it under load, and doing that on the deployment port would mean taking
+// the real one down first. Not const: set once in main() before either listener
+// is constructed, then only read.
+unsigned short       PORT      = 9000;
+const unsigned short PORT_DEFAULT = 9000;
 const float          TICK_RATE = 60.0f;
 const float          TICK_DT   = 1.0f / TICK_RATE;
 // UDP is connectionless - a client that quits just stops sending. Free its slot
@@ -1987,7 +1993,18 @@ private:
 // main
 // -------------------------------------------------------------------------
 int main() {
+    // Before anything prints or binds: the banner reports the port, so reading
+    // this later made an overridden instance announce the default it was not
+    // using.
+    if (const char* pp = std::getenv("PLATFORMZ_PORT"); pp && *pp) {
+        int v = std::atoi(pp);
+        if (v > 0 && v < 65536) PORT = (unsigned short)v;
+        else std::cerr << "PLATFORMZ_PORT=" << pp << " is not a usable port; keeping "
+                       << PORT_DEFAULT << "\n";
+    }
+
     std::cout << "PLATFORMZ server | port " << PORT
+              << (PORT == PORT_DEFAULT ? "" : " (PLATFORMZ_PORT override)")
               << " (TCP/WebSocket + UDP) | " << TICK_RATE << " Hz\n";
     // Protocol identity, so `journalctl -u platformz` answers "is the running
     // binary actually the one I just deployed?". That question is why a stale
