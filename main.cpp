@@ -347,6 +347,13 @@ int main(int argc, char** argv) {
 
     MessageQueue messageQueue; // queue of messages to display after all state updates.
 
+    // MARK: Leaderboard
+    // The all-time table is owned and persisted by the SERVER; the client only
+    // displays it. Rows arrive ranked best-first in a "leaderboard" message - once
+    // just behind the welcome, then again whenever a finished match is credited -
+    // and are shown by the title-screen LEADERBOARD modal (networked play only).
+    std::vector<LeaderboardEntry> leaderboard;
+
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
@@ -429,6 +436,7 @@ int main(int argc, char** argv) {
     bool        namePristine = true; // still the untouched "PLAYER" default; first keystroke clears it
     bool        showControls = false; // controls popup is open
     bool        showOptions  = false; // options popup is open
+    bool        showScores   = false; // leaderboard popup is open (networked only)
 
     // OPTIONS (see the OPTIONS modal below): one MatchOptions bundle drives the
     // sim (locally applied via GameSpace::applyOptions, remotely threaded
@@ -537,7 +545,7 @@ int main(int argc, char** argv) {
         // (covers leftovers from the tail end of the previous match).
         audioQueue.clearAll();
         messageQueue.clearAll();
-        showControls = false; showOptions = false; // close any open lobby modal so it can't hold the freed cursor
+        showControls = false; showOptions = false; showScores = false; // close any open lobby modal so it can't hold the freed cursor
         DisableCursor();
         consumeLookFrames = 2;   // swallow the cursor-lock delta (see the declaration)
         consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
@@ -578,6 +586,11 @@ int main(int argc, char** argv) {
                 // server slot may carry a leftover lobby bot name, and pre-welcome
                 // (myIndex == -1) every client's default would have been "PLAYER 1".
                 net.send(serializeName(myDisplayName()));
+            }
+            else if (m.type == ServerMessage::Type::Leaderboard) {
+                // Server-owned all-time table, already ranked. Replace wholesale -
+                // each message is the complete top-N, not a delta.
+                leaderboard = std::move(m.leaderboard);
             }
             else if (m.type == ServerMessage::Type::Full) {
                 // Every slot is claimed (mid-match, no bot filler). The hello
@@ -657,7 +670,7 @@ int main(int argc, char** argv) {
         predYaw = 0.0f; predPitch = 0.0f; predInit = false; predSeededFor = -1;
         botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
         EnableCursor(); // free the cursor for the title menu
-        showControls = false; showOptions = false; // no stale modal flag leaking back onto the lobby
+        showControls = false; showOptions = false; showScores = false; // no stale modal flag leaking back onto the lobby
         nameFocused = true; // re-focus the name field so the player can type without a click
         screen = GameScreen::TITLE;
     };
@@ -783,7 +796,7 @@ int main(int argc, char** argv) {
         // Web only: keep shell.html's pointer-lock handler in sync with whether a
         // title-screen modal is open (no-op on native). Modals live only on the
         // title screen, so force it false everywhere else.
-        PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions));
+        PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions || showScores));
 
         // MARK: AUDIO VOLUME
         // game volume adjustment, in MASTER_VOLUME_STEP_DB (3 dB) steps so every
@@ -831,12 +844,14 @@ int main(int argc, char** argv) {
             // Esc closes an open popup (no cursor toggle on the menu).
             if (showControls && IsKeyPressed(KEY_ESCAPE)) showControls = false;
             if (showOptions  && IsKeyPressed(KEY_ESCAPE)) showOptions  = false;
+            if (showScores   && IsKeyPressed(KEY_ESCAPE)) showScores   = false;
             // Snapshot each popup state at frame start: CLOSE is only handled if the
             // popup was ALREADY open, so the click that opens it can't also close
             // it on the same frame (the open button and CLOSE overlap on screen).
             const bool controlsWasOpen = showControls;
             const bool optionsWasOpen  = showOptions;
-            const bool uiEnabled = !showControls && !showOptions; // either popup is modal
+            const bool scoresWasOpen   = showScores;
+            const bool uiEnabled = !showControls && !showOptions && !showScores; // any popup is modal
 
             BeginDrawing();
                 ClearBackground(BLACK);
@@ -970,14 +985,24 @@ int main(int argc, char** argv) {
                 // click-driven, especially OPTIONS). The title screen is already a
                 // free-cursor state, but guard explicitly so this holds if a modal
                 // is ever opened from a captured (in-game) context.
-                Rectangle controlsBtn = {400, startY + 64.0f, 200, 44};
-                if (uiEnabled && UiButton(controlsBtn, "CONTROLS")) { showControls = true; if (IsCursorHidden()) EnableCursor(); }
+                // Buttons stack from a running offset rather than fixed positions:
+                // OPTIONS and LEADERBOARD are each conditional, so hardcoded rows
+                // would leave a hole wherever one is hidden (a non-host used to get
+                // a gap between CONTROLS and nothing).
+                float btnY = startY + 64.0f;
+                auto lobbyButton = [&](const char* label) {
+                    Rectangle r = {400, btnY, 200, 44};
+                    btnY += 52.0f;
+                    return uiEnabled && UiButton(r, label);
+                };
+
+                if (lobbyButton("CONTROLS")) { showControls = true; if (IsCursorHidden()) EnableCursor(); }
                 // OPTIONS is host-only (it reconfigures the whole match); non-hosts
                 // don't get the button, matching the START gating above.
-                if (amHost) {
-                    Rectangle optionsBtn = {400, startY + 116.0f, 200, 44};
-                    if (uiEnabled && UiButton(optionsBtn, "OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
-                }
+                if (amHost && lobbyButton("OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
+                // LEADERBOARD is networked-only: the table is owned and persisted by
+                // the server, so in local play there is nothing behind it.
+                if (networked && lobbyButton("LEADERBOARD")) { showScores = true; if (IsCursorHidden()) EnableCursor(); }
 
                 // Master volume, pinned bottom-right. The slider rides the dB
                 // scale (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left),
@@ -1016,6 +1041,34 @@ int main(int argc, char** argv) {
                     int ly = (int)m.y + 60;
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
                     if (UiModalClose(m, controlsWasOpen)) showControls = false;
+                }
+
+                // Leaderboard popup, same style as CONTROLS. Read-only: the server
+                // owns the table and pushes it on join and after every credited
+                // match, so there is nothing to refresh from here.
+                if (showScores) {
+                    Rectangle m = {250, 140, 500, 420};
+                    UiModalChrome(m, "LEADERBOARD");
+                    if (leaderboard.empty()) {
+                        // Distinguish "nothing recorded yet" from a broken panel -
+                        // a fresh server with no score file lands here.
+                        UiTextCentered("No scores recorded yet.", screenWidth,
+                                       (int)m.y + 120, 20, GRAY);
+                    } else {
+                        int ly = (int)m.y + 60;
+                        for (size_t i = 0; i < leaderboard.size(); ++i) {
+                            // Rank and name left, score right-aligned inside the panel
+                            // so the numbers line up regardless of name length.
+                            const char* rank = TextFormat("%d. %s", (int)i + 1,
+                                                          leaderboard[i].name.c_str());
+                            const char* val  = TextFormat("%d", leaderboard[i].score);
+                            DrawText(rank, (int)m.x + 40, ly, 18, RAYWHITE);
+                            DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)),
+                                     ly, 18, ui::OUTLINE);
+                            ly += 30;
+                        }
+                    }
+                    if (UiModalClose(m, scoresWasOpen)) showScores = false;
                 }
 
                 // Options popup, same opaque modal style. Two columns of five

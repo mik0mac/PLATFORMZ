@@ -28,6 +28,10 @@
 #include "../input.h"     // PlayerInput, ApplyPlayerInput() - reused directly
 #include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
+#include "jsonmin.h"      // jf/ji/ju/jb/js - the shared JSON writers
+#include "match.h"        // Match: the world, its roster, and everything that ticks
+#include "registry.h"     // MatchRegistry: which rooms exist, and their lifecycle
+#include "../scoreboard.h" // cumulative all-time score table, persisted between runs
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>       // read the upgrade request (join-key gate)
@@ -61,7 +65,13 @@ using tcp           = boost::asio::ip::tcp;
 using udp           = boost::asio::ip::udp;
 
 //MARK: Config
-const unsigned short PORT      = 9000;
+// Listen port, both TCP/WebSocket and UDP. Overridable with PLATFORMZ_PORT so a
+// second instance can run alongside the live one - measuring a server (A4) means
+// running it under load, and doing that on the deployment port would mean taking
+// the real one down first. Not const: set once in main() before either listener
+// is constructed, then only read.
+unsigned short       PORT      = 9000;
+const unsigned short PORT_DEFAULT = 9000;
 const float          TICK_RATE = 60.0f;
 const float          TICK_DT   = 1.0f / TICK_RATE;
 // UDP is connectionless - a client that quits just stops sending. Free its slot
@@ -75,75 +85,17 @@ const double         UDP_CLIENT_TIMEOUT = 10.0;
 const double         UDP_CLIENT_TIMEOUT_LOBBY = 3.0;
 // const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
 
-//MARK: JSON out
-// -------------------------------------------------------------------------
-// Minimal JSON helpers - hand-rolled to avoid a heavy dependency.
-// Only covers what the state packet needs: floats, ints, bools, arrays.
-// -------------------------------------------------------------------------
-static std::string jf(float v) {
-    // 2 decimal places is sufficient precision for positions/velocities.
-    std::ostringstream ss;
-    ss << std::fixed << std::setprecision(2) << v;
-    return ss.str();
-}
-static std::string ji(int v)    { return std::to_string(v); }
-static std::string ju(uint32_t v) { return std::to_string(v); }
-static std::string jb(bool v)  { return v ? "true" : "false"; }
-// Quote + escape a string for JSON. Client names are limited to printable
-// chars 32-125 (see UiTextField), so only " and \ need escaping.
-static std::string js(const std::string& v) {
-    std::string out = "\"";
-    for (char c : v) {
-        if (c == '"' || c == '\\') out.push_back('\\');
-        out.push_back(c);
-    }
-    out.push_back('"');
-    return out;
-}
-
-//MARK: Client record
-// -------------------------------------------------------------------------
-// ConnectedClient - server-side record per connection. One record per player
-// slot, regardless of transport: a WebSocket client is reached via its Session,
-// a UDP client via its source endpoint. Everything else (input, name, slot) is
-// transport-agnostic, so the sim loop treats both identically.
-// -------------------------------------------------------------------------
-class Session;                          // WS sink; fully defined below.
-enum class Transport { WS, UDP };
-
-struct ConnectedClient {
-    int      playerId   = -1;   // index into GameSpace::players
-    uint32_t lastSeq    = 0;    // sequence number of last processed input
-    PlayerInput lastInput{};    // most recent input received; applied each tick
-    bool hasInput       = false;// true once first packet arrives
-    // Fire is a one-frame edge from the client (IsMouseButtonPressed). Latch it
-    // here when any packet reports fire=true, so the trailing fire=false packet
-    // can't overwrite the press before the sim tick consumes it. Consumed (and
-    // cleared) once per shot in SimulationLoop.
-    bool firePending    = false;
-    // Display name from the client's "name" message. Stored here (io thread) and
-    // copied onto the player slot by the sim loop, so all gameSpace mutation stays
-    // single-threaded. nameDirty flags an unapplied change.
-    std::string name;
-    bool nameDirty      = false;
-
-    // Transport + sink. WS uses `session` (shared ownership, so a Send racing a
-    // disconnect can never touch a freed Session); UDP uses `udpEndpoint` +
-    // `lastSeenSec` (last packet arrival, for idle reaping).
-    Transport     transport   = Transport::WS;
-    std::shared_ptr<Session> session;
-    udp::endpoint udpEndpoint;
-    double        lastSeenSec  = 0.0;
-};
-
 //MARK: Globals
 // -------------------------------------------------------------------------
 // Shared game state + client registry
 // -------------------------------------------------------------------------
-GameSpace     gameSpace;
-CollisionGrid collisionGrid;
-std::mutex    gameMutex;
-std::atomic<uint32_t> serverTick{0};
+// Cumulative all-time score table (scoreboard.h). Credited once per match on the
+// PLAYING -> GAMEOVER edge in SimulationLoop, then saved and broadcast. Its own
+// mutex: it is touched by the sim thread (credit) and by io threads (the join
+// path builds a leaderboard packet), and it is unrelated to the world state.
+// Lock order where both are needed: gameMutex -> clientMutex -> scoreboardMutex.
+Scoreboard    scoreboard;
+std::mutex    scoreboardMutex;
 // Join key gate (#33): set PLATFORMZ_KEY in the server's environment and every
 // join attempt must present it - in the ws:// URL query (checked during the
 // HTTP upgrade) or in the UDP hello's "key" field. Wrong/missing key gets NO
@@ -176,77 +128,12 @@ static std::string QueryParam(const std::string& target, const std::string& name
     }
     return "";
 }
-// Drives the bot slots (every player slot with no connected client). Same tree
-// and per-slot state the local client uses, so networked bots == local bots.
-// Sim-thread only; guarded by gameMutex like the rest of gameSpace.
-BotController botController;
+// Bytes actually put on a socket, for A4's egress budget. Process-wide: the
+// transfer quota is a property of the box, not of any one match.
+EgressCounters g_egress;
 
-//MARK: Match phase
-// The world doesn't exist until a client starts a match; after one ends, any
-// client can start another. The sim only ticks while PLAYING; LOBBY and GAMEOVER
-// are idle (still broadcast, so clients see the phase + connected slots). All
-// gameSpace mutation stays on the sim thread: a client "start" message just sets
-// startRequested, which the sim loop consumes.
-enum class Phase { LOBBY, COUNTDOWN, PLAYING, GAMEOVER };
-std::atomic<Phase> gamePhase{Phase::LOBBY};
-std::atomic<bool>  startRequested{false};
-// Seconds left in the pre-match countdown, published in every state packet so all
-// clients show the same number and drive their fade-ins in lockstep. Written by the
-// sim thread each COUNTDOWN tick, read by the io thread in buildStatePacket.
-std::atomic<float> countdownRemaining{0.0f};
-
-// Monotonic match counter, bumped when a match is built and published in every
-// state packet. Clients echo the last epoch they saw in each input packet, and
-// the input handler drops anything stamped with a different one - so an input
-// still in flight from the previous match (or from a client that hasn't yet
-// noticed the restart) can never be applied to the new match's fresh spawn
-// state. This is the general form of the stale-latch clear in SimulationLoop:
-// that closes the window at the COUNTDOWN -> PLAYING flip, this closes it for
-// every tick afterwards too. 0 is reserved: it means "client didn't stamp an
-// epoch" (a build predating this field), which is accepted for compatibility.
-std::atomic<uint32_t> matchEpoch{0};
-
-// Map preset carried by a start request (boundary half-size + object counts).
-// Written by the io thread when a "start" arrives, read by the sim thread when
-// it consumes startRequested (the flag is the synchronization point).
-std::atomic<float> pendingHalf{GAMESPACE_HALF_SIZE};
-std::atomic<int>   pendingPlat{GAMESPACE_NUMBER_OF_PLATFORMS};
-std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
-// OPTIONS carried by a start request: requested match size (clamped to connected
-// clients at consume) and bot difficulty center. Same io->sim handoff as above.
-std::atomic<int>   pendingPlayers{GAMESPACE_DEFAULT_PLAYERS};
-std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
-std::atomic<float> pendingWallElast{WALL_ELASTICITY_PLAYER};     // OPTIONS WALL ELASTICITY (players only)
-std::atomic<float> pendingPlatElast{PLATFORM_ELASTICITY_PLAYER}; // OPTIONS PLATFORM ELASTICITY (players only)
-std::atomic<float> pendingBoost{1.0f};       // OPTIONS SPEED BOOST
-std::atomic<float> pendingRocketSpeed{1.0f}; // OPTIONS ROCKET VELOCITY
-std::atomic<float> pendingXRadius{1.0f};     // OPTIONS EXPLOSION RADIUS
-std::atomic<float> pendingJThrust{1.0f};     // OPTIONS JETPACK THRUST
-std::atomic<int>   pendingFuelBurn{(int)FUEL_CONSUMPTION_RATE}; // OPTIONS FUEL CONSUMPTION
-std::atomic<int>   pendingFuelRegen{FUEL_REGEN_PCT_DEFAULT};    // OPTIONS FUEL REGEN (% of consumption)
-// OPTIONS bool toggles carried by a start request; defaults from constants.h.
-std::atomic<bool>  pendingWallsEnabled{WALLS_ENABLED};
-std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
-std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
-std::atomic<bool>  pendingCoastMode{COAST_MODE};
-
-static const char* phaseString(Phase p) {
-    switch (p) {
-        case Phase::COUNTDOWN: return "countdown";
-        case Phase::PLAYING:   return "playing";
-        case Phase::GAMEOVER:  return "gameover";
-        default:               return "lobby";
-    }
-}
-
-// connId -> client record. Keyed by a monotonic id (not a socket pointer) so WS
-// and UDP clients share one registry; the id order is stable (deterministic state
-// serialization). Protected by clientMutex.
-std::map<uint64_t, ConnectedClient> clients;
-// UDP source endpoint -> connId, so an inbound datagram finds its client. UDP
-// only. Protected by clientMutex (same lock as `clients`).
-std::map<udp::endpoint, uint64_t>   udpIndex;
-std::mutex clientMutex;
+// Monotonic connection id. Process-level, not per-match: an id must stay unique
+// across every match so a stale packet can never be mistaken for a live client.
 std::atomic<uint64_t> nextConnId{1};
 
 // The one server UDP socket, set in main() once the io_context exists. Used by
@@ -256,26 +143,31 @@ udp::socket*  g_udp = nullptr;
 // concurrent ops on one object). Always innermost if nested under clientMutex.
 std::mutex    udpSendMutex;
 
+// Every room in the process. Still only one is ever created here - reaching it
+// by code is A3 - but the plumbing is real, so A3 only has to swap a fixed
+// lookup for a per-connection one instead of introducing the whole path at once.
+MatchRegistry g_registry{MATCH_MAX_CONCURRENT};
+
+// The default room, created at boot and pinned so it is never reaped. Every
+// existing call site reaches the match through this, exactly as it used to reach
+// the global - which is what keeps this step behaviour-identical.
+std::string            g_defaultCode;
+std::shared_ptr<Match> g_defaultMatch;
+
 // Forward decls: Session::Read and the UDP handler both dispatch through these,
 // but their bodies need Session complete (SendToClient calls Session::Send), so
 // the definitions live just after the Session class.
 static void SendToClient(const ConnectedClient& c, const std::string& msg);
 static void HandleClientMessage(uint64_t connId, const std::string& msg);
 
-// Seconds on the steady clock - for UDP last-seen stamping / idle reaping.
-static double NowSec() {
-    return std::chrono::duration<double>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
 // Lowest player slot not owned by a connected client, or -1 if the server is
 // full. Caller MUST hold gameMutex (reads players) AND clientMutex (reads clients).
-static int ClaimFreeSlot() {
+int Match::ClaimFreeSlot() {
     auto& players = gameSpace.getPlayers();
-    std::set<int> claimed;
-    for (auto& [cid, c] : clients) claimed.insert(c.playerId);
+    SlotMask claimed = 0;
+    for (auto& [cid, c] : clients) SlotAdd(claimed, c.playerId);
     for (int i = 0; i < (int)players.size(); i++)
-        if (claimed.find(i) == claimed.end()) return i;
+        if (!SlotSet(claimed, i)) return i;
     return -1;
 }
 
@@ -289,7 +181,7 @@ static int ClaimFreeSlot() {
 // stale). Uses the shorter UDP_CLIENT_TIMEOUT_LOBBY while nobody's mid-action;
 // the longer UDP_CLIENT_TIMEOUT otherwise, to survive a mid-match frame hitch.
 // Caller MUST hold clientMutex.
-static void ReapIdleUdpClients() {
+void Match::ReapIdleUdpClients() {
     double now     = NowSec();
     double timeout = gamePhase.load() == Phase::LOBBY ? UDP_CLIENT_TIMEOUT_LOBBY
                                                         : UDP_CLIENT_TIMEOUT;
@@ -300,6 +192,7 @@ static void ReapIdleUdpClients() {
                       << " timed out. Active: " << (clients.size() - 1) << "\n";
             udpIndex.erase(it->second.udpEndpoint);
             it = clients.erase(it);
+            connectedCount.store((int)clients.size());
         } else {
             ++it;
         }
@@ -315,7 +208,7 @@ static void ReapIdleUdpClients() {
 // a client only learns "which slot is mine" from a welcome message, so
 // changing playerId without one would leave it rendering/inputting as its
 // old slot. Caller MUST hold clientMutex.
-static std::vector<uint64_t> CompactConnectedSlots() {
+std::vector<uint64_t> Match::CompactConnectedSlots() {
     std::vector<uint64_t> changed;
     std::vector<std::pair<int, uint64_t>> order; // (slot, connId)
     for (auto& [cid, c] : clients) order.push_back({c.playerId, cid});
@@ -352,10 +245,10 @@ static std::vector<uint64_t> CompactConnectedSlots() {
 // GAMEOVER, though, the client is already back on the roster-showing screen
 // (see returnToTitle in main.cpp), so a leaver's slot is relabeled right away
 // instead of sitting on their stale name until the next match start.
-static void refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
+void Match::refreshBotSlots(SlotMask claimed, bool allowBotify) {
     auto& players = gameSpace.getPlayers();
     for (int i = 0; i < (int)players.size(); ++i) {
-        bool bot = claimed.count(i) == 0;
+        bool bot = !SlotSet(claimed, i);
         if (!bot) { players[i].isBot = false; continue; }
         if (!allowBotify) continue; // mid-match leaver: leave the slot open
         players[i].isBot = true;
@@ -379,12 +272,12 @@ static void refreshBotSlots(const std::set<int>& claimed, bool allowBotify) {
 // (indirectly, via the already-gathered `claimed` set - this helper itself
 // never touches `clients`). No-ops entirely while `allowBotify` (LOBBY/
 // COUNTDOWN/GAMEOVER): those slots become bots instead via refreshBotSlots.
-static void HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify, float dt) {
+void Match::HandleMidMatchLeavers(SlotMask claimed, bool allowBotify, float dt) {
     if (allowBotify) return;
     auto& players = gameSpace.getPlayers();
     for (int i = 0; i < (int)players.size(); ++i) {
         Player& p = players[i];
-        if (claimed.count(i) > 0) {
+        if (SlotSet(claimed, i)) {
             p.leaveGraceSec = -1.0f; // reclaimed (reconnect or new joiner) - cancel any countdown
             continue;
         }
@@ -404,9 +297,9 @@ static void HandleMidMatchLeavers(const std::set<int>& claimed, bool allowBotify
 }
 
 // Gather the claimed-slot set. Caller must hold clientMutex.
-static std::set<int> gatherClaimedSlots() {
-    std::set<int> claimed;
-    for (auto& [cid, c] : clients) claimed.insert(c.playerId);
+SlotMask Match::gatherClaimedSlots() {
+    SlotMask claimed = 0;
+    for (auto& [cid, c] : clients) SlotAdd(claimed, c.playerId);
     return claimed;
 }
 
@@ -416,13 +309,44 @@ static std::set<int> gatherClaimedSlots() {
 // start a match or change OPTIONS; this is the authoritative backstop behind that
 // UI gate. Locks clientMutex itself; returns false for an unknown conn or no
 // clients. Self-contained (never touches gameMutex), so no lock-ordering risk.
-static bool isHostConn(uint64_t connId) {
+bool Match::isHostConn(uint64_t connId) {
     std::lock_guard<std::mutex> lock(clientMutex);
     auto it = clients.find(connId);
     if (it == clients.end()) return false;
     int minSlot = it->second.playerId;
     for (auto& [cid, c] : clients) minSlot = std::min(minSlot, c.playerId);
     return it->second.playerId == minSlot;
+}
+
+//MARK: Auto-start
+// A public room has no host to press START, so it starts itself. Arms once
+// PUBLIC_MIN_PLAYERS humans are present and disarms if the room drops back below
+// that, so a room that half-fills and empties doesn't launch at one player.
+// LOBBY only - once COUNTDOWN begins the normal path owns it. Caller holds
+// gameMutex.
+void Match::ServiceAutoStart(Clock::time_point now) {
+    if (!autoStart) return;
+    if (gamePhase.load() != Phase::LOBBY) { autoStartArmed = false; return; }
+
+    const int live = connectedCount.load();
+    if (live < PUBLIC_MIN_PLAYERS) {
+        if (autoStartArmed) std::cout << "Auto-start disarmed (players " << live << ")\n";
+        autoStartArmed = false;
+        return;
+    }
+    if (!autoStartArmed) {
+        autoStartArmed = true;
+        autoStartAt = now + std::chrono::duration_cast<Clock::duration>(
+                                std::chrono::duration<double>(PUBLIC_AUTOSTART_SECONDS));
+        std::cout << "Auto-start armed: " << live << " players, "
+                  << (int)PUBLIC_AUTOSTART_SECONDS << "s\n";
+        return;
+    }
+    if (now >= autoStartAt) {
+        autoStartArmed = false;
+        startRequested = true;   // consumed by the normal start path next tick
+        std::cout << "Auto-start firing\n";
+    }
 }
 
 //MARK: Input parse
@@ -468,10 +392,17 @@ static std::string parseString(const std::string& json, const std::string& key,
     return out;
 }
 
-// Clamp a client-supplied display name to the shared cap (constants.h). The
-// stock client's entry field already enforces this; this is the backstop so a
-// modified client can't ship a name that overflows everyone else's UI.
+// Clamp a client-supplied display name to the shared cap (constants.h) and drop
+// anything outside printable ASCII. The stock client's entry field already enforces
+// both, so this is the backstop against a modified client: an overlong name would
+// overflow everyone else's UI, and a control character would corrupt two things
+// downstream - a tab or newline breaks the scoreboard's one-line-per-entry file,
+// and js() (which only escapes " and \) would emit invalid JSON for the rest.
+// Strip first, then clamp, so removing characters can't leave it over the cap.
 static std::string clampName(std::string name) {
+    name.erase(std::remove_if(name.begin(), name.end(),
+                              [](unsigned char c) { return c < 32 || c > 126; }),
+               name.end());
     if (name.size() > PLAYER_NAME_MAX_CHARS) name.resize(PLAYER_NAME_MAX_CHARS);
     return name;
 }
@@ -495,7 +426,7 @@ static PlayerInput parseInput(const std::string& json) {
 //MARK: Welcome packet
 // Static-world snapshot - sent once in the welcome packet (platforms never move
 // or change after generate(), so there's no reason to put them in every tick).
-static std::string buildPlatformsArray() {
+std::string Match::buildPlatformsArray() {
     std::string s = "[";
     auto& platforms = gameSpace.getPlatforms();
     for (int i = 0; i < (int)platforms.size(); i++) {
@@ -527,7 +458,7 @@ std::mutex  welcomeStaticMutex;
 // Rebuild the cached welcome fragment(s) from the current world, in both JSON (for
 // WebSocket) and binary (for UDP). Caller MUST hold gameMutex (reads walls +
 // platforms); runs on the sim thread at startup and after each world (re)gen.
-static void rebuildWelcomeStatic() {
+void Match::rebuildWelcomeStatic() {
     std::string s = "\"half\":" + jf(gameSpace.getWalls().halfSize)
                   + ",\"platforms\":" + buildPlatformsArray();
 
@@ -548,7 +479,7 @@ static void rebuildWelcomeStatic() {
 // Welcome packet: the client's assigned slot + the cached static world fragment.
 // Sent on connect and re-sent to everyone when a match (re)starts. Safe to call
 // from any thread - it only reads the mutex-guarded cache, never gameSpace.
-static std::string buildWelcome(int playerId) {
+std::string Match::buildWelcome(int playerId) {
     std::string statik;
     { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStatic; }
     return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
@@ -558,7 +489,7 @@ static std::string buildWelcome(int playerId) {
 
 // Binary welcome for UDP clients: the platform list can exceed the MTU as JSON,
 // so pack it (netbin.h). Field order matches the client's applyBinaryWelcome.
-static std::string buildWelcomeBinary(int playerId) {
+std::string Match::buildWelcomeBinary(int playerId) {
     std::string statik;
     { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStaticBin; }
     std::string b;
@@ -571,7 +502,7 @@ static std::string buildWelcomeBinary(int playerId) {
 
 // Pick the welcome format for a client's transport (binary over UDP, JSON over
 // WebSocket) - used at every welcome-send site except the WS-only connect path.
-static std::string welcomeFor(const ConnectedClient& c) {
+std::string Match::welcomeFor(const ConnectedClient& c) {
     return c.transport == Transport::UDP ? buildWelcomeBinary(c.playerId)
                                          : buildWelcome(c.playerId);
 }
@@ -581,6 +512,33 @@ static std::string welcomeFor(const ConnectedClient& c) {
 // Sent instead of silently dropping the connection, so the client can show
 // "match in progress" rather than a generic connect failure and keep retrying
 // in the background.
+//MARK: Leaderboard packet
+// The all-time table. Sent as entries rather than Scoreboard's preformatted
+// leaderboardString: that string is newline-separated and js() only escapes " and
+// \, so shipping it would emit invalid JSON. The client formats the rows itself.
+//
+// Plain JSON on purpose - it goes out through SendToClient, which ships text over
+// BOTH transports (chunking oversized UDP datagrams), and the client's applyMessage
+// only treats a packet as binary when it leads with a binary tag byte. So this
+// reaches WS and UDP clients alike without touching the binary welcome format.
+//
+// Only the first defaultCount entries are meaningfully ordered: generateLeaderboard
+// uses partial_sort, which sorts exactly that many and leaves the tail unordered.
+static std::string buildLeaderboard() {
+    std::string s = "{\"type\":\"leaderboard\",\"lb\":[";
+    {
+        std::lock_guard<std::mutex> lk(scoreboardMutex);
+        const auto& lb = scoreboard.leaderboard;
+        const size_t n = std::min(lb.size(), scoreboard.defaultCount);
+        for (size_t i = 0; i < n; ++i) {
+            if (i) s += ",";
+            s += "{\"n\":" + js(lb[i].Name) + ",\"s\":" + ji(lb[i].Score) + "}";
+        }
+    }
+    s += "]}";
+    return s;
+}
+
 static std::string buildFull() {
     return "{\"type\":\"full\"}";
 }
@@ -600,7 +558,7 @@ static std::string buildFullBinary() {
 // `connectedSlots` are the player indices currently occupied by a client; each
 // player carries an "active" flag so clients can skip rendering empty slots.
 // -------------------------------------------------------------------------
-static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
+std::string Match::buildStateBodyJson(SlotMask connectedSlots) {
     std::string s;
     s.reserve(1024);
     s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
@@ -635,7 +593,7 @@ static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
         // A slot is shown if a human occupies it, a bot drives it, or - once a
         // match is underway (roster final) - unconditionally, so a mid-match
         // leaver's open body stays visible/killable instead of going invisible.
-        s += ",\"active\":" + jb(connectedSlots.count(i) > 0 || p.isBot
+        s += ",\"active\":" + jb(SlotSet(connectedSlots, i) || p.isBot
                                  || gamePhase.load() != Phase::LOBBY);
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
         s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
@@ -754,7 +712,7 @@ static std::string buildStateBodyJson(const std::set<int>& connectedSlots) {
 // Cheap per-client wrapper: prepends the tiny header (type/tick/seq) that
 // actually varies per client onto the shared `body` built once per tick by
 // buildStateBodyJson above.
-static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
+std::string Match::buildStatePacket(uint32_t tick, uint32_t lastSeq,
                                     const std::string& body) {
     std::string s;
     s.reserve(32 + body.size());
@@ -776,7 +734,7 @@ static std::string buildStatePacket(uint32_t tick, uint32_t lastSeq,
 // Same once-per-tick split as buildStateBodyJson: this body excludes the
 // header (tag/tick/lastSeq), which buildStateBinary below prepends per client.
 // -------------------------------------------------------------------------
-static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
+std::string Match::buildStateBodyBinary(SlotMask connectedSlots) {
     std::string b;
     b.reserve(768);
     nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
@@ -817,7 +775,7 @@ static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
         nb::putU16(b, (uint16_t)p.score);
         // Same rule as the JSON builder: in-match slots stay visible even when
         // their human left (open body awaiting a reconnect).
-        bool active = connectedSlots.count(i) > 0 || p.isBot
+        bool active = SlotSet(connectedSlots, i) || p.isBot
                       || gamePhase.load() != Phase::LOBBY;
         nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)
                               | (p.isOutOfBounds ? 16 : 0)));
@@ -885,7 +843,7 @@ static std::string buildStateBodyBinary(const std::set<int>& connectedSlots) {
 // Cheap per-client wrapper: prepends the tiny header (tag/tick/lastSeq) that
 // actually varies per client onto the shared `body` built once per tick by
 // buildStateBodyBinary above.
-static std::string buildStateBinary(uint32_t tick, uint32_t lastSeq,
+std::string Match::buildStateBinary(uint32_t tick, uint32_t lastSeq,
                                     const std::string& body) {
     std::string b;
     b.reserve(16 + body.size());
@@ -943,27 +901,28 @@ public:
             // always gameMutex before clientMutex to match SimulationLoop.
             int playerId = -1;
             {
-                std::lock_guard<std::mutex> gg(gameMutex);
-                std::lock_guard<std::mutex> gc(clientMutex);
+                std::lock_guard<std::mutex> gg(g_defaultMatch->gameMutex);
+                std::lock_guard<std::mutex> gc(g_defaultMatch->clientMutex);
                 // Reap eagerly, not just on the periodic tick: a stale UDP slot
                 // (e.g. a client whose network identity changed across a sleep)
                 // must not be able to push this new WS client above it.
-                ReapIdleUdpClients();
-                playerId = ClaimFreeSlot();
+                g_defaultMatch->ReapIdleUdpClients();
+                playerId = g_defaultMatch->ClaimFreeSlot();
                 if (playerId != -1) {
                     self->connId_ = nextConnId++;
                     ConnectedClient c;
                     c.playerId  = playerId;
                     c.transport = Transport::WS;
                     c.session   = self;
-                    clients[self->connId_] = c;
+                    g_defaultMatch->clients[self->connId_] = c;
+                    g_defaultMatch->connectedCount.store((int)g_defaultMatch->clients.size());
                     // Note: no bot-slot refresh here. Bots exist only during a match
                     // (set at match start + reconciled each sim tick), so the lobby
                     // stays bot-free and a mid-match join's slot yields on the next
                     // tick's reconcile (see SimulationLoop). Marking bots here would
                     // also invert the gameMutex->clientMutex order we hold above.
                     std::cout << "Client connected -> player slot " << playerId
-                              << ". Active: " << clients.size() << "\n";
+                              << ". Active: " << g_defaultMatch->clients.size() << "\n";
                 }
             }
 
@@ -987,7 +946,11 @@ public:
             // Send welcome with the assigned slot + the current platform layout
             // (empty in the lobby; the client renders from it instead of running
             // generate()). Re-sent to everyone when a match (re)starts.
-            self->Send(buildWelcome(playerId));
+            self->Send(g_defaultMatch->buildWelcome(playerId));
+            // All-time table, right behind the welcome. The client's LEADERBOARD
+            // modal lives on the title screen, so a client that has just joined and
+            // never seen a match end still needs it.
+            self->Send(buildLeaderboard());
 
             self->Read();
         });
@@ -1055,13 +1018,14 @@ private:
         ws_.async_read(buffer_,
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) {
-                    std::lock_guard<std::mutex> lock(clientMutex);
-                    auto it = clients.find(self->connId_);
-                    if (it != clients.end()) {
+                    std::lock_guard<std::mutex> lock(g_defaultMatch->clientMutex);
+                    auto it = g_defaultMatch->clients.find(self->connId_);
+                    if (it != g_defaultMatch->clients.end()) {
                         std::cout << "Player " << it->second.playerId
                                   << " disconnected. Active: "
-                                  << (clients.size() - 1) << "\n";
-                        clients.erase(it);
+                                  << (g_defaultMatch->clients.size() - 1) << "\n";
+                        g_defaultMatch->clients.erase(it);
+                        g_defaultMatch->connectedCount.store((int)g_defaultMatch->clients.size());
                     }
                     return;
                 }
@@ -1086,6 +1050,7 @@ private:
 // callback; a dead UDP client is reaped on idle timeout.
 // -------------------------------------------------------------------------
 static void SendToClient(const ConnectedClient& c, const std::string& msg) {
+    g_egress.Add(msg.size());   // A4: what actually leaves the box
     if (c.transport == Transport::WS) {
         if (c.session) c.session->Send(msg);
     } else if (g_udp) {
@@ -1125,7 +1090,7 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
 // New-UDP-peer registration (claiming a slot) happens in the UDP handler BEFORE
 // this is called, so here the client always exists in `clients`.
 // -------------------------------------------------------------------------
-static void HandleClientMessage(uint64_t connId, const std::string& msg) {
+void Match::HandleMessage(uint64_t connId, const std::string& msg) {
     //MARK: Msg: hello
     // Handshake / keepalive: (re)send the welcome to this client. UDP clients
     // resend hello until welcomed (unreliable transport); a WS client's hello
@@ -1157,6 +1122,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
                       << (clients.size() - 1) << "\n";
             if (it->second.transport == Transport::UDP) udpIndex.erase(it->second.udpEndpoint);
             clients.erase(it);
+            connectedCount.store((int)clients.size());
         }
         return;
     }
@@ -1167,6 +1133,9 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     // and performed by the sim loop so all gameSpace mutation stays on a single
     // thread.
     if (msg.find("\"type\":\"start\"") != std::string::npos) {
+        // A locked room (public) has no host controls at all - it starts itself
+        // via ServiceAutoStart. Reject from everyone, not just non-hosts.
+        if (optionsLocked) return;
         if (!isHostConn(connId)) return; // host-only; non-host clients have no START button, this is the backstop
         // Map preset chosen by the requesting client (first press wins).
         pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
@@ -1210,6 +1179,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     // non-host clients. Just update the pending config (no per-client state)
     // WITHOUT starting; the next "start" uses these.
     if (msg.find("\"type\":\"options\"") != std::string::npos) {
+        if (optionsLocked) return;       // public room: rules are fixed at creation
         if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
         pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
@@ -1235,6 +1205,7 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     // phase flip reaches every client in the next tick's state broadcast, and
     // each runs its normal game-over sequence.
     if (msg.find("\"type\":\"endmatch\"") != std::string::npos) {
+        if (optionsLocked) return;       // public room: no stranger may end it
         if (!isHostConn(connId)) return; // host-only; matches the client's gating
         if (gamePhase.load() == Phase::PLAYING) {
             gamePhase = Phase::GAMEOVER;
@@ -1285,6 +1256,13 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     }
 }
 
+// Router: find the match this connection belongs to, and forward. Only the
+// default room exists today, so that lookup is a constant; A3 turns it into a
+// real one (connId -> match) and handles the directory verbs ahead of it.
+static void HandleClientMessage(uint64_t connId, const std::string& msg) {
+    g_defaultMatch->HandleMessage(connId, msg);
+}
+
 //MARK: Broadcast
 // -------------------------------------------------------------------------
 // Broadcast state to all connected clients.
@@ -1302,13 +1280,13 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
 // sim step - so no concurrent writer exists. Only clientMutex is taken here,
 // to guard the clients map against connects/disconnects on io threads.
 // -------------------------------------------------------------------------
-void BroadcastState(uint32_t tick) {
+void Match::BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
     // Which player slots are occupied, so clients can hide empty ones.
-    std::set<int> connectedSlots;
+    SlotMask connectedSlots = 0;
     bool haveWs = false, haveUdp = false;
     for (auto& [cid, client] : clients) {
-        connectedSlots.insert(client.playerId);
+        SlotAdd(connectedSlots, client.playerId);
         if (client.transport == Transport::UDP) haveUdp = true;
         else haveWs = true;
     }
@@ -1348,7 +1326,7 @@ void BroadcastState(uint32_t tick) {
 // we set directly rather than accumulating - avoids drift from dropped packets.
 // -------------------------------------------------------------------------
 static void ApplyInputToPlayer(Player& player, const PlayerInput& in,
-                               float dt, float gravity) {
+                               float dt, float gravity, GameSpace& gameSpace) {
     // Network sends absolute yaw/pitch; convert to the delta updateLook() wants.
     // updateLook adds the delta on yaw but SUBTRACTS it on pitch, so the two
     // axes need opposite-signed numerators to both land on the absolute target
@@ -1364,15 +1342,488 @@ static void ApplyInputToPlayer(Player& player, const PlayerInput& in,
     ApplyPlayerInput(player, adjusted, dt, gravity, gameSpace);
 }
 
+//MARK: A4 perf report
+// One greppable line per interval. Deliberately a separate line rather than an
+// extension of the heartbeat: A6 restructures the heartbeat for N matches, and
+// the Actions idle-watchdog greps that line, so keeping them apart avoids
+// breaking a job with an instrumentation change.
+//
+// The numbers to read: budget 10 ms per 60 Hz beat, NOT 16.6 - the rest goes to
+// io threads, Caddy's TLS on the same box, and shared-CPU steal time. Concurrent
+// matches a sequential scheduler can hold is roughly 10 / p95_total.
+const int PERF_REPORT_SECONDS = 5;
+
+static std::chrono::steady_clock::time_point g_perfLast{};
+static uint64_t g_perfLastBytes = 0;
+
+static void ReportPerf(Match& m, std::chrono::steady_clock::time_point now) {
+    auto sim = m.statSim.Summarise();
+    auto bc  = m.statBroadcast.Summarise();
+    auto gr  = m.statGrid.Summarise();
+    if (m.statSim.Empty()) return;
+
+    const uint64_t bytes = g_egress.bytes.load(std::memory_order_relaxed);
+    double secs = g_perfLast.time_since_epoch().count()
+                ? std::chrono::duration<double>(now - g_perfLast).count() : 0.0;
+    double kbs  = secs > 0.0 ? (bytes - g_perfLastBytes) / 1024.0 / secs : 0.0;
+    g_perfLast = now; g_perfLastBytes = bytes;
+
+    const double p95total = sim.p95 + bc.p95;
+    int players; { std::lock_guard<std::mutex> gc(m.clientMutex); players = (int)m.clients.size(); }
+
+    printf("PERF sim p50/p95/max %.2f/%.2f/%.2f ms | broadcast %.2f/%.2f/%.2f | "
+           "grid %.2f/%.2f/%.2f | total p95 %.2f ms | egress %.0f KB/s | "
+           "clients %d roster %d | fits ~%d matches\n",
+           sim.p50, sim.p95, sim.max, bc.p50, bc.p95, bc.max, gr.p50, gr.p95, gr.max,
+           p95total, kbs, players, (int)m.gameSpace.getPlayers().size(),
+           p95total > 0.0 ? (int)(10.0 / p95total) : 0);
+    fflush(stdout);
+}
+
+//MARK: Sim tick
+// -------------------------------------------------------------------------
+// One 60 Hz step for this match: consume a pending start, run the countdown,
+// reap idle clients, tick the sim, then broadcast. Split out of SimulationLoop
+// so the driver below can eventually beat several matches per tick (A4) - the
+// body itself is unchanged.
+// -------------------------------------------------------------------------
+void Match::Tick(CollisionGrid& scratchGrid) {
+    using Duration = std::chrono::duration<double>;
+    const auto now = Clock::now();   // was the driver loop's local
+
+    uint32_t tick;
+    size_t   asteroidCount = 0;
+    bool     justStarted = false; // a match began this tick -> resend welcomes below
+    bool     leaderboardDirty = false; // scoreboard credited this tick -> broadcast below
+    bool     wentLive    = false; // COUNTDOWN -> PLAYING flipped THIS tick -> drop every
+                                  // client's stale input latch before the first apply
+    double gridMs = 0.0;
+    {
+        ScopedTime _sim(statSim);
+        std::lock_guard<std::mutex> gg(gameMutex);
+
+        //MARK: Start match
+        // Consume a pending start/restart request: build a fresh world and
+        // reset the existing player slots (ids stay stable so connected
+        // clients keep their slot mapping across a restart), then begin.
+        if (startRequested.exchange(false)) {
+            // Compact the connected clients into the lowest slots, in their
+            // current slot order (order-preserving, so the host - lowest
+            // slot - stays the host). This closes the hole a mid-session
+            // leaver left behind: the next human takes over their slot (and
+            // its color), and the roster can shrink down to the humans that
+            // are actually here instead of being floored by the highest
+            // claimed slot. nameDirty re-applies each client's name to its
+            // NEW slot via the per-tick name sync. Every client is told its
+            // new slot by the justStarted welcome resend below.
+            // (lock order gameMutex->clientMutex preserved.)
+            int want = pendingPlayers.load(), connectedAtStart = 0;
+            {
+                std::lock_guard<std::mutex> gc(clientMutex);
+                // Reap eagerly, not just on this tick's later periodic sweep:
+                // a UDP client that already exceeded the idle timeout (e.g.
+                // quit moments ago) must not get compacted into the fresh
+                // roster as a "connected" human just because that sweep
+                // hasn't run yet this tick.
+                ReapIdleUdpClients();
+                connectedAtStart = (int)clients.size();
+                // Every client is welcomed unconditionally right below
+                // (justStarted), so this call's own re-welcome list can be
+                // ignored here - it only matters for the continuous LOBBY
+                // compaction call site (see the per-tick "Bot reconcile"
+                // block below).
+                CompactConnectedSlots();
+            }
+            // Resize the roster to the requested match size, but never below
+            // the number of connected humans (no one loses their body). Slots
+            // beyond the humans become bots via the per-tick reconcile. Do this
+            // BEFORE generate so resetPlayersForMatch/placePlayersSpread size to
+            // the final count.
+            want = std::min(std::max(want, connectedAtStart), GAMESPACE_NUMBER_OF_PLAYERS);
+            // Clamp the preset's asteroid count to the UDP state-packet
+            // budget for this roster, so a full tick fits one unfragmented
+            // datagram (oversized ticks chunk lossily - see netbin.h).
+            int roids = std::min(pendingRoid.load(), nb::MaxAsteroidsForRoster(want));
+            if (roids < pendingRoid.load())
+                std::cout << "Asteroids clamped " << pendingRoid.load() << " -> " << roids
+                          << " (UDP packet budget, " << want << " player slots)\n";
+            gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
+            gameSpace.setPlayerCount(want);
+            // OPTIONS: apply the requesting client's full options bundle to the
+            // sim before the world is built - generatePlatforms() below stamps
+            // PLATFORM ELASTICITY per-platform from the value applyOptions sets,
+            // and collisions/movement read the rest off GameSpace.
+            {
+                MatchOptions o;
+                o.wallElasticity      = pendingWallElast.load();
+                o.platformElasticity  = pendingPlatElast.load();
+                o.speedBoost          = pendingBoost.load();
+                o.rocketSpeedScale    = pendingRocketSpeed.load();
+                o.explosionRadiusScale = pendingXRadius.load();
+                o.jetpackThrust       = pendingJThrust.load();
+                o.fuelConsumption     = pendingFuelBurn.load();
+                o.fuelRegenPct        = pendingFuelRegen.load();
+                o.wallsEnabled        = pendingWallsEnabled.load();
+                o.rocketsObeyPhysics  = pendingRocketsPhysics.load();
+                o.friendlyFire        = pendingFriendlyFire.load();
+                o.coastMode           = pendingCoastMode.load();
+                gameSpace.applyOptions(o);
+            }
+            // Issue #5 order: platforms -> players (spread) -> asteroids
+            // (buffered away from the placed players). Same sequence the local
+            // client's generate() uses, so both modes build worlds identically.
+            gameSpace.generatePlatforms();
+            gameSpace.resetPlayersForMatch();
+            gameSpace.generateAsteroids();
+            // Seed every slot's bot personality once for this match (stable per
+            // slot id) at the requested difficulty. Which slots are bots is set
+            // by the per-tick reconcile above; drive() reads the profiles here.
+            botController.init(gameSpace.getPlayers(), pendingDiff.load());
+            // Refresh the cached welcome fragment now that the world exists, so
+            // clients that (re)connect during this match get the new platforms.
+            rebuildWelcomeStatic();
+            // Open the match with a pre-match countdown instead of going live
+            // immediately. The world is built but stays FROZEN (the sim body
+            // below only ticks in PLAYING/GAMEOVER), so it doesn't move until the
+            // count hits zero. justStarted resends the map/welcome now so clients
+            // can render the frozen world during the count.
+            // New match: bump the epoch BEFORE leaving LOBBY/GAMEOVER so the
+            // first packet clients see for this match already carries it.
+            // Every input still stamped with the old epoch is now rejected.
+            // Skips 0, which is reserved for "client didn't stamp one".
+            if (++matchEpoch == 0) matchEpoch = 1;
+            gameOverStamped = false; // fresh match: no wind-down pending
+            gameOverSimIdle = false;
+            gamePhase = Phase::COUNTDOWN;
+            countdownEnd = now + std::chrono::duration_cast<Clock::duration>(
+                                     std::chrono::duration<double>(COUNTDOWN_SECONDS));
+            countdownRemaining = COUNTDOWN_SECONDS;
+            justStarted = true;
+            std::cout << "Match countdown started (" << connectedAtStart << " connected)\n";
+        }
+
+        //MARK: Countdown
+        // Pre-match countdown: publish the remaining seconds each tick, and flip
+        // to PLAYING (unfreezing the world) once the deadline passes. Nothing is
+        // simulated while COUNTDOWN (the sim body gates on PLAYING/GAMEOVER).
+        if (gamePhase.load() == Phase::COUNTDOWN) {
+            double left = Duration(countdownEnd - now).count();
+            if (left <= 0.0) {
+                countdownRemaining = 0.0f;
+                gamePhase = Phase::PLAYING;
+                wentLive  = true; // consumed by the input-apply block below
+                std::cout << "Match started\n";
+            } else {
+                countdownRemaining = (float)left;
+            }
+        }
+
+        // Drop last tick's audio events (already broadcast). They re-accumulate
+        // below during input apply + collisions, then BroadcastState() reads
+        // and sends them after this lock releases.
+        gameSpace.getAudioEvents().clear();
+        // Same for messages: drop last tick's already-broadcast kill-feed /
+        // warning messages so they don't re-send or accumulate.
+        gameSpace.getMessages().clear();
+
+        //MARK: Reap idle UDP clients
+        // In the lobby the bot reconcile below turns the vacated slot into
+        // a bot; mid-match the body stays open for a reconnect (see
+        // refreshBotSlots). (WS clients are cleaned up by their
+        // Read()-error callback instead.) See ReapIdleUdpClients() for why
+        // this also runs eagerly at connect time, not just here.
+        {
+            std::lock_guard<std::mutex> gc(clientMutex);
+            ReapIdleUdpClients();
+        }
+
+        //MARK: Auto-start (public rooms)
+        // A locked public room has no host to press START; this is what begins
+        // it. No-op for host-controlled rooms, which is every room until A3 can
+        // create public ones.
+        ServiceAutoStart(now);
+
+        //MARK: Lobby slot compaction
+        // Continuously close gaps left by a leaver, live - not just once at
+        // match start. LOBBY only: once gameSpace.generate() has run
+        // (COUNTDOWN onward), slot index also means a spawned body tied to
+        // that index, and renumbering playerId without moving the body
+        // would desync "which body is mine" from the client's new slot. In
+        // pure LOBBY, gameSpace.getPlayers() is preview data only, so this
+        // is safe. Every re-slotted client needs a fresh welcome - it only
+        // learns "which slot is mine" (myIndex) from one.
+        if (gamePhase.load() == Phase::LOBBY) {
+            std::lock_guard<std::mutex> gc(clientMutex);
+            for (uint64_t connId : CompactConnectedSlots()) {
+                auto it = clients.find(connId);
+                if (it != clients.end()) SendToClient(it->second, welcomeFor(it->second));
+            }
+        }
+
+        //MARK: Name sync
+        // Apply any pending display-name changes onto their player slots. Runs
+        // every tick in every phase (lock order gameMutex->clientMutex), so
+        // lobby names update live as each client types - and the name persists
+        // through the match onto the game-over scoreboard.
+        {
+            std::lock_guard<std::mutex> gc(clientMutex);
+            auto& players = gameSpace.getPlayers();
+            for (auto& [cid, client] : clients) {
+                if (!client.nameDirty) continue;
+                if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
+                players[client.playerId].name = client.name;
+                client.nameDirty = false;
+            }
+        }
+
+        //MARK: Bot reconcile
+        // Reconcile bot ownership every tick in EVERY phase: any slot without a
+        // connected client is a bot (named + colored). Running it in the lobby
+        // too means the title-screen player list previews the bots that will
+        // fill the match (and updates live as humans join/leave). Botifying is
+        // withheld only while a match is actually LIVE (PLAYING): a mid-match
+        // disconnect leaves the body OPEN (not bot-driven) so the player can
+        // reconnect and resume it, while a mid-match join still flips a slot
+        // bot->human (the bot yields). GAMEOVER counts as "forming" here too -
+        // the client's screen already looks and behaves like the lobby at that
+        // point (returnToTitle keeps the socket open and comes right back to
+        // the roster), so a leaver's slot should stop showing their stale name
+        // instead of sitting untouched until the next match start relabels it.
+        // Cheap - a handful of slots. Bots are only DRIVEN in PLAYING/GAMEOVER
+        // (below); in the lobby they just hold a slot. HandleMidMatchLeavers is
+        // the PLAYING-only counterpart: once !allowBotify, it grace-counts and
+        // eventually eliminates a body refreshBotSlots left open (see its own
+        // comment).
+        {
+            Phase ph = gamePhase.load();
+            bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN || ph == Phase::GAMEOVER);
+            std::lock_guard<std::mutex> gc(clientMutex);
+            SlotMask claimed = gatherClaimedSlots();
+            refreshBotSlots(claimed, allowBotify);
+            HandleMidMatchLeavers(claimed, allowBotify, TICK_DT);
+        }
+
+        //MARK: Tick sim
+        // Keep simulating through PLAYING *and* GAMEOVER; only LOBBY (no world
+        // yet) is idle. The GAMEOVER sim keeps the world moving during the
+        // client's game-over countdown so networked play matches local, where
+        // the sim runs every frame of that countdown (issue #2). The match-end
+        // detection below stays PLAYING-only so it fires exactly once.
+        Phase phase = gamePhase.load();
+        // Wind an ended match down instead of simulating it forever. Both
+        // thresholds are far past GAME_OVER_TIMER (5 s), so a client still
+        // running its death-FX countdown sees exactly what it always did.
+        bool simThisTick = (phase == Phase::PLAYING);
+        if (phase == Phase::GAMEOVER && gameOverStamped) {
+            double since = Duration(now - gameOverAt).count();
+            simThisTick = since < GAMEOVER_SIM_SECONDS;
+            if (!simThisTick && !gameOverSimIdle) {
+                gameOverSimIdle = true;
+                std::cout << "Match sim idle after " << (int)GAMEOVER_SIM_SECONDS
+                          << "s in GAMEOVER (world kept, still broadcasting)\n";
+            }
+            if (since >= GAMEOVER_LOBBY_SECONDS) {
+                // Nobody is watching: drop the world and go back to being an
+                // empty lobby, exactly as at boot. Frees the platform/asteroid
+                // vectors, and the grid's cells age out on their own sweep.
+                gameSpace.clear();
+                gameSpace.spawnPlayers();
+                rebuildWelcomeStatic();
+                gamePhase       = Phase::LOBBY;
+                gameOverStamped = false;
+                gameOverSimIdle = false;
+                phase           = Phase::LOBBY;
+                simThisTick     = false;
+                std::cout << "Match world freed after " << (int)GAMEOVER_LOBBY_SECONDS
+                          << "s in GAMEOVER; back to lobby\n";
+            }
+        }
+        if (simThisTick) {
+            // Apply each client's latest input to their player slot
+            {
+                std::lock_guard<std::mutex> gc(clientMutex);
+                // First PLAYING tick of a match: every client's latch still holds
+                // the ABSOLUTE yaw/pitch from the END of the previous match -
+                // clients send nothing while on the TITLE/COUNTDOWN/GAME_OVER
+                // screens, so lastInput froze there and hasInput stayed true.
+                // ApplyInputToPlayer treats lookDelta as an aim TARGET, so
+                // applying it here would overwrite the face-the-centre spawn
+                // orientation resetPlayersForMatch() just set - and this tick's
+                // broadcast is exactly what the client seeds its own predYaw
+                // from, latching the wrong aim for the whole match. That's why
+                // only match 1 ever spawned facing centre (hasInput was false).
+                // Cleared under the SAME clientMutex the apply below holds, not
+                // at the phase flip, so a straggler packet from a client still
+                // running its game-over countdown can't slip in between.
+                // hasInput=false is the load-bearing part: it gates the loop
+                // below AND makes the input handler accept the next packet
+                // whatever its seq (see the `|| !hasInput` clause there).
+                // lastSeq is deliberately left alone - the client's inputSeq is
+                // monotonic across matches.
+                if (wentLive) {
+                    for (auto& [cid, client] : clients) {
+                        client.hasInput    = false;
+                        client.lastInput   = PlayerInput{};
+                        client.firePending = false;
+                    }
+                }
+                auto& players = gameSpace.getPlayers();
+                for (auto& [cid, client] : clients) {
+                    if (!client.hasInput) continue;
+                    if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
+                    Player& player = players[client.playerId];
+                    float gravity = client.lastInput.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
+                    // Consume the latched fire edge exactly once (shoot() still
+                    // gates on ammo/cooldown), then clear it so a held button
+                    // doesn't re-fire every tick from a stale lastInput.fire.
+                    PlayerInput input = client.lastInput;
+                    input.fire = client.firePending;
+                    client.firePending = false;
+                    ApplyInputToPlayer(player, input, TICK_DT, gravity, gameSpace);
+                }
+            }
+
+            // Drive every bot slot (unoccupied slots) through the behaviour
+            // tree, straight into ApplyPlayerInput - NOT ApplyInputToPlayer,
+            // whose absolute-aim conversion is only for network clients. Bots
+            // emit per-frame deltas exactly like the local client's drive loop.
+            botController.drive(gameSpace, TICK_DT);
+
+            gameSpace.updatePositions(TICK_DT);
+            RunCollisionChecks(gameSpace, scratchGrid, &gridMs);
+            gameSpace.updateActiveObjects();
+
+            //MARK: Match end
+            // End the match when EITHER every human is dead OR only one player
+            // (human or bot) is left standing - so a 2-human match keeps going
+            // past the first human's death, and both humans reach GAME OVER on
+            // the same phase flip. The single-survivor clause is gated to
+            // multi-slot rosters so a solo start (1 slot) doesn't end instantly;
+            // it then ends only when the lone human dies (aliveHumans == 0),
+            // preserving today's solo behavior. A dead human keeps spectating
+            // (client-side greyscale) until the match actually ends here.
+            // PLAYING-only: once GAMEOVER we keep simulating (above) but never
+            // re-evaluate the end condition.
+            if (phase == Phase::PLAYING) {
+                std::lock_guard<std::mutex> gc(clientMutex);
+                auto& players = gameSpace.getPlayers();
+                int aliveHumans = 0;
+                for (auto& [cid, client] : clients) {
+                    if (client.playerId >= 0 && client.playerId < (int)players.size()
+                        && players[client.playerId].isAlive) aliveHumans++;
+                }
+                int aliveTotal = 0;
+                for (const auto& p : players) if (p.isAlive) aliveTotal++;
+                bool multi = players.size() >= 2;
+                if (aliveHumans == 0 || (multi && aliveTotal <= 1)) {
+                    gamePhase = Phase::GAMEOVER;
+                    std::cout << "Match over (humans alive " << aliveHumans
+                              << ", total alive " << aliveTotal << ")\n";
+                }
+            }
+        }
+
+        //MARK: Scoreboard credit
+        // One-shot on the PLAYING -> GAMEOVER edge. Detected here rather than at
+        // either site that sets GAMEOVER, because those two hold different locks:
+        // the host's endmatch handler runs on a session strand with no gameMutex,
+        // while last-player-standing (just above) runs here holding it. Watching
+        // the edge from the sim loop gives one site and one lock discipline, and
+        // catches both causes.
+        //
+        // Timing is load-bearing: a match start calls generate(), which zeroes
+        // every player's score, so the credit has to happen before the next one.
+        {
+            Phase nowPhase = gamePhase.load();
+            if (prevPhase == Phase::PLAYING && nowPhase == Phase::GAMEOVER) {
+                // Same edge the credit uses, so the wind-down clock below has one
+                // origin however the match ended (host request or last player).
+                gameOverAt      = now;
+                gameOverStamped = true;
+                std::lock_guard<std::mutex> gc(clientMutex);
+                SlotMask claimed = gatherClaimedSlots();
+                auto& ps = gameSpace.getPlayers();
+                std::lock_guard<std::mutex> sb(scoreboardMutex);
+                for (int i = 0; i < (int)ps.size(); ++i) {
+                    // Same "active" rule the state packet uses (see buildState):
+                    // a slot a client holds, or one a bot is driving. Player's
+                    // isConnected is CLIENT-side state - the server never sets it,
+                    // so testing it here would filter nothing. Unoccupied slots
+                    // still carry a name and a zero score, and would otherwise
+                    // litter the table with 0-point entries every match.
+                    if (!SlotSet(claimed, i) && !ps[i].isBot) continue;
+                    scoreboard.addScore(ps[i].name, ps[i].score);
+                }
+                scoreboard.generateLeaderboard();
+                scoreboard.save(); // match end is infrequent and is exactly when
+                                   // the data changes, so this doubles as the
+                                   // periodic flush - and keeps the worst case at
+                                   // a restart to one in-progress match.
+                leaderboardDirty = true;
+                std::cout << "Scoreboard: credited match, " << scoreboard.scores.size()
+                          << " names total\n";
+            }
+            prevPhase = nowPhase;
+        }
+
+        tick = ++serverTick;
+        asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
+    }
+
+    //MARK: Send tick
+    // On (re)start, hand every client the fresh world (their slot + the new
+    // platform layout) so they rebuild it. Done off gameMutex like BroadcastState.
+    if (justStarted) {
+        std::lock_guard<std::mutex> gc(clientMutex);
+        for (auto& [cid, client] : clients)
+            SendToClient(client, welcomeFor(client));
+    }
+
+    // Match just credited: push the updated table to everyone. Built before
+    // taking clientMutex so scoreboardMutex is already released (lock order).
+    // Off gameMutex, like the welcome resend above and BroadcastState below.
+    if (leaderboardDirty) {
+        std::string lb = buildLeaderboard();
+        std::lock_guard<std::mutex> gc(clientMutex);
+        for (auto& [cid, client] : clients) SendToClient(client, lb);
+    }
+
+    if (gridMs > 0.0) statGrid.Add(gridMs);
+
+    // Broadcast authoritative state to all clients every tick.
+    // At 60Hz this is ~60 packets/sec per client. For 2 players the
+    // bandwidth is trivial; revisit delta-compression if player count grows.
+    { ScopedTime _bc(statBroadcast); BroadcastState(tick); }
+
+    // Heartbeat (~1/sec) so the Actions live log shows the sim is alive.
+    // clientMutex is taken alone here (not nested under gameMutex) so it
+    // can't deadlock. std::endl flushes - stdout to a file is fully
+    // buffered, so without the flush this wouldn't appear under `tail -f`.
+    if (tick % 60 == 0) {
+        int connected;
+        { std::lock_guard<std::mutex> gc(clientMutex); connected = (int)clients.size(); }
+        std::cout << "tick " << tick << "  players " << connected
+                  << "  asteroids " << asteroidCount << std::endl;
+    }
+}
+
 //MARK: Sim loop
 // -------------------------------------------------------------------------
-// Simulation loop - fixed 60Hz timestep.
+// The 60 Hz driver. Sleeps to the next beat, then ticks the match. Today that
+// is one call; A4 makes it a loop over every live match, which is why the tick
+// body moved into Match::Tick above.
 // -------------------------------------------------------------------------
 void SimulationLoop() {
     using Clock    = std::chrono::steady_clock;
     using Duration = std::chrono::duration<double>;
     auto lastTick  = Clock::now();
-    Clock::time_point countdownEnd; // when the pre-match COUNTDOWN flips to PLAYING (valid only while COUNTDOWN)
+    g_defaultMatch->prevPhase = g_defaultMatch->gamePhase.load();
+    // One scratch grid for every match this thread drives - see the note in
+    // match.h. Lives here (not in Match) so it stays warm across matches, and so
+    // a future worker pool gets one per worker for free.
+    CollisionGrid scratchGrid;
+    int beat = 0;      // ticks since the last registry sweep
+    int perfBeat = 0;  // seconds since the last PERF line
 
     while (true) {
         auto now     = Clock::now();
@@ -1383,327 +1834,19 @@ void SimulationLoop() {
             continue;
         }
         lastTick = now;
+        g_defaultMatch->Tick(scratchGrid);
 
-        uint32_t tick;
-        size_t   asteroidCount = 0;
-        bool     justStarted = false; // a match began this tick -> resend welcomes below
-        bool     wentLive    = false; // COUNTDOWN -> PLAYING flipped THIS tick -> drop every
-                                      // client's stale input latch before the first apply
-        {
-            std::lock_guard<std::mutex> gg(gameMutex);
-
-            //MARK: Start match
-            // Consume a pending start/restart request: build a fresh world and
-            // reset the existing player slots (ids stay stable so connected
-            // clients keep their slot mapping across a restart), then begin.
-            if (startRequested.exchange(false)) {
-                // Compact the connected clients into the lowest slots, in their
-                // current slot order (order-preserving, so the host - lowest
-                // slot - stays the host). This closes the hole a mid-session
-                // leaver left behind: the next human takes over their slot (and
-                // its color), and the roster can shrink down to the humans that
-                // are actually here instead of being floored by the highest
-                // claimed slot. nameDirty re-applies each client's name to its
-                // NEW slot via the per-tick name sync. Every client is told its
-                // new slot by the justStarted welcome resend below.
-                // (lock order gameMutex->clientMutex preserved.)
-                int want = pendingPlayers.load(), connectedAtStart = 0;
-                {
-                    std::lock_guard<std::mutex> gc(clientMutex);
-                    // Reap eagerly, not just on this tick's later periodic sweep:
-                    // a UDP client that already exceeded the idle timeout (e.g.
-                    // quit moments ago) must not get compacted into the fresh
-                    // roster as a "connected" human just because that sweep
-                    // hasn't run yet this tick.
-                    ReapIdleUdpClients();
-                    connectedAtStart = (int)clients.size();
-                    // Every client is welcomed unconditionally right below
-                    // (justStarted), so this call's own re-welcome list can be
-                    // ignored here - it only matters for the continuous LOBBY
-                    // compaction call site (see the per-tick "Bot reconcile"
-                    // block below).
-                    CompactConnectedSlots();
-                }
-                // Resize the roster to the requested match size, but never below
-                // the number of connected humans (no one loses their body). Slots
-                // beyond the humans become bots via the per-tick reconcile. Do this
-                // BEFORE generate so resetPlayersForMatch/placePlayersSpread size to
-                // the final count.
-                want = std::min(std::max(want, connectedAtStart), GAMESPACE_NUMBER_OF_PLAYERS);
-                // Clamp the preset's asteroid count to the UDP state-packet
-                // budget for this roster, so a full tick fits one unfragmented
-                // datagram (oversized ticks chunk lossily - see netbin.h).
-                int roids = std::min(pendingRoid.load(), nb::MaxAsteroidsForRoster(want));
-                if (roids < pendingRoid.load())
-                    std::cout << "Asteroids clamped " << pendingRoid.load() << " -> " << roids
-                              << " (UDP packet budget, " << want << " player slots)\n";
-                gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
-                gameSpace.setPlayerCount(want);
-                // OPTIONS: apply the requesting client's full options bundle to the
-                // sim before the world is built - generatePlatforms() below stamps
-                // PLATFORM ELASTICITY per-platform from the value applyOptions sets,
-                // and collisions/movement read the rest off GameSpace.
-                {
-                    MatchOptions o;
-                    o.wallElasticity      = pendingWallElast.load();
-                    o.platformElasticity  = pendingPlatElast.load();
-                    o.speedBoost          = pendingBoost.load();
-                    o.rocketSpeedScale    = pendingRocketSpeed.load();
-                    o.explosionRadiusScale = pendingXRadius.load();
-                    o.jetpackThrust       = pendingJThrust.load();
-                    o.fuelConsumption     = pendingFuelBurn.load();
-                    o.fuelRegenPct        = pendingFuelRegen.load();
-                    o.wallsEnabled        = pendingWallsEnabled.load();
-                    o.rocketsObeyPhysics  = pendingRocketsPhysics.load();
-                    o.friendlyFire        = pendingFriendlyFire.load();
-                    o.coastMode           = pendingCoastMode.load();
-                    gameSpace.applyOptions(o);
-                }
-                // Issue #5 order: platforms -> players (spread) -> asteroids
-                // (buffered away from the placed players). Same sequence the local
-                // client's generate() uses, so both modes build worlds identically.
-                gameSpace.generatePlatforms();
-                gameSpace.resetPlayersForMatch();
-                gameSpace.generateAsteroids();
-                // Seed every slot's bot personality once for this match (stable per
-                // slot id) at the requested difficulty. Which slots are bots is set
-                // by the per-tick reconcile above; drive() reads the profiles here.
-                botController.init(gameSpace.getPlayers(), pendingDiff.load());
-                // Refresh the cached welcome fragment now that the world exists, so
-                // clients that (re)connect during this match get the new platforms.
-                rebuildWelcomeStatic();
-                // Open the match with a pre-match countdown instead of going live
-                // immediately. The world is built but stays FROZEN (the sim body
-                // below only ticks in PLAYING/GAMEOVER), so it doesn't move until the
-                // count hits zero. justStarted resends the map/welcome now so clients
-                // can render the frozen world during the count.
-                // New match: bump the epoch BEFORE leaving LOBBY/GAMEOVER so the
-                // first packet clients see for this match already carries it.
-                // Every input still stamped with the old epoch is now rejected.
-                // Skips 0, which is reserved for "client didn't stamp one".
-                if (++matchEpoch == 0) matchEpoch = 1;
-                gamePhase = Phase::COUNTDOWN;
-                countdownEnd = now + std::chrono::duration_cast<Clock::duration>(
-                                         std::chrono::duration<double>(COUNTDOWN_SECONDS));
-                countdownRemaining = COUNTDOWN_SECONDS;
-                justStarted = true;
-                std::cout << "Match countdown started (" << connectedAtStart << " connected)\n";
+        // Registry upkeep, once a second rather than per tick - destroying rooms
+        // is not something 60 Hz buys anything. The default room is pinned, so
+        // today this only ever logs nothing.
+        if (++beat >= (int)TICK_RATE) {
+            beat = 0;
+            for (const std::string& code : g_registry.Reap(now))
+                std::cout << "Match " << code << " reaped\n";
+            if (PerfEnabled() && ++perfBeat >= PERF_REPORT_SECONDS) {
+                perfBeat = 0;
+                ReportPerf(*g_defaultMatch, now);
             }
-
-            //MARK: Countdown
-            // Pre-match countdown: publish the remaining seconds each tick, and flip
-            // to PLAYING (unfreezing the world) once the deadline passes. Nothing is
-            // simulated while COUNTDOWN (the sim body gates on PLAYING/GAMEOVER).
-            if (gamePhase.load() == Phase::COUNTDOWN) {
-                double left = Duration(countdownEnd - now).count();
-                if (left <= 0.0) {
-                    countdownRemaining = 0.0f;
-                    gamePhase = Phase::PLAYING;
-                    wentLive  = true; // consumed by the input-apply block below
-                    std::cout << "Match started\n";
-                } else {
-                    countdownRemaining = (float)left;
-                }
-            }
-
-            // Drop last tick's audio events (already broadcast). They re-accumulate
-            // below during input apply + collisions, then BroadcastState() reads
-            // and sends them after this lock releases.
-            gameSpace.getAudioEvents().clear();
-            // Same for messages: drop last tick's already-broadcast kill-feed /
-            // warning messages so they don't re-send or accumulate.
-            gameSpace.getMessages().clear();
-
-            //MARK: Reap idle UDP clients
-            // In the lobby the bot reconcile below turns the vacated slot into
-            // a bot; mid-match the body stays open for a reconnect (see
-            // refreshBotSlots). (WS clients are cleaned up by their
-            // Read()-error callback instead.) See ReapIdleUdpClients() for why
-            // this also runs eagerly at connect time, not just here.
-            {
-                std::lock_guard<std::mutex> gc(clientMutex);
-                ReapIdleUdpClients();
-            }
-
-            //MARK: Lobby slot compaction
-            // Continuously close gaps left by a leaver, live - not just once at
-            // match start. LOBBY only: once gameSpace.generate() has run
-            // (COUNTDOWN onward), slot index also means a spawned body tied to
-            // that index, and renumbering playerId without moving the body
-            // would desync "which body is mine" from the client's new slot. In
-            // pure LOBBY, gameSpace.getPlayers() is preview data only, so this
-            // is safe. Every re-slotted client needs a fresh welcome - it only
-            // learns "which slot is mine" (myIndex) from one.
-            if (gamePhase.load() == Phase::LOBBY) {
-                std::lock_guard<std::mutex> gc(clientMutex);
-                for (uint64_t connId : CompactConnectedSlots()) {
-                    auto it = clients.find(connId);
-                    if (it != clients.end()) SendToClient(it->second, welcomeFor(it->second));
-                }
-            }
-
-            //MARK: Name sync
-            // Apply any pending display-name changes onto their player slots. Runs
-            // every tick in every phase (lock order gameMutex->clientMutex), so
-            // lobby names update live as each client types - and the name persists
-            // through the match onto the game-over scoreboard.
-            {
-                std::lock_guard<std::mutex> gc(clientMutex);
-                auto& players = gameSpace.getPlayers();
-                for (auto& [cid, client] : clients) {
-                    if (!client.nameDirty) continue;
-                    if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
-                    players[client.playerId].name = client.name;
-                    client.nameDirty = false;
-                }
-            }
-
-            //MARK: Bot reconcile
-            // Reconcile bot ownership every tick in EVERY phase: any slot without a
-            // connected client is a bot (named + colored). Running it in the lobby
-            // too means the title-screen player list previews the bots that will
-            // fill the match (and updates live as humans join/leave). Botifying is
-            // withheld only while a match is actually LIVE (PLAYING): a mid-match
-            // disconnect leaves the body OPEN (not bot-driven) so the player can
-            // reconnect and resume it, while a mid-match join still flips a slot
-            // bot->human (the bot yields). GAMEOVER counts as "forming" here too -
-            // the client's screen already looks and behaves like the lobby at that
-            // point (returnToTitle keeps the socket open and comes right back to
-            // the roster), so a leaver's slot should stop showing their stale name
-            // instead of sitting untouched until the next match start relabels it.
-            // Cheap - a handful of slots. Bots are only DRIVEN in PLAYING/GAMEOVER
-            // (below); in the lobby they just hold a slot. HandleMidMatchLeavers is
-            // the PLAYING-only counterpart: once !allowBotify, it grace-counts and
-            // eventually eliminates a body refreshBotSlots left open (see its own
-            // comment).
-            {
-                Phase ph = gamePhase.load();
-                bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN || ph == Phase::GAMEOVER);
-                std::lock_guard<std::mutex> gc(clientMutex);
-                std::set<int> claimed = gatherClaimedSlots();
-                refreshBotSlots(claimed, allowBotify);
-                HandleMidMatchLeavers(claimed, allowBotify, TICK_DT);
-            }
-
-            //MARK: Tick sim
-            // Keep simulating through PLAYING *and* GAMEOVER; only LOBBY (no world
-            // yet) is idle. The GAMEOVER sim keeps the world moving during the
-            // client's game-over countdown so networked play matches local, where
-            // the sim runs every frame of that countdown (issue #2). The match-end
-            // detection below stays PLAYING-only so it fires exactly once.
-            Phase phase = gamePhase.load();
-            if (phase == Phase::PLAYING || phase == Phase::GAMEOVER) {
-                // Apply each client's latest input to their player slot
-                {
-                    std::lock_guard<std::mutex> gc(clientMutex);
-                    // First PLAYING tick of a match: every client's latch still holds
-                    // the ABSOLUTE yaw/pitch from the END of the previous match -
-                    // clients send nothing while on the TITLE/COUNTDOWN/GAME_OVER
-                    // screens, so lastInput froze there and hasInput stayed true.
-                    // ApplyInputToPlayer treats lookDelta as an aim TARGET, so
-                    // applying it here would overwrite the face-the-centre spawn
-                    // orientation resetPlayersForMatch() just set - and this tick's
-                    // broadcast is exactly what the client seeds its own predYaw
-                    // from, latching the wrong aim for the whole match. That's why
-                    // only match 1 ever spawned facing centre (hasInput was false).
-                    // Cleared under the SAME clientMutex the apply below holds, not
-                    // at the phase flip, so a straggler packet from a client still
-                    // running its game-over countdown can't slip in between.
-                    // hasInput=false is the load-bearing part: it gates the loop
-                    // below AND makes the input handler accept the next packet
-                    // whatever its seq (see the `|| !hasInput` clause there).
-                    // lastSeq is deliberately left alone - the client's inputSeq is
-                    // monotonic across matches.
-                    if (wentLive) {
-                        for (auto& [cid, client] : clients) {
-                            client.hasInput    = false;
-                            client.lastInput   = PlayerInput{};
-                            client.firePending = false;
-                        }
-                    }
-                    auto& players = gameSpace.getPlayers();
-                    for (auto& [cid, client] : clients) {
-                        if (!client.hasInput) continue;
-                        if (client.playerId < 0 || client.playerId >= (int)players.size()) continue;
-                        Player& player = players[client.playerId];
-                        float gravity = client.lastInput.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
-                        // Consume the latched fire edge exactly once (shoot() still
-                        // gates on ammo/cooldown), then clear it so a held button
-                        // doesn't re-fire every tick from a stale lastInput.fire.
-                        PlayerInput input = client.lastInput;
-                        input.fire = client.firePending;
-                        client.firePending = false;
-                        ApplyInputToPlayer(player, input, TICK_DT, gravity);
-                    }
-                }
-
-                // Drive every bot slot (unoccupied slots) through the behaviour
-                // tree, straight into ApplyPlayerInput - NOT ApplyInputToPlayer,
-                // whose absolute-aim conversion is only for network clients. Bots
-                // emit per-frame deltas exactly like the local client's drive loop.
-                botController.drive(gameSpace, TICK_DT);
-
-                gameSpace.updatePositions(TICK_DT);
-                RunCollisionChecks(gameSpace, collisionGrid);
-                gameSpace.updateActiveObjects();
-
-                //MARK: Match end
-                // End the match when EITHER every human is dead OR only one player
-                // (human or bot) is left standing - so a 2-human match keeps going
-                // past the first human's death, and both humans reach GAME OVER on
-                // the same phase flip. The single-survivor clause is gated to
-                // multi-slot rosters so a solo start (1 slot) doesn't end instantly;
-                // it then ends only when the lone human dies (aliveHumans == 0),
-                // preserving today's solo behavior. A dead human keeps spectating
-                // (client-side greyscale) until the match actually ends here.
-                // PLAYING-only: once GAMEOVER we keep simulating (above) but never
-                // re-evaluate the end condition.
-                if (phase == Phase::PLAYING) {
-                    std::lock_guard<std::mutex> gc(clientMutex);
-                    auto& players = gameSpace.getPlayers();
-                    int aliveHumans = 0;
-                    for (auto& [cid, client] : clients) {
-                        if (client.playerId >= 0 && client.playerId < (int)players.size()
-                            && players[client.playerId].isAlive) aliveHumans++;
-                    }
-                    int aliveTotal = 0;
-                    for (const auto& p : players) if (p.isAlive) aliveTotal++;
-                    bool multi = players.size() >= 2;
-                    if (aliveHumans == 0 || (multi && aliveTotal <= 1)) {
-                        gamePhase = Phase::GAMEOVER;
-                        std::cout << "Match over (humans alive " << aliveHumans
-                                  << ", total alive " << aliveTotal << ")\n";
-                    }
-                }
-            }
-
-            tick = ++serverTick;
-            asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
-        }
-
-        //MARK: Send tick
-        // On (re)start, hand every client the fresh world (their slot + the new
-        // platform layout) so they rebuild it. Done off gameMutex like BroadcastState.
-        if (justStarted) {
-            std::lock_guard<std::mutex> gc(clientMutex);
-            for (auto& [cid, client] : clients)
-                SendToClient(client, welcomeFor(client));
-        }
-
-        // Broadcast authoritative state to all clients every tick.
-        // At 60Hz this is ~60 packets/sec per client. For 2 players the
-        // bandwidth is trivial; revisit delta-compression if player count grows.
-        BroadcastState(tick);
-
-        // Heartbeat (~1/sec) so the Actions live log shows the sim is alive.
-        // clientMutex is taken alone here (not nested under gameMutex) so it
-        // can't deadlock. std::endl flushes - stdout to a file is fully
-        // buffered, so without the flush this wouldn't appear under `tail -f`.
-        if (tick % 60 == 0) {
-            int connected;
-            { std::lock_guard<std::mutex> gc(clientMutex); connected = (int)clients.size(); }
-            std::cout << "tick " << tick << "  players " << connected
-                      << "  asteroids " << asteroidCount << std::endl;
         }
     }
 }
@@ -1775,13 +1918,13 @@ private:
         uint64_t connId = 0;
         bool known = false;
         {
-            std::lock_guard<std::mutex> lock(clientMutex);
-            auto idx = udpIndex.find(from);
-            if (idx != udpIndex.end()) {
+            std::lock_guard<std::mutex> lock(g_defaultMatch->clientMutex);
+            auto idx = g_defaultMatch->udpIndex.find(from);
+            if (idx != g_defaultMatch->udpIndex.end()) {
                 connId = idx->second;
                 known  = true;
-                auto it = clients.find(connId);
-                if (it != clients.end()) it->second.lastSeenSec = NowSec();
+                auto it = g_defaultMatch->clients.find(connId);
+                if (it != g_defaultMatch->clients.end()) it->second.lastSeenSec = NowSec();
             }
         }
         if (known) { HandleClientMessage(connId, msg); return; }
@@ -1801,14 +1944,14 @@ private:
         ConnectedClient sink;
         {
             // Lock order gameMutex->clientMutex, matching Session::Start.
-            std::lock_guard<std::mutex> gg(gameMutex);
-            std::lock_guard<std::mutex> gc(clientMutex);
+            std::lock_guard<std::mutex> gg(g_defaultMatch->gameMutex);
+            std::lock_guard<std::mutex> gc(g_defaultMatch->clientMutex);
             // Reap eagerly, not just on the periodic tick: a client reconnecting
             // under a new source endpoint (e.g. after its laptop slept and WiFi
             // got a new NAT mapping) must reclaim its old slot immediately
             // rather than racing this tick's scheduled sweep and losing to it.
-            ReapIdleUdpClients();
-            playerId = ClaimFreeSlot();
+            g_defaultMatch->ReapIdleUdpClients();
+            playerId = g_defaultMatch->ClaimFreeSlot();
             if (playerId != -1) {
                 uint64_t connId = nextConnId++;
                 ConnectedClient c;
@@ -1818,18 +1961,20 @@ private:
                 c.lastSeenSec = NowSec();
                 std::string nm = clampName(parseString(helloMsg, "name"));
                 if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
-                clients[connId] = c;
-                udpIndex[from]  = connId;
+                g_defaultMatch->clients[connId] = c;
+                g_defaultMatch->udpIndex[from]  = connId;
+                g_defaultMatch->connectedCount.store((int)g_defaultMatch->clients.size());
                 sink = c;
                 std::cout << "UDP client connected -> player slot " << playerId
-                          << ". Active: " << clients.size() << "\n";
+                          << ". Active: " << g_defaultMatch->clients.size() << "\n";
             }
         }
         // Welcome/reject after releasing locks (mirrors Session::Start): both
         // buildWelcome and SendToClient's UDP path only take clientMutex-free
         // locks (welcomeStaticMutex / udpSendMutex), unlike gameMutex/clientMutex.
         if (playerId != -1) {
-            SendToClient(sink, welcomeFor(sink));
+            SendToClient(sink, g_defaultMatch->welcomeFor(sink));
+            SendToClient(sink, buildLeaderboard()); // see the WS join path
         } else {
             std::cout << "Server full, rejecting UDP client\n";
             // Reply so the client can show "match in progress" instead of
@@ -1848,7 +1993,18 @@ private:
 // main
 // -------------------------------------------------------------------------
 int main() {
+    // Before anything prints or binds: the banner reports the port, so reading
+    // this later made an overridden instance announce the default it was not
+    // using.
+    if (const char* pp = std::getenv("PLATFORMZ_PORT"); pp && *pp) {
+        int v = std::atoi(pp);
+        if (v > 0 && v < 65536) PORT = (unsigned short)v;
+        else std::cerr << "PLATFORMZ_PORT=" << pp << " is not a usable port; keeping "
+                       << PORT_DEFAULT << "\n";
+    }
+
     std::cout << "PLATFORMZ server | port " << PORT
+              << (PORT == PORT_DEFAULT ? "" : " (PLATFORMZ_PORT override)")
               << " (TCP/WebSocket + UDP) | " << TICK_RATE << " Hz\n";
     // Protocol identity, so `journalctl -u platformz` answers "is the running
     // binary actually the one I just deployed?". That question is why a stale
@@ -1865,6 +2021,12 @@ int main() {
     // Join key gate (never printed - it's the secret). Lives in the
     // environment, not the repo: docs/deploy-vultr.md covers setting it on
     // the box; friends receive it inside their invite link / handout build.
+    // A4 instrumentation, off unless asked for (see server/perf.h).
+    if (const char* pf = std::getenv("PLATFORMZ_PERF"); pf && *pf && std::string(pf) != "0") {
+        PerfEnabled() = true;
+        std::cout << "Perf sampling: ON (PERF line every " << PERF_REPORT_SECONDS << "s)\n";
+    }
+
     if (const char* k = std::getenv("PLATFORMZ_KEY"); k && *k) {
         joinKey = k;
         std::cout << "Join key: REQUIRED (PLATFORMZ_KEY is set)\n";
@@ -1872,15 +2034,50 @@ int main() {
         std::cout << "Join key: none (open server; set PLATFORMZ_KEY to require one)\n";
     }
 
+    // Cumulative all-time scores. The default path is RELATIVE on purpose, so it
+    // resolves against the systemd WorkingDirectory (/opt/PLATFORMZ/server - see
+    // docs/deploy-vultr.md); PLATFORMZ_SCORES overrides it, following the
+    // PLATFORMZ_KEY precedent above. A missing file is a normal cold start.
     {
-        std::lock_guard<std::mutex> lock(gameMutex);
+        const char* sp = std::getenv("PLATFORMZ_SCORES");
+        std::lock_guard<std::mutex> lk(scoreboardMutex);
+        scoreboard.setFilePath((sp && *sp) ? sp : SCOREBOARD_FILEPATH);
+        scoreboard.load();
+        scoreboard.generateLeaderboard(); // seed the table sent to clients on join
+        std::cout << "Scoreboard: " << scoreboard.scores.size() << " names from "
+                  << scoreboard.filePath << "\n";
+    }
+
+    // The default room. Created through the registry rather than beside it, so
+    // every path below is the real multi-match path with a count of one - A3 then
+    // swaps a fixed lookup for a per-connection one instead of introducing the
+    // whole mechanism at once.
+    //
+    // Host-controlled and unlocked, exactly like today's single global match, so
+    // nothing observable changes. Public locked+auto-start rooms only become
+    // reachable once clients can create them (A3/B1). Pinned: it must outlive
+    // every client, or the reaper would delete the only room on the box.
+    {
+        MatchRegistry::CreateResult why;
+        g_defaultMatch = g_registry.Create(/*name*/ "PLATFORMZ", /*preset*/ "DEFAULT",
+                                           /*isPrivate*/ false, /*joinCode*/ "",
+                                           /*optionsLocked*/ false, /*autoStart*/ false,
+                                           g_defaultCode, why);
+        if (!g_defaultMatch) { std::cerr << "could not create the default match\n"; return 1; }
+        g_registry.Pin(g_defaultCode);
+        std::cout << "Match registry: default room " << g_defaultCode
+                  << " (cap " << MATCH_MAX_CONCURRENT << ")\n";
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_defaultMatch->gameMutex);
         // Boot into the LOBBY: create player slots only (so clients can connect
         // and be listed), but no world. A client "start" message generates the
         // world and begins the match (see SimulationLoop).
-        gameSpace.spawnPlayers();
-        rebuildWelcomeStatic(); // seed the cached welcome (empty lobby world) before clients connect
+        g_defaultMatch->gameSpace.spawnPlayers();
+        g_defaultMatch->rebuildWelcomeStatic(); // seed the cached welcome (empty lobby world) before clients connect
         std::cout << "GameSpace: lobby ready, "
-                  << gameSpace.getPlayers().size()
+                  << g_defaultMatch->gameSpace.getPlayers().size()
                   << " player slots (waiting for a player to start)\n";
     }
 

@@ -1,229 +1,255 @@
-# Multiplayer testing — native LAN & browser LAN
+# Multiplayer testing — local & LAN
 
-How to build and test PLATFORMZ multiplayer. There is **one authoritative
-server** and **two client builds** that connect to it over WebSocket:
-
-- **Native** client (`platformz`) — the macOS desktop binary, connects via the
-  vendored IXWebSocket backend.
-- **Browser** client (`web/platformz.html`) — the Emscripten/WASM build, connects
-  via the browser's JS WebSocket API.
-
-Both speak the exact same JSON wire protocol; the server (`server/gameserver`)
-owns the simulation and supports **2 player slots**. Clients send input and
-render the state the server sends back. A single running server can mix native
-and browser clients at the same time.
-
-> The server listens on `0.0.0.0:9000`, so it accepts connections from other
-> machines on the LAN, not just localhost.
+How to run PLATFORMZ against a server on your own machine.
 
 ---
 
-## 0. One-time prerequisites
-
-| Need | How |
-| --- | --- |
-| Native build deps | Homebrew `raylib` 5.5, `nlohmann-json`, `boost` (server). IXWebSocket is a vendored git submodule under `third_party/`. |
-| Emscripten (browser build) | `brew install emscripten`. Must run under Python ≥3.10 — see [emscripten setup note](#emscripten-python-gotcha) below. |
-| Web build of raylib | raylib 5.5 compiled for `PLATFORM_WEB`, checked out at `~/raylib` (see step 1c). |
-
-### Emscripten Python gotcha
-Homebrew's `emcc` (and `emrun`) pick their interpreter as `$EMSDK_PYTHON` →
-else the first `python3` on `PATH`, and fail their `>=3.10` assert if that's too
-old. An **activated virtualenv** (or a terminal opened before the `~/.zshrc`
-edit) can shadow `python3` with Python 3.9 *and* leave `EMSDK_PYTHON` unset — for
-example `EZL_Redux/.venv/bin/python3` is a symlink to Xcode's 3.9.6. So every
-`emcc`/`make web`/raylib-web command must export this explicitly (it's already in
-`~/.zshrc` for fresh interactive terminals):
+## Quick start — two players, one Mac
 
 ```bash
-export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14
-```
-
-Serving the built page (step in §4) is **not** affected — use
-`python3 -m http.server`, which runs on any Python and needs no Emscripten.
-
----
-
-## 1. Build everything
-
-### a. Server (required for all multiplayer)
-```bash
+# 1. Build the server and the native client
 make -C server          # -> server/gameserver
-```
-
-### b. Native client
-```bash
 make                    # -> ./platformz
+
+# 2. Start the server (leave it running in its own terminal)
+cd server && ./gameserver
 ```
 
-### c. Browser client (only needed for the browser test)
-First build raylib for web **once** (matches desktop raylib 5.5):
+```bash
+# 3. In two more terminals, launch two clients. The URL is REQUIRED - see the
+#    warning below. Either transport works; mix them freely.
+./platformz ws://localhost:9000
+./platformz udp://localhost:9000
+```
+
+**4. Play.** Both clients land on the title screen, which *is* the lobby. The
+**host** — the lowest-numbered connected player, i.e. whoever joined first — picks
+a map size and presses START. Everyone else waits; they'll see
+*"Waiting for … to start the game."* A 5-second countdown runs, then the match
+begins.
+
+> ### ⚠️ Always pass the URL when testing locally
+> `./platformz` with **no arguments** connects to **`platformz.space`** — the live
+> public server — because `secrets.mk` bakes that host into the build. It does
+> *not* default to localhost. Pass `ws://localhost:9000` or `udp://localhost:9000`
+> explicitly, every time.
+>
+> `./platformz local` forces offline single-player against no server at all.
+
+### Confirming it worked
+
+The server prints this on startup:
+
+```
+PLATFORMZ server | port 9000 (TCP/WebSocket + UDP) | 60 Hz
+Protocol: state tag 0x09, welcome tag 0x02 | qpos +/-2400 | qvel +/-700
+Join key: none (open server; set PLATFORMZ_KEY to require one)
+[scoreboard] no file at scores - starting empty
+Scoreboard: 0 names from scores
+GameSpace: lobby ready, 8 player slots (waiting for a player to start)
+```
+
+Then a heartbeat once per second. Watch `players` climb as clients connect:
+
+```
+tick 60  players 2  asteroids 0
+```
+
+`asteroids 0` is correct before START — **the server boots with no world at all.**
+It builds one only when the host starts a match.
+
+---
+
+## Transports
+
+The client picks its transport from the URL **scheme**. The server speaks both at
+once on the same port, so a UDP client and a browser client share one match.
+
+| URL | Transport | Payload | Notes |
+|---|---|---|---|
+| `ws://host:9000` | WebSocket / TCP | JSON | Also what the browser uses |
+| `udp://host:9000` | Raw UDP | Quantized binary (`netbin.h`) | Native only — browsers can't open raw UDP |
+
+They are **not** the same wire format. UDP carries the compact binary state so a
+full 8-player tick fits one 1200-byte datagram; WebSocket has no MTU limit and
+keeps the JSON. If you're changing the protocol, test both.
+
+UDP has no disconnect event, so a client that quits just goes quiet. The server
+frees its slot after **10 s** of silence mid-match, or **3 s** in the lobby.
+Quitting therefore shows up as `UDP player N timed out` a few seconds later, not
+instantly.
+
+---
+
+## LAN — a second machine
+
+Find the server machine's IP:
+
+```bash
+ipconfig getifaddr en0      # Wi-Fi; try en1 if blank
+```
+
+Then from the other Mac, replacing the address:
+
+```bash
+./platformz udp://192.168.4.21:9000
+```
+
+If it can't connect: different subnet/VLAN, or macOS firewall is blocking
+`gameserver` (allow incoming connections for it).
+
+---
+
+## Browser client
+
+Needs **two servers running at once**, in separate terminals. They do different
+jobs:
+
+| Terminal | Command | Port | Job |
+|---|---|---|---|
+| 1 — game server | `cd server && ./gameserver` | 9000 | Runs the game |
+| 2 — web server | `cd web && python3 -m http.server 8080` | 8080 | Just serves the files |
+
+Then open **`http://localhost:8080/platformz.html`** and **click the canvas** —
+pointer lock and audio both need a user gesture.
+
+The page auto-connects to `ws://<whatever-host-you-loaded>:9000`, so:
+
+- **Two players, one machine:** open the URL in two browser windows
+- **Another device on the LAN:** `http://192.168.4.21:8080/platformz.html`
+- **Point at a different server:** `…/platformz.html?server=ws://192.168.4.21:9000`
+
+Browser and native players share one match — that's the interesting test.
+
+### Building the browser client
+
+Only needed if you changed the client. One-time, build raylib for web:
+
 ```bash
 git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git ~/raylib
 export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14
-make -C ~/raylib/src PLATFORM=PLATFORM_WEB -B      # -> ~/raylib/src/libraylib.a
+make -C ~/raylib/src PLATFORM=PLATFORM_WEB -B
 ```
-Then build the WASM client:
+
+Then, and after every client change:
+
 ```bash
 export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14
-make web RAYLIB_WEB_DIR=$HOME/raylib               # -> web/platformz.{html,js,wasm,data}
+make web RAYLIB_WEB_DIR=$HOME/raylib      # -> web/platformz.{html,js,wasm,data}
 ```
-The first `make web` also compiles Emscripten's system libs (one-time, cached).
+
+> **The `EMSDK_PYTHON` gotcha.** Homebrew's `emcc` picks `$EMSDK_PYTHON`, else the
+> first `python3` on `PATH`, and fails its `>=3.10` assert if that's too old. An
+> activated virtualenv can shadow `python3` with 3.9 *and* leave `EMSDK_PYTHON`
+> unset. Export it for every `emcc`/`make web`/raylib-web command.
+>
+> **Serving** is unaffected — `python3 -m http.server` runs on any Python.
+
+`shell.html` is baked in at compile time, so re-run `make web` after editing it.
 
 ---
 
-## 2. Start the server
+## The lobby, and who the host is
 
-Run on the machine that will host the game:
-```bash
-./server/gameserver
-```
-Expected output (ticking at 60 Hz, players count rises as clients connect):
-```
-PLATFORMZ server | port 9000 | 60 Hz
-GameSpace: 8 asteroids, 16 platforms, 2 player slots
-tick 60  players 0  asteroids 8
-```
+The title screen doubles as the live lobby in networked play.
 
-Find this machine's LAN IP for the other player to connect to:
-```bash
-ipconfig getifaddr en0      # Wi-Fi, e.g. 192.168.4.21  (try en1 if blank)
-```
+- **Host** = the lowest connected human slot. Only the host sees OPTIONS and the
+  START buttons; it migrates automatically if that player leaves.
+- **OPTIONS** are match-wide and host-only. They sync live to every client, so you
+  can watch a slider move on the other window.
+- **Map size** is chosen by *which* START button you press (SMALL / MEDIUM /
+  LARGE / XL).
+- **Joining mid-match** works when the roster has a free slot — set NUMBER OF
+  PLAYERS above the number of humans present and the latecomer takes a bot's slot.
+- **`M` ends the match**, host only.
 
 ---
 
-## 3. Test: Native LAN
+## Scoreboard
 
-The native client takes the server URL as its first argument. **No argument =
-local single-player** (hosts its own sim, no server needed).
+The all-time score table is **owned, credited and persisted by the server** — the
+client only renders what it's sent. Open it from the title screen's
+**LEADERBOARD** button (networked play only).
 
-**Same machine as the server (quick smoke test):**
-```bash
-./platformz ws://localhost:9000
-```
-
-**A second player on another Mac on the same LAN** (replace with the server's IP
-from step 2):
-```bash
-./platformz ws://192.168.4.21:9000
-```
-
-Each client connects, gets a player slot from the server's welcome packet, and
-renders the shared world. Watch the server log climb `players 0 → 1 → 2`.
-
-> Two native clients on the **same** machine also works — just run `./platformz
-> ws://localhost:9000` in two terminals (two windows, two slots).
-
----
-
-## 3b. Test: Native UDP
-
-The native client picks its transport from the URL **scheme**: `ws://`/`wss://`
-use WebSocket (as above), `udp://` uses raw UDP. The server listens on **both**
-at once (same port, 9000), so a UDP client and a WebSocket/browser client can
-share the same match. UDP is native-only — browsers can't open a raw UDP socket,
-so the browser build always uses WebSocket.
+Scores are credited once per match, at match end, then written to disk.
 
 ```bash
-./platformz udp://localhost:9000        # same machine
-./platformz udp://192.168.4.21:9000     # another Mac on the LAN
+# Default: a file named "scores" next to the working directory
+cd server && ./gameserver          # -> server/scores
+
+# Override the path
+PLATFORMZ_SCORES=/tmp/test-scores ./gameserver
 ```
 
-How it differs from the WebSocket path (all handled for you):
+`server/scores` and `server/scores.tmp` are gitignored. Delete the file to reset
+the board. Saves are atomic (write `.tmp`, then rename), so an interrupted write
+can't corrupt it.
 
-- **Handshake.** UDP is connectionless, so the client sends a `hello` on connect
-  and resends it (~2×/sec) until the server's `welcome` assigns a slot. State and
-  input packets are unreliable (newest wins); the `welcome` is made reliable by
-  that resend-until-answered loop.
-- **Disconnect.** There's no close event: the server frees a UDP client's slot
-  after ~5 s of silence, and the client re-runs the handshake if the server goes
-  quiet for ~3 s. So quitting a UDP client shows up in the server log as
-  `UDP player N timed out` a few seconds later, not immediately.
-
-**Mixed match (headline):** run the game server, then join with one native UDP
-client and one browser (WebSocket) client at the same time — both land in one
-match and see each other. Watch the server log climb `players 0 → 1 → 2`, with a
-`UDP client connected` line for the native UDP join and a `Client connected` line
-for the WebSocket join.
-
-> **Testing packet loss.** localhost/LAN almost never drops a datagram, so the
-> loss-tolerance code won't get exercised there. To see the game under realistic
-> loss, enable Apple's **Network Link Conditioner** (Additional Tools for Xcode)
-> with e.g. 5 % loss + 80 ms delay — the game should stay playable and the UDP
-> handshake should still complete.
-
-> **Reach.** Raw UDP works on a LAN or to a server with a directly-reachable
-> public UDP port (a `$5–10/mo` VPS). The `wss://…trycloudflare.com` internet
-> tunnel is TCP-only, so it carries WebSocket clients but **not** `udp://`.
+> **Known limitation:** the table is keyed on **display name**, so two players
+> typing the same name share one row, and anyone can claim another player's row by
+> typing their name. Being fixed — see D4 in `docs/matchmaking-plan.md`.
 
 ---
 
-## 4. Test: Browser LAN
+## Join key
 
-The browser test needs **two servers running at the same time**, in two separate
-terminals. They do different jobs — don't confuse them:
+Setting `PLATFORMZ_KEY` closes the server to anyone without it. A wrong or missing
+key gets **no reply at all** — to a scanner the port looks dead.
 
-| Terminal | Command | Port | Job |
-| --- | --- | --- | --- |
-| **1 — game server** | `./server/gameserver` | `9000` | Runs the actual game; the browser talks to it over WebSocket. |
-| **2 — web server** | `(cd web && python3 -m http.server 8080)` | `8080` | Just hands the browser the `web/` files (`.html`/`.wasm`/etc). |
-
-> If only the web server (8080) is running, the page loads but you get a
-> **WebSocket error** — because there's no game server on 9000 to connect to.
-> Both must be up. (The web server needs any Python; `gameserver` is the binary
-> from step 1a.)
-
-`emrun` can replace the `http.server` line, but it's only worth it for its
-auto-open/test features and it needs Python ≥3.10 (fails under an activated 3.9
-venv unless `EMSDK_PYTHON` is exported) — `python3 -m http.server` is simpler.
-
-### Then open the game in a browser
-"Open the page" means: launch a web browser (Chrome/Safari/etc.) and type this
-into the **address bar**, then Enter:
-
-```
-http://localhost:8080/platformz.html
+```bash
+PLATFORMZ_KEY=test123 ./gameserver
 ```
 
-That loads the WASM game from terminal 2; it then auto-connects its WebSocket to
-the game server in terminal 1. The in-page default server URL is
-`ws://<whatever-host-you-loaded>:9000`, so:
+Clients pass it in the URL query, on either transport:
 
-- **Same machine (two players):** open
-  `http://localhost:8080/platformz.html` in **two** browser windows → both
-  connect to `ws://localhost:9000`.
-- **Another device on the LAN:** on that device, open
-  `http://192.168.4.21:8080/platformz.html` → it auto-connects to
-  `ws://192.168.4.21:9000` (replace with the server's IP from step 2).
-- **Point at a different server host:** append a query string —
-  `http://localhost:8080/platformz.html?server=ws://192.168.4.21:9000`
+```bash
+./platformz "udp://localhost:9000?key=test123"
+```
 
-Click the black game canvas to capture the mouse (pointer lock) and start audio.
-Two windows = two players; terminal 1's log should climb to `players 2`.
+Browser: `http://localhost:8080/platformz.html?key=test123`
 
-> Browser + native can share one server: e.g. one player in a browser window and
-> one in `./platformz ws://localhost:9000` at the same time.
+Startup logs `Join key: REQUIRED` when it's set. Leave it unset for local testing.
 
 ---
 
-## 5. Controls
-WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
-Left Shift for stronger (earth) gravity · Esc toggle cursor capture.
+## Controls
+
+WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold Left
+Shift for stronger (earth) gravity · **M** end match (host only) · Esc toggle
+cursor capture · F3 perf overlay · `+`/`-` volume.
 
 ---
 
-## 6. Troubleshooting
+## Other launch modes
+
+```bash
+./platformz local                    # offline single-player, no server
+./platformz bench 240 256 24 4       # perf run: halfSize platforms asteroids [players]
+                                     # skips the title, spawns bots, F3 overlay on
+```
+
+---
+
+## Troubleshooting
 
 | Symptom | Fix |
-| --- | --- |
-| Browser stuck on "CONNECTING TO SERVER..." | Server not running, wrong host, or firewall. Confirm `lsof -nP -iTCP:9000 -sTCP:LISTEN` shows `gameserver`; check the `?server=` host matches the server's LAN IP. |
-| `make web` / raylib-web / `emrun` fails with `python 3.10 or above` | `EMSDK_PYTHON` unset and an active 3.9 venv (or stale shell) is shadowing `python3` — see [the gotcha](#emscripten-python-gotcha). For **serving**, just use `python3 -m http.server` (no version requirement). For **builds**, `export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14` or `deactivate` the venv first. |
-| Browser shows blank / 404 for `.wasm` or `.data` | You opened `file://` or served the wrong dir. Serve from `web/` over HTTP and load `platformz.html` from that server. |
-| Other machine can't reach the server | They're on a different subnet/VLAN, or macOS firewall is blocking `gameserver` (allow incoming connections for it). |
-| Native client opens local single-player instead of joining | You ran `./platformz` with no URL arg. Pass `ws://host:9000`. |
+|---|---|
+| Client connects to the wrong server | You ran `./platformz` with no URL — it uses the baked-in `platformz.space`. Pass `ws://localhost:9000`. |
+| `bind: Address already in use` | Something already holds 9000. `lsof -nP -iTCP:9000 -sTCP:LISTEN` — often a `gameserver` you left running in a closed terminal. |
+| Browser stuck on "CONNECTING TO SERVER…" | No game server on 9000, or wrong host. Confirm with `lsof -nP -iTCP:9000 -sTCP:LISTEN`. Both terminals must be up. |
+| "SERVER VERSION MISMATCH" | Client and server disagree on the protocol tags. Compare the server's startup `Protocol:` line against `netbin.h` and rebuild both. |
+| Nothing happens after connecting | You're in the lobby. Someone has to press START — and only the host sees the button. |
+| `asteroids 0` in the heartbeat | Correct before START. The server has no world until a match begins. |
+| `make web` fails with `python 3.10 or above` | `EMSDK_PYTHON` unset and a 3.9 venv is shadowing `python3`. Export it, or `deactivate` first. |
+| Browser blank / 404 on `.wasm` | You opened `file://` or served the wrong directory. Serve from `web/`. |
+| Other machine can't reach the server | Different subnet, or macOS firewall is blocking `gameserver`. |
+| Mouse won't capture in Safari | Click the canvas. Over plain-HTTP LAN, Safari may refuse pointer lock — try localhost. |
+
+---
 
 ## See also
-- `net_client.h` — the dual-backend (IXWebSocket / Emscripten) client wrapper.
-- `server/server_main.cpp` — authoritative server + wire protocol.
-- `server/test_client.html` — standalone JS WebSocket client for poking the
-  server's protocol without building a full client.
+
+- `docs/deploy-vultr.md` — running the server on a public VPS.
+- `docs/matchmaking-plan.md` — where multi-match hosting and the match browser are going.
+- `docs/multiplayer-testing-archive.md` — the pre-lobby version of this doc.
+- `server/test_client.html` — poke the protocol from a browser console without a client.

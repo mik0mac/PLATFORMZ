@@ -75,6 +75,15 @@ enum MessageType {
     COUNT
 };
 
+// MARK: Scoreboard
+// SERVER-SIDE ONLY. The all-time score table is owned, credited and persisted by
+// the game server (see server_main.cpp); the client just renders what the server
+// sends it. Relative on purpose so it resolves against the systemd
+// WorkingDirectory (/opt/PLATFORMZ/server); PLATFORMZ_SCORES overrides it.
+// Never load this from the client: main.cpp chdirs into Contents/Resources inside
+// the signed .app bundle, so writing there would break the notarized signature.
+const std::string SCOREBOARD_FILEPATH = "scores";
+
 //MARK: Physics Constants
 const float GRAVITY_SCALE = 4.0f;
 const float MOON_GRAVITY = 1.62f * GRAVITY_SCALE; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
@@ -88,7 +97,7 @@ const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game s
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~42 asteroids, comfortably above the XL preset's 36.
+const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~35 asteroids, so XL's 36 is clamped by one. (It was ~42 until #100 raised ACTION_HEADROOM to something the measured 8-player action volume justifies.)
 const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the OPTIONS slider and the server's pending config start at; the host can raise it up to the max above.
 
 struct mapSizePreset {
@@ -112,6 +121,42 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     // netbin.h) so a full tick fits one unfragmented datagram.
     {"XL",     {360.0f, 576, 36}}
 };
+// After a match ends the server keeps simulating so networked play matches local,
+// where the sim runs every frame of the client's death-FX countdown. That only
+// needs to outlast GAME_OVER_TIMER; past these thresholds nobody is watching, and
+// at N concurrent matches idle GAMEOVER worlds are pure waste. Server-side only -
+// the client is already back on its roster screen well before either fires.
+const double GAMEOVER_SIM_SECONDS   = 15.0; // stop ticking the world
+const double GAMEOVER_LOBBY_SECONDS = 60.0; // free the world, return to LOBBY
+
+//MARK: Match lifecycle (server-side)
+// How long a match with nobody in it survives before the registry destroys it.
+// Longer while PLAYING so a lobby-wide network blip can't tear down a match that
+// still has bodies held open for reconnects (MID_MATCH_LEAVE_GRACE_SEC).
+const double MATCH_EMPTY_GRACE_IDLE_SEC = 30.0; // LOBBY / GAMEOVER
+const double MATCH_EMPTY_GRACE_LIVE_SEC = 60.0; // COUNTDOWN / PLAYING
+// Backstop so a wedged room can never leak a tick slot forever.
+const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
+// Concurrent matches the process will hold.
+//
+// Measured on the box 2026-09-05 (docs/perf-measurements.md): a full 8-player
+// MEDIUM match costs ~0.6 ms of tick, so a 10 ms budget fits ~16 - but it also
+// costs ~310 KB/s, and against a 2 TB/month plan that is only ~2.4 PERMANENTLY
+// full matches. CPU is not the limit here; transfer is, by roughly 7x.
+//
+// 12 sits comfortably inside the CPU headroom while leaving the operator's real
+// constraint visible rather than pretending it does not exist. Watch the transfer
+// graph, not the tick time. Raising this past ~16 needs the egress work first
+// (broadcast decimation via GameSpace::extrapolate), not a faster tick.
+const int    MATCH_MAX_CONCURRENT = 12;
+
+//MARK: Public room governance
+// A public room has no meaningful host: whoever holds the lowest connected slot
+// would otherwise control everyone's options and START button, and that control
+// migrates to another stranger when they leave. So public rooms lock their
+// options at creation and start themselves.
+const int    PUBLIC_MIN_PLAYERS      = 2;    // humans needed before the countdown arms
+const double PUBLIC_AUTOSTART_SECONDS = 20.0; // lobby countdown once that many are present
 
 const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.

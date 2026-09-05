@@ -97,6 +97,7 @@ public:
     // the netcode (syncByIdNoErase), so they'd otherwise linger across sessions.
     void clear() {
         platforms.clear();
+        ++platformEpoch;
         asteroids.clear();
         players.clear();
         rockets.clear();
@@ -114,6 +115,7 @@ public:
     // player slots (and their ids) stable across a restart.
     void generatePlatforms() {
         platforms.clear();
+        ++platformEpoch;   // layout changed - the grid must re-bucket (see getPlatformEpoch)
         std::vector<Vector3> placed; // already-placed platform centers, fed to best-candidate sampling
         placed.reserve(num_of_platforms);
         float platformBuffer = walls.halfSize * boundaryBufferPlatforms;
@@ -303,13 +305,6 @@ public:
 
     // MARK: Update Objects
     void updatePositions(float dt) {
-        // Update platforms (for moving platforms, future use)
-        for (Platform& platform : platforms) {
-            if (platform.isMoving) {
-                platform.updatePos(dt);
-            }
-        }
-
         // Update players
         for (Player& player : players) {
             bool wasAlive = player.isAlive;
@@ -542,6 +537,15 @@ public:
 
     Walls& getWalls() { return walls; }
     std::vector<Platform>& getPlatforms() { return platforms; }
+
+    // Bumped whenever the platform layout changes - which means a new match, and
+    // nothing else: platforms are static once generated. CollisionGrid buckets
+    // them once and re-does it only when this moves, instead of re-bucketing every
+    // platform every tick (A7 / #99), where at XL they were ~99% of the cost.
+    //
+    // Bumped by generatePlatforms() and clear(). Those are the only two ways a
+    // platform's position can change.
+    uint32_t getPlatformEpoch() const { return platformEpoch; }
     std::vector<Asteroid>& getAsteroids() { return asteroids; }
     std::vector<Player>& getPlayers() { return players; }
     std::vector<Rocket>& getRockets() { return rockets; }
@@ -621,6 +625,7 @@ private:
     Walls walls; // the play-space boundary cube (single instance)
     int num_of_platforms = GAMESPACE_NUMBER_OF_PLATFORMS;
     std::vector<Platform> platforms;
+    uint32_t platformEpoch = 1;   // 0 is reserved for "grid has never built statics"
     int num_of_asteroids = GAMESPACE_NUMBER_OF_ASTEROIDS;
     std::vector<Asteroid> asteroids;
     int number_of_players = GAMESPACE_NUMBER_OF_PLAYERS; // For future use: if we want to add multiplayer support,
