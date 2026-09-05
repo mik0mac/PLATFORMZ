@@ -573,39 +573,66 @@ int main(int argc, char** argv) {
     // Networked: drain server frames (apply state, track our slot), returning the
     // latest match phase. Used by the lobby/game-over screens, which otherwise
     // wouldn't poll the socket, so they can react to phase changes.
+    // Everything the client does with a server message that ISN'T a state packet.
+    //
+    // Shared because it was not, and that was a bug. The socket is drained in two
+    // places - pumpNet() for the menu screens, and the PLAYING block's own loop -
+    // and they handled different subsets. pumpNet knew about Leaderboard, Full and
+    // VersionMismatch; the PLAYING loop only knew Welcome and State and dropped
+    // the rest on the floor.
+    //
+    // That lost the leaderboard every single match. The server credits scores on
+    // the PLAYING -> GAMEOVER edge and broadcasts the new table immediately, at
+    // which point the client is still on the PLAYING screen - so the one message
+    // that mattered arrived at the one drain that ignored it. It only ever looked
+    // right after restarting the client, because the join path re-sends the table
+    // behind the welcome, and that lands on the menu drain.
+    //
+    // Returns true if it handled the message, so callers only deal with State.
+    auto applyNonStateMessage = [&](ServerMessage& m) -> bool {
+        if (m.type == ServerMessage::Type::Welcome) {
+            myIndex = m.playerId;
+            serverFull = false;
+            // Now that we know our real slot, assert our name: send our display
+            // name (custom, or the correct "PLAYER {slot+1}" default). The server
+            // slot may carry a leftover lobby bot name, and pre-welcome
+            // (myIndex == -1) every client's default would have been "PLAYER 1".
+            net.send(serializeName(myDisplayName()));
+            TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
+            return true;
+        }
+        if (m.type == ServerMessage::Type::Leaderboard) {
+            // Server-owned all-time table, already ranked. Replace wholesale -
+            // each message is the complete top-N, not a delta.
+            leaderboard = std::move(m.leaderboard);
+            return true;
+        }
+        if (m.type == ServerMessage::Type::Full) {
+            // Every slot is claimed (mid-match, no bot filler). The hello resend
+            // loop keeps retrying; this just drives the lobby message so it reads
+            // "match in progress" instead of "connecting".
+            serverFull = true;
+            return true;
+        }
+        if (m.type == ServerMessage::Type::VersionMismatch) {
+            // Client and server binaries disagree on the wire protocol, so nothing
+            // this server sends will ever decode. Latch it: without this the client
+            // sits on "CONNECTING TO SERVER..." forever with no clue why. Latched,
+            // not cleared next frame, because the hello-retry loop keeps the bad
+            // frames coming.
+            protoMismatch = true;
+            return true;
+        }
+        return false;   // State - the caller's business
+    };
+
     auto pumpNet = [&]() -> ServerMessage::Phase {
         ServerMessage::Phase phase = ServerMessage::Phase::Unknown;
         for (const std::string& frame : net.poll()) {
             lastStateTime = GetTime(); // any server frame = the connection is alive
             ServerMessage m = applyMessage(frame, gameSpace);
-            if (m.type == ServerMessage::Type::Welcome) {
-                myIndex = m.playerId;
-                serverFull = false;
-                // Now that we know our real slot, assert our name: send our display
-                // name (custom, or the correct "PLAYER {slot+1}" default). The
-                // server slot may carry a leftover lobby bot name, and pre-welcome
-                // (myIndex == -1) every client's default would have been "PLAYER 1".
-                net.send(serializeName(myDisplayName()));
-            }
-            else if (m.type == ServerMessage::Type::Leaderboard) {
-                // Server-owned all-time table, already ranked. Replace wholesale -
-                // each message is the complete top-N, not a delta.
-                leaderboard = std::move(m.leaderboard);
-            }
-            else if (m.type == ServerMessage::Type::Full) {
-                // Every slot is claimed (mid-match, no bot filler). The hello
-                // resend loop keeps retrying; this just drives the lobby message
-                // below so it reads "match in progress" instead of "connecting".
-                serverFull = true;
-            }
-            else if (m.type == ServerMessage::Type::VersionMismatch) {
-                // Client and server binaries disagree on the wire protocol, so
-                // nothing this server sends will ever decode. Latch it: without
-                // this the client sits on "CONNECTING TO SERVER..." forever with
-                // no clue why (no state packet applies, so no local player is
-                // ever created). Latched, not cleared on the next frame, because
-                // the hello-retry loop keeps the bad frames coming.
-                protoMismatch = true;
+            if (applyNonStateMessage(m)) {
+                // handled above - welcome / leaderboard / full / version mismatch
             }
             else if (m.type == ServerMessage::Type::State) {
                 phase = m.phase; netCountdown = m.countdown; netEpoch = m.epoch;
@@ -1392,10 +1419,11 @@ int main(int argc, char** argv) {
             for (const std::string& frame : net.poll()) {
                 lastStateTime = GetTime(); // any server frame = the connection is alive
                 ServerMessage m = applyMessage(frame, gameSpace);
-                if (m.type == ServerMessage::Type::Welcome) {
-                    myIndex = m.playerId;
-                    net.send(serializeName(myDisplayName())); // assert our name (see the pumpNet welcome)
-                    TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
+                // Same non-state handling the menu screens get. This loop used to
+                // have its own shorter version, which is how the end-of-match
+                // leaderboard went missing - see applyNonStateMessage.
+                if (applyNonStateMessage(m)) {
+                    // handled
                 } else if (m.type == ServerMessage::Type::State) {
                     netPhase = m.phase; // track phase so we can detect the match ending
                     netEpoch = m.epoch; // stamp on the input we send from next frame
