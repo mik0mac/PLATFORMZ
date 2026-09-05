@@ -279,7 +279,8 @@ public:
             // fragmentation, which some routers drop; see netbin.h). Reassemble
             // here so the rest of the client only ever sees whole messages.
             if (n >= (ssize_t)nb::CHUNK_HEADER && (uint8_t)buf[0] == nb::CHUNK_VERSION) {
-                Reassemble(buf, (size_t)n, out);
+                std::string whole;
+                if (reasm_.Feed(buf, (size_t)n, whole)) out.push_back(std::move(whole));
                 continue;
             }
             out.emplace_back(buf, buf + n);
@@ -299,34 +300,12 @@ private:
     bool        open_ = false;
     std::string lastError_;
 
-    // Chunk reassembly - one logical message at a time, keyed by the server's
-    // gen byte. A chunk from a different gen (or a different chunk count)
-    // discards the half-done buffer: chunks of one message never interleave
-    // with another's, and a lost chunk is recovered by the hello-retry loop
-    // requesting a fresh (new-gen) welcome, not by any per-chunk ack.
-    std::vector<std::string> parts_;
-    uint8_t chunkGen_  = 0;
-    size_t  partsHave_ = 0;
-
-    void Reassemble(const char* buf, size_t n, std::vector<std::string>& out) {
-        uint8_t gen   = (uint8_t)buf[1];
-        uint8_t index = (uint8_t)buf[2];
-        uint8_t count = (uint8_t)buf[3];
-        if (count == 0 || index >= count) return; // malformed
-        if (gen != chunkGen_ || parts_.size() != (size_t)count) {
-            parts_.assign(count, {});
-            partsHave_ = 0;
-            chunkGen_  = gen;
-        }
-        if (!parts_[index].empty()) return; // duplicate datagram
-        parts_[index].assign(buf + nb::CHUNK_HEADER, buf + n);
-        if (++partsHave_ < count) return;
-        std::string whole;
-        for (const std::string& p : parts_) whole += p;
-        out.push_back(std::move(whole));
-        parts_.clear();
-        partsHave_ = 0;
-    }
+    // Chunk reassembly. The logic lives in nb::ChunkReassembler (netbin.h) beside
+    // the framing it implements, and because it needs testing without a socket.
+    //
+    // It used to be a single half-built message here, which lost a welcome
+    // whenever a chunked state packet arrived mid-assembly (#100).
+    nb::ChunkReassembler reasm_;
 };
 
 // --- Public client: picks the transport by URL scheme -----------------------

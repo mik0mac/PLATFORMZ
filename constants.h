@@ -97,7 +97,7 @@ const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game s
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
-const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~42 asteroids, comfortably above the XL preset's 36.
+const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~35 asteroids, so XL's 36 is clamped by one. (It was ~42 until #100 raised ACTION_HEADROOM to something the measured 8-player action volume justifies.)
 const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the OPTIONS slider and the server's pending config start at; the host can raise it up to the max above.
 
 struct mapSizePreset {
@@ -137,10 +137,18 @@ const double MATCH_EMPTY_GRACE_IDLE_SEC = 30.0; // LOBBY / GAMEOVER
 const double MATCH_EMPTY_GRACE_LIVE_SEC = 60.0; // COUNTDOWN / PLAYING
 // Backstop so a wedged room can never leak a tick slot forever.
 const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
-// Concurrent matches the process will hold. A real default comes from A4's
-// measurements (tick budget AND egress); this is a placeholder that is
-// deliberately low. Override with PLATFORMZ_MAX_MATCHES.
-const int    MATCH_MAX_CONCURRENT = 8;
+// Concurrent matches the process will hold.
+//
+// Measured on the box 2026-09-05 (docs/perf-measurements.md): a full 8-player
+// MEDIUM match costs ~0.6 ms of tick, so a 10 ms budget fits ~16 - but it also
+// costs ~310 KB/s, and against a 2 TB/month plan that is only ~2.4 PERMANENTLY
+// full matches. CPU is not the limit here; transfer is, by roughly 7x.
+//
+// 12 sits comfortably inside the CPU headroom while leaving the operator's real
+// constraint visible rather than pretending it does not exist. Watch the transfer
+// graph, not the tick time. Raising this past ~16 needs the egress work first
+// (broadcast decimation via GameSpace::extrapolate), not a faster tick.
+const int    MATCH_MAX_CONCURRENT = 12;
 
 //MARK: Public room governance
 // A public room has no meaningful host: whoever holds the lowest connected slot

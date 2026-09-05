@@ -19,9 +19,21 @@ Two things this got wrong the first time, both worth knowing before you extend i
     client that only speaks when acting gets dropped mid-test. Hence the ping
     thread - the real client does the same at 1/sec.
 """
-import socket, struct, json, time, threading
+import socket, struct, json, time, threading, os
 
-HOST, PORT = "127.0.0.1", 9000
+# Target. Defaults to localhost, but A4's whole point is measuring the server
+# WITHOUT the load generator competing for the same CPU - so these have to be
+# drivable from another machine.
+#   PLATFORMZ_HOST=203.0.113.9 python3 test/probe_load.py --clients 8
+HOST = os.environ.get("PLATFORMZ_HOST", "127.0.0.1")
+PORT = int(os.environ.get("PLATFORMZ_PORT", "9000"))
+KEY  = os.environ.get("PLATFORMZ_KEY", "")   # if the server runs with a join gate
+
+def set_target(host, port=None):
+    """Point every client created after this at `host`."""
+    global HOST, PORT
+    HOST = host
+    if port: PORT = int(port)
 STATE, WELCOME, CHUNK, FULL = 0x09, 0x02, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
 def enc(o): return json.dumps(o, separators=(",", ":")).encode()
@@ -36,6 +48,10 @@ class C:
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._ping, daemon=True).start()
     def send(self, o): self.s.send(enc(o))
+    def hello(self):
+        m = {"type": "hello", "name": self.name}
+        if KEY: m["key"] = KEY      # the server's join gate wants it in the hello
+        self.send(m)
     def _ping(self):
         while self.alive:
             time.sleep(0.5)
@@ -79,9 +95,9 @@ OPTS = {"half": 120.0, "plat": 128, "roid": 18, "nplayers": 4, "diff": 0.2,
 # Guarded so probe_idle.py (and anything else) can import C/OPTS without
 # running this whole scenario as a side effect of the import.
 def main():
-    a = C("ALPHA"); a.hello = lambda: a.send({"type": "hello", "name": "ALPHA"})
+    a = C("ALPHA")
     time.sleep(0.3)
-    b = C("BRAVO"); b.hello = lambda: b.send({"type": "hello", "name": "BRAVO"})
+    b = C("BRAVO")
     a.hello(); time.sleep(0.3); b.hello()
     step("1 joined (lobby)", [a, b])
 

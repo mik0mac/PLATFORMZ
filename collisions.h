@@ -53,7 +53,9 @@ struct GridCell {
     std::vector<int> asteroidIndices;
     std::vector<int> rocketIndices;
     std::vector<int> playerIndices;
-    std::vector<int> platformIndices;
+    // NOTE: no platformIndices. Platforms are static, so they are bucketed once
+    // into a separate long-lived layer (staticCells) rather than being wiped and
+    // re-inserted every frame with everything else. See RebuildStatic.
     // Generation this cell was last filled for. Rebuild() bumps a counter rather
     // than clearing the map, so a cell whose stamp is stale is LOGICALLY EMPTY -
     // FindCell() reports it as absent. Its vectors still hold last generation's
@@ -93,6 +95,14 @@ public:
                 }
             }
         }
+    }
+
+    // The static (platform) layer, rebuilt only when the platform layout changes.
+    // Empty vector rather than null so callers need no special case.
+    const std::vector<int>& FindStaticCell(const CellKey& key) const {
+        static const std::vector<int> kNone;
+        auto it = staticCells.find(key);
+        return it == staticCells.end() ? kNone : it->second;
     }
 
     // A cell not touched this generation is empty as far as callers are
@@ -137,7 +147,6 @@ private:
             c.asteroidIndices.clear();
             c.rocketIndices.clear();
             c.playerIndices.clear();
-            c.platformIndices.clear();
             c.stamp = generation;
         }
         return c;
@@ -151,7 +160,18 @@ private:
     // cells nothing has touched for a while; infrequent enough to be free.
     void EvictStale();
 
+    // Re-bucket every platform into staticCells. Called from Rebuild only when
+    // GameSpace::getPlatformEpoch() differs from what was last built - so exactly
+    // once per match, at match start, instead of 576 platforms x their 4-32 cells
+    // apiece, 60 times a second, forever (#99). Platforms do not move; the epoch
+    // changes only when a new layout is generated.
+    void RebuildStatic(GameSpace& space);
+
     std::unordered_map<CellKey, GridCell, CellKeyHash> cells;
+    // Platform buckets. Long-lived: no generation stamp, because nothing wipes
+    // this per frame.
+    std::unordered_map<CellKey, std::vector<int>, CellKeyHash> staticCells;
+    uint32_t staticEpoch = 0;   // platform epoch staticCells was built from; 0 = never
     uint32_t generation    = 0; // bumped once per Rebuild; 0 is never a live value
     uint32_t lastEvictGen  = 0;
 };
@@ -200,7 +220,13 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid);
 // Runs all collision checks for one frame, in order: rebuild grid, then
 // each pair-type check. Call this from main.cpp's update step, after
 // updatePositions(dt) and before updateActiveObjects().
-void RunCollisionChecks(GameSpace& space, CollisionGrid& grid);
+//
+// `outRebuildMs`, if given, receives the time the grid rebuild alone took. A4
+// needs the rebuild broken out from the rest of the collision work to size the
+// match cap (docs/matchmaking-plan.md); the server passes a pointer, the client
+// passes nothing and pays only a null check.
+void RunCollisionChecks(GameSpace& space, CollisionGrid& grid,
+                        double* outRebuildMs = nullptr);
 
 
 

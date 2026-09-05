@@ -65,7 +65,13 @@ using tcp           = boost::asio::ip::tcp;
 using udp           = boost::asio::ip::udp;
 
 //MARK: Config
-const unsigned short PORT      = 9000;
+// Listen port, both TCP/WebSocket and UDP. Overridable with PLATFORMZ_PORT so a
+// second instance can run alongside the live one - measuring a server (A4) means
+// running it under load, and doing that on the deployment port would mean taking
+// the real one down first. Not const: set once in main() before either listener
+// is constructed, then only read.
+unsigned short       PORT      = 9000;
+const unsigned short PORT_DEFAULT = 9000;
 const float          TICK_RATE = 60.0f;
 const float          TICK_DT   = 1.0f / TICK_RATE;
 // UDP is connectionless - a client that quits just stops sending. Free its slot
@@ -122,6 +128,10 @@ static std::string QueryParam(const std::string& target, const std::string& name
     }
     return "";
 }
+// Bytes actually put on a socket, for A4's egress budget. Process-wide: the
+// transfer quota is a property of the box, not of any one match.
+EgressCounters g_egress;
+
 // Monotonic connection id. Process-level, not per-match: an id must stay unique
 // across every match so a stale packet can never be mistaken for a live client.
 std::atomic<uint64_t> nextConnId{1};
@@ -1040,6 +1050,7 @@ private:
 // callback; a dead UDP client is reaped on idle timeout.
 // -------------------------------------------------------------------------
 static void SendToClient(const ConnectedClient& c, const std::string& msg) {
+    g_egress.Add(msg.size());   // A4: what actually leaves the box
     if (c.transport == Transport::WS) {
         if (c.session) c.session->Send(msg);
     } else if (g_udp) {
@@ -1331,6 +1342,44 @@ static void ApplyInputToPlayer(Player& player, const PlayerInput& in,
     ApplyPlayerInput(player, adjusted, dt, gravity, gameSpace);
 }
 
+//MARK: A4 perf report
+// One greppable line per interval. Deliberately a separate line rather than an
+// extension of the heartbeat: A6 restructures the heartbeat for N matches, and
+// the Actions idle-watchdog greps that line, so keeping them apart avoids
+// breaking a job with an instrumentation change.
+//
+// The numbers to read: budget 10 ms per 60 Hz beat, NOT 16.6 - the rest goes to
+// io threads, Caddy's TLS on the same box, and shared-CPU steal time. Concurrent
+// matches a sequential scheduler can hold is roughly 10 / p95_total.
+const int PERF_REPORT_SECONDS = 5;
+
+static std::chrono::steady_clock::time_point g_perfLast{};
+static uint64_t g_perfLastBytes = 0;
+
+static void ReportPerf(Match& m, std::chrono::steady_clock::time_point now) {
+    auto sim = m.statSim.Summarise();
+    auto bc  = m.statBroadcast.Summarise();
+    auto gr  = m.statGrid.Summarise();
+    if (m.statSim.Empty()) return;
+
+    const uint64_t bytes = g_egress.bytes.load(std::memory_order_relaxed);
+    double secs = g_perfLast.time_since_epoch().count()
+                ? std::chrono::duration<double>(now - g_perfLast).count() : 0.0;
+    double kbs  = secs > 0.0 ? (bytes - g_perfLastBytes) / 1024.0 / secs : 0.0;
+    g_perfLast = now; g_perfLastBytes = bytes;
+
+    const double p95total = sim.p95 + bc.p95;
+    int players; { std::lock_guard<std::mutex> gc(m.clientMutex); players = (int)m.clients.size(); }
+
+    printf("PERF sim p50/p95/max %.2f/%.2f/%.2f ms | broadcast %.2f/%.2f/%.2f | "
+           "grid %.2f/%.2f/%.2f | total p95 %.2f ms | egress %.0f KB/s | "
+           "clients %d roster %d | fits ~%d matches\n",
+           sim.p50, sim.p95, sim.max, bc.p50, bc.p95, bc.max, gr.p50, gr.p95, gr.max,
+           p95total, kbs, players, (int)m.gameSpace.getPlayers().size(),
+           p95total > 0.0 ? (int)(10.0 / p95total) : 0);
+    fflush(stdout);
+}
+
 //MARK: Sim tick
 // -------------------------------------------------------------------------
 // One 60 Hz step for this match: consume a pending start, run the countdown,
@@ -1348,7 +1397,9 @@ void Match::Tick(CollisionGrid& scratchGrid) {
     bool     leaderboardDirty = false; // scoreboard credited this tick -> broadcast below
     bool     wentLive    = false; // COUNTDOWN -> PLAYING flipped THIS tick -> drop every
                                   // client's stale input latch before the first apply
+    double gridMs = 0.0;
     {
+        ScopedTime _sim(statSim);
         std::lock_guard<std::mutex> gg(gameMutex);
 
         //MARK: Start match
@@ -1639,7 +1690,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             botController.drive(gameSpace, TICK_DT);
 
             gameSpace.updatePositions(TICK_DT);
-            RunCollisionChecks(gameSpace, scratchGrid);
+            RunCollisionChecks(gameSpace, scratchGrid, &gridMs);
             gameSpace.updateActiveObjects();
 
             //MARK: Match end
@@ -1737,10 +1788,12 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         for (auto& [cid, client] : clients) SendToClient(client, lb);
     }
 
+    if (gridMs > 0.0) statGrid.Add(gridMs);
+
     // Broadcast authoritative state to all clients every tick.
     // At 60Hz this is ~60 packets/sec per client. For 2 players the
     // bandwidth is trivial; revisit delta-compression if player count grows.
-    BroadcastState(tick);
+    { ScopedTime _bc(statBroadcast); BroadcastState(tick); }
 
     // Heartbeat (~1/sec) so the Actions live log shows the sim is alive.
     // clientMutex is taken alone here (not nested under gameMutex) so it
@@ -1769,7 +1822,8 @@ void SimulationLoop() {
     // match.h. Lives here (not in Match) so it stays warm across matches, and so
     // a future worker pool gets one per worker for free.
     CollisionGrid scratchGrid;
-    int beat = 0;   // ticks since the last registry sweep
+    int beat = 0;      // ticks since the last registry sweep
+    int perfBeat = 0;  // seconds since the last PERF line
 
     while (true) {
         auto now     = Clock::now();
@@ -1789,6 +1843,10 @@ void SimulationLoop() {
             beat = 0;
             for (const std::string& code : g_registry.Reap(now))
                 std::cout << "Match " << code << " reaped\n";
+            if (PerfEnabled() && ++perfBeat >= PERF_REPORT_SECONDS) {
+                perfBeat = 0;
+                ReportPerf(*g_defaultMatch, now);
+            }
         }
     }
 }
@@ -1935,7 +1993,18 @@ private:
 // main
 // -------------------------------------------------------------------------
 int main() {
+    // Before anything prints or binds: the banner reports the port, so reading
+    // this later made an overridden instance announce the default it was not
+    // using.
+    if (const char* pp = std::getenv("PLATFORMZ_PORT"); pp && *pp) {
+        int v = std::atoi(pp);
+        if (v > 0 && v < 65536) PORT = (unsigned short)v;
+        else std::cerr << "PLATFORMZ_PORT=" << pp << " is not a usable port; keeping "
+                       << PORT_DEFAULT << "\n";
+    }
+
     std::cout << "PLATFORMZ server | port " << PORT
+              << (PORT == PORT_DEFAULT ? "" : " (PLATFORMZ_PORT override)")
               << " (TCP/WebSocket + UDP) | " << TICK_RATE << " Hz\n";
     // Protocol identity, so `journalctl -u platformz` answers "is the running
     // binary actually the one I just deployed?". That question is why a stale
@@ -1952,6 +2021,12 @@ int main() {
     // Join key gate (never printed - it's the secret). Lives in the
     // environment, not the repo: docs/deploy-vultr.md covers setting it on
     // the box; friends receive it inside their invite link / handout build.
+    // A4 instrumentation, off unless asked for (see server/perf.h).
+    if (const char* pf = std::getenv("PLATFORMZ_PERF"); pf && *pf && std::string(pf) != "0") {
+        PerfEnabled() = true;
+        std::cout << "Perf sampling: ON (PERF line every " << PERF_REPORT_SECONDS << "s)\n";
+    }
+
     if (const char* k = std::getenv("PLATFORMZ_KEY"); k && *k) {
         joinKey = k;
         std::cout << "Join key: REQUIRED (PLATFORMZ_KEY is set)\n";

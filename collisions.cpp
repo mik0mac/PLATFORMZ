@@ -1,5 +1,6 @@
 #include <vector>
 #include <algorithm>
+#include <chrono>
 #include "collisions.h"
 #include "messages.h"
 
@@ -31,10 +32,29 @@ void CollisionGrid::Rebuild(GameSpace& space) {
         Touch(key).playerIndices.push_back(i);
     }
 
-    // Platforms are larger than a cell, so bucket each one into every cell its
-    // AABB overlaps - not just its center cell - or the 27-cell neighbor search
-    // around an object near the platform's edge could miss it. Rebuilt every
-    // frame like the rest of the grid, which also covers future moving platforms.
+    // Platforms are handled by their own layer, and only when they actually
+    // change - see RebuildStatic. This used to sit here, re-bucketing every
+    // platform every frame; at XL that was ~99% of this function's cost (#99).
+    if (space.getPlatformEpoch() != staticEpoch) RebuildStatic(space);
+
+    EvictStale();
+}
+
+// Bucket every platform into the static layer.
+//
+// Platforms are larger than a cell, so each one goes into every cell its AABB
+// overlaps - not just its center cell - or the 27-cell neighbor search around an
+// object near a platform's edge could miss it. That means one platform appears in
+// several cells, and readers must de-duplicate (see GatherPlatformNeighbors).
+//
+// Called only when GameSpace::getPlatformEpoch() moves, which is once per match:
+// platforms are static, so the only thing that changes a layout is generating a
+// new one.
+void CollisionGrid::RebuildStatic(GameSpace& space) {
+    // Clear each bucket in place, keeping capacity - the same trick the dynamic
+    // cells use, and it matters on a restart into the same map size.
+    for (auto& [key, bucket] : staticCells) bucket.clear();
+
     auto& platforms = space.getPlatforms();
     for (int i = 0; i < (int)platforms.size(); i++) {
         Vector3 half = Vector3Scale(platforms[i].size, 0.5f);
@@ -43,10 +63,15 @@ void CollisionGrid::Rebuild(GameSpace& space) {
         for (int cx = lo.x; cx <= hi.x; cx++)
             for (int cy = lo.y; cy <= hi.y; cy++)
                 for (int cz = lo.z; cz <= hi.z; cz++)
-                    Touch(CellKey{cx, cy, cz}).platformIndices.push_back(i);
+                    staticCells[CellKey{cx, cy, cz}].push_back(i);
     }
 
-    EvictStale();
+    // Drop buckets this layout left empty, so a big map followed by a small one
+    // does not keep the big map's footprint forever.
+    for (auto it = staticCells.begin(); it != staticCells.end(); )
+        it = it->second.empty() ? staticCells.erase(it) : std::next(it);
+
+    staticEpoch = space.getPlatformEpoch();
 }
 
 // Drop cells nothing has touched in a while, so reuse doesn't mean "grow to the
@@ -66,9 +91,8 @@ void CollisionGrid::EvictStale() {
 //MARK: CollisionGrid::GatherPlatformNeighbors
 void CollisionGrid::GatherPlatformNeighbors(Vector3 position, std::vector<int>& out) const {
     ForEachNeighborCell(position, [&](const CellKey& key) {
-        const GridCell* cell = FindCell(key);
-        if (!cell) return;
-        out.insert(out.end(), cell->platformIndices.begin(), cell->platformIndices.end());
+        const std::vector<int>& bucket = FindStaticCell(key);
+        out.insert(out.end(), bucket.begin(), bucket.end());
     });
     // A platform spans multiple cells, so it appears in several of the 27
     // neighbor cells - de-duplicate so callers process each platform once.
@@ -862,8 +886,16 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
 }
 
 //MARK: RunCollisionChecks
-void RunCollisionChecks(GameSpace& space, CollisionGrid& grid) {
-    grid.Rebuild(space);
+void RunCollisionChecks(GameSpace& space, CollisionGrid& grid,
+                        double* outRebuildMs) {
+    if (outRebuildMs) {
+        auto t0 = std::chrono::steady_clock::now();
+        grid.Rebuild(space);
+        *outRebuildMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - t0).count();
+    } else {
+        grid.Rebuild(space);
+    }
 
     CheckRocketAsteroidCollisions(space, grid);
     CheckRocketPlatformCollisions(space, grid);

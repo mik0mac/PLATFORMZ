@@ -44,10 +44,9 @@ public:
     Vector3 position;
     Vector3 startingPosition; // store the initial position of the platform.
 
-    // No-op today: platforms are static. Kept so GameSpace can tick every
-    // element uniformly, and as the hook for moving platforms (isMoving below).
-    void updatePos(float dt) {
-    }
+    // Platforms are static - they have no updatePos and are never ticked. The
+    // collision grid relies on this: it buckets them once per match rather than
+    // every frame (see CollisionGrid::RebuildStatic).
 
     // size
     Vector3 size;
@@ -63,7 +62,6 @@ public:
     Color color_fill = {0, 255, 200, 40}; // low alpha translucent fill for the "glowing vector glass" look
 
     // attributes
-    bool isMoving = false; // For future use: if true, platform moves according to velocity and speed
     bool isBouncy = true; // If true, player bounces off based on elasticity factor (velocity = -velocity * elasticity)
     float elasticityPlayer = PLATFORM_ELASTICITY_PLAYER; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
     float elasticityAsteroid = PLATFORM_ELASTICITY_ASTEROID; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)

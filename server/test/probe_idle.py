@@ -20,7 +20,7 @@ import socket, json, struct, threading
 from probe import C, OPTS, enc   # reuse the client
 
 a = C("IDLER")
-a.send({"type": "hello", "name": "IDLER"})
+a.hello()
 time.sleep(1.0)
 print(f"joined: slot={a.slot} phase={a.phase}")
 
