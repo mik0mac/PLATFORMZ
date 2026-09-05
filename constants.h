@@ -137,10 +137,18 @@ const double MATCH_EMPTY_GRACE_IDLE_SEC = 30.0; // LOBBY / GAMEOVER
 const double MATCH_EMPTY_GRACE_LIVE_SEC = 60.0; // COUNTDOWN / PLAYING
 // Backstop so a wedged room can never leak a tick slot forever.
 const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
-// Concurrent matches the process will hold. A real default comes from A4's
-// measurements (tick budget AND egress); this is a placeholder that is
-// deliberately low. Override with PLATFORMZ_MAX_MATCHES.
-const int    MATCH_MAX_CONCURRENT = 8;
+// Concurrent matches the process will hold.
+//
+// Measured on the box 2026-09-05 (docs/perf-measurements.md): a full 8-player
+// MEDIUM match costs ~0.6 ms of tick, so a 10 ms budget fits ~16 - but it also
+// costs ~310 KB/s, and against a 2 TB/month plan that is only ~2.4 PERMANENTLY
+// full matches. CPU is not the limit here; transfer is, by roughly 7x.
+//
+// 12 sits comfortably inside the CPU headroom while leaving the operator's real
+// constraint visible rather than pretending it does not exist. Watch the transfer
+// graph, not the tick time. Raising this past ~16 needs the egress work first
+// (broadcast decimation via GameSpace::extrapolate), not a faster tick.
+const int    MATCH_MAX_CONCURRENT = 12;
 
 //MARK: Public room governance
 // A public room has no meaningful host: whoever holds the lowest connected slot

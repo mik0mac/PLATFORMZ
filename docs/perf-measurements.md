@@ -30,7 +30,7 @@ PERF sim p50/p95/max 4.08/6.73/78.98 ms | broadcast 0.14/0.28/4.67 |
 slots), but egress scales with **connected clients** — the server sends a full
 state packet to each, 60 times a second.
 
-## Results — 2026-08-31, Mike's Mac, 8 clients, 8-slot roster
+## Results — 2026-08-31, Mike's Mac (superseded; load ran on the same machine)
 
 **After #99** (static platform layer):
 
@@ -60,6 +60,58 @@ and socket writes, not physics.
 The `max` column stays pinned at one large value (18 ms MEDIUM, 79 ms XL) across
 consecutive reports — it is the match-start tick (`generate()` plus the first grid
 build) sitting in the 900-sample window, not a steady-state stall.
+
+## Results — 2026-09-05, the actual Vultr box, 8 remote clients, MEDIUM
+
+**These are the numbers that count.** Server on `platformz.space`, load driven from
+a different machine, so the generator was not competing with what it measured.
+
+Steady state while PLAYING:
+
+| | p50 | p95 | max |
+|---|---|---|---|
+| sim | 0.28 ms | **0.45 ms** | 1.36 ms |
+| broadcast | 0.10 ms | 0.16 ms | 0.39 ms |
+| grid | 0.02 ms | 0.03 ms | 0.48 ms |
+| **total** | | **~0.6 ms** | |
+
+Egress ~310–430 KB/s. `fits ~16–19 matches`.
+
+### The box is roughly 2× *faster* than the Mac figures below
+
+Not because the hardware is better — because the Mac run had 8 Python clients (two
+threads each) fighting the server for the same cores. That distortion was flagged
+as a caveat when those numbers were taken; it turns out to have been worth about a
+factor of two. **Measure from another machine.**
+
+### CPU is not the constraint. Egress is, by ~7×
+
+- **CPU:** ~0.6 ms per tick → ~16 concurrent active matches inside a 10 ms budget.
+- **Egress:** ~310 KB/s per full match ≈ **815 GB/month**. Against the $6 plan's
+  2 TB that is **~2.4 permanently-full matches**.
+
+Real rooms are not full around the clock, so the practical figure is higher — but
+the ratio is the point. Optimising the tick further buys nothing until egress is
+addressed, and the lever for that is broadcasting every 2nd–3rd tick with
+`GameSpace::extrapolate` rather than making physics cheaper.
+
+### A1b and A7 are visible in this log
+
+- **grid p95 0.03 ms.** Before A7 it was the dominant cost; it is now noise.
+- `Match sim idle after 15s in GAMEOVER` — sim p95 drops **0.31 → 0.01 ms**
+  immediately after. A1b's wind-down, doing exactly what it was built for.
+- `Match world freed after 60s in GAMEOVER; back to lobby` — asteroid count 17 → 0.
+- **Broadcast is now the largest line item**, and once a match is idle it is the
+  *only* one.
+
+### One bug this run found
+
+```
+[server] state packet 1288 B > 1200 (chunking; lossy per-tick)
+```
+
+At 18 asteroids, against a documented cap of 42. `ACTION_HEADROOM` is 65 B and the
+real action content was ~617 B — 9.5× over. Tracked as **#100**.
 
 ## Finding 1 — the grid rebuild was ~80 % of the tick (FIXED in #99)
 
