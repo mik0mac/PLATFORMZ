@@ -90,6 +90,12 @@ struct ShellState {
     int   browseScroll = 0;                 // first visible row
     double lastListAt = 0.0;                // GetTime() of the last refresh
     bool   awaitingList = false;            // a request is outstanding
+    // The room we are actually in, straight from the welcome - not the code we
+    // asked for. Quick match picks a room for us, and connecting with no room
+    // named lands us in one we never chose, so only the server knows.
+    std::string inMatchCode;
+    MatchKind   inMatchKind = MatchKind::Custom;
+
     std::string joinCode;                   // JOIN CODE field contents
     bool        joinCodeFocused = false;
     std::string browseStatus;               // one-line feedback, e.g. a refusal

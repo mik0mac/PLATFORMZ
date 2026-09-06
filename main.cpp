@@ -569,6 +569,8 @@ int main(int argc, char** argv) {
         if (m.type == ServerMessage::Type::Welcome) {
             myIndex = m.playerId;
             shell.serverFull = false;
+            shell.inMatchCode = m.matchCode;
+            shell.inMatchKind = m.matchKind;
             // Now that we know our real slot, assert our name: send our display
             // name (custom, or the correct "PLAYER {slot+1}" default). The server
             // slot may carry a leftover lobby bot name, and pre-welcome
@@ -951,6 +953,17 @@ int main(int argc, char** argv) {
                 Rectangle playersBox = {350, 300, 300, headerH + rowsShown * rowH + 10.0f};
                 UiPanel(playersBox);
                 DrawText("PLAYERS", (int)playersBox.x + 10, (int)playersBox.y + 8, 14, ui::OUTLINE);
+                // Which room this is, right-aligned in the roster header. The code
+                // IS the invite for an invite-only room, so a player who cannot see
+                // it cannot ask anyone to join them. #83 gives this a proper home
+                // with a COPY action; until then it just has to be visible.
+                if (networked && !shell.inMatchCode.empty()) {
+                    const char* kindTag = shell.inMatchKind == MatchKind::Official ? "OFFICIAL" : "ROOM";
+                    const char* label   = TextFormat("%s %s", kindTag, shell.inMatchCode.c_str());
+                    DrawText(label,
+                             (int)(playersBox.x + playersBox.width - 10 - MeasureText(label, 14)),
+                             (int)playersBox.y + 8, 14, GRAY);
+                }
                 if (networked) {
                     if (previewCount == 0) {
                         DrawText("Waiting for players...", (int)playersBox.x + 10,
@@ -1003,18 +1016,41 @@ int main(int argc, char** argv) {
                     const char* waitMsg = shell.serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
                                         : myIndex >= 0 ? "JOINING..." : "CONNECTING...";
                     UiTextCentered(waitMsg, screenWidth, (int)startY + 14, 20, GRAY);
+                } else if (shell.inMatchKind == MatchKind::Official) {
+                    // An official room has no host and starts itself, so there is
+                    // nobody to wait on - it waits on a HEAD COUNT, and then on a
+                    // clock. Saying neither left twenty seconds (now ten) in which
+                    // the room had silently committed to starting and nobody in it
+                    // could tell.
+                    //
+                    // netCountdown is the server's LOBBY auto-start timer here; it
+                    // is only nonzero once the room has armed.
+                    int humans = 0;
+                    for (const Player& p : titlePlayers)
+                        if (p.isConnected && !p.isBot) humans++;
+                    const int needed = PUBLIC_MIN_PLAYERS - humans;
+
+                    if (netCountdown > 0.0f) {
+                        UiTextCentered(TextFormat("MATCH STARTING IN %d...", (int)ceilf(netCountdown)),
+                                       screenWidth, (int)startY + 14, 24, RAYWHITE);
+                    } else if (needed > 0) {
+                        UiTextCentered(needed == 1 ? "WAITING FOR 1 MORE PLAYER..."
+                                                   : TextFormat("WAITING FOR %d MORE PLAYERS...", needed),
+                                       screenWidth, (int)startY + 14, 20, GRAY);
+                    } else {
+                        // Head count is met but the countdown has not reached us
+                        // yet - one packet's worth of gap, not an error.
+                        UiTextCentered("STARTING...", screenWidth, (int)startY + 14, 20, GRAY);
+                    }
                 } else {
-                    // Connected but not the host: only "player 1" starts the match.
+                    // Connected but not the host: only the host starts the match.
                     // Show who we're waiting on (their synced name, or the slot-
                     // numbered default until they've set one - same fallback as the
                     // roster rows above).
-                    // No host at all: an official room, which starts itself. Naming
-                    // a player here would be a lie, and with hostSlot -1 it used to
-                    // read "Waiting for PLAYER 0". What it should say instead - the
-                    // player count and the auto-start countdown - is #111; this is
-                    // just the honest placeholder until then.
                     if (hostSlot < 0) {
-                        UiTextCentered("This match starts automatically.",
+                        // Custom room with nobody hosting it: only possible in the
+                        // gap between a host leaving and the next state packet.
+                        UiTextCentered("WAITING FOR A HOST...",
                                        screenWidth, (int)startY + 14, 20, GRAY);
                     } else {
                     std::string hostName = !titlePlayers[hostSlot].name.empty()

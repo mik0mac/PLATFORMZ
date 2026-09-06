@@ -553,7 +553,7 @@ carries slot + static world.
 
 ---
 
-### B2. Welcome carries the match code (version bump)
+### B2. Welcome carries the match code — **DONE** (#79, with #111)
 **Why:** the client must display "you are in 7QK2" and build an invite link, and
 after a `CompactConnectedSlots` re-welcome it must be able to tell "same match, new
 slot" from "different match".
@@ -577,6 +577,23 @@ packet**. Stop accepting `ep == 0` at the same time; that allowance existed for
 pre-epoch clients, which this bump excludes anyway.
 
 **Files:** `netbin.h`, `wire.h`, `server/server_main.cpp`.
+
+*As shipped, the welcome carries the code **and the room's KIND**. The kind was
+the harder half of #111: nothing on the wire said how a room you were already
+standing in was governed, so the lobby could not tell a room waiting on a host
+from one that starts itself. It rides the same bump rather than spending a second
+one later.*
+
+*The **server-wide epoch** was deliberately left out. Input is routed by connId to
+that connection's own match, so an epoch aimed at the wrong match cannot arrive in
+the first place — the change would have added risk to a protocol PR for a
+guarantee that already holds structurally. The `ep == 0` allowance is still there
+for the same reason: it costs nothing until something proves it does.*
+
+*The auto-start countdown needed no bump at all. The state packet's `countdown`
+float is written only during the pre-match COUNTDOWN phase and is 0 throughout
+LOBBY, so the official room's timer rides in it — a nonzero countdown in LOBBY is
+unambiguous, since nothing else sets one.*
 
 ---
 
@@ -947,6 +964,7 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | A10 | #108 | Server: host is the room's creator and sticks; migrates to the lowest remaining slot | server, client | A9 |
 | B1 | #78 | Protocol: directory messages — `list`/`create`/`join`/`quick`/`leave` + `matchlist`/`joinfail` | protocol | A2 |
 | B2 | #79 | Protocol: welcome carries the match code (`WELCOME_BIN_VERSION` 0x02→0x0A) + server-wide epoch | protocol | B1 |
+| B2b | #111 | Client: official lobby shows the head count and the auto-start countdown | client | B2 |
 | B3 | #80 | Protocol: move map size into `MatchOptions` so the lobby shows it before start | protocol | B2 |
 | C1 | #81 | Client: lift the game shell out of `main()` into `screens.h` (no behaviour change) | client | — |
 | C2 | #82 | Client: `BROWSE` screen — match list, refresh, join | client | B1, C1 |

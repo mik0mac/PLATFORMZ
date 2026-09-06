@@ -219,6 +219,14 @@ struct Match {
     // the next resolve. Guarded by clientMutex.
     uint64_t hostConn = 0;
 
+    // This room's own identity, copied in at creation so a welcome can carry it
+    // without the match reaching into registry storage under the registry lock.
+    // The client cannot infer either one: it may have arrived by quick match or
+    // by connecting with no room named at all, and nothing else on the wire says
+    // how a room it is already standing in is governed.
+    std::string matchCode;
+    MatchKind   matchKind = MatchKind::Custom;
+
     // Auto-start countdown, LOBBY only. Armed once connectedCount reaches
     // PUBLIC_MIN_PLAYERS, disarmed if the room empties back below it.
     bool              autoStartArmed = false;

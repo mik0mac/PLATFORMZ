@@ -132,6 +132,14 @@ struct ServerMessage {
     Type     type     = Type::None;
     int      playerId = -1; // Welcome: our assigned slot (index into players[])
     uint32_t tick     = 0;  // State/Welcome
+
+    // Welcome: which room we are in and how it is run. The server is the only
+    // source for both - a quick match picks the room for us, and connecting with
+    // no room named lands us somewhere we never asked for, so the code we think
+    // we requested proves nothing. The kind decides whether this lobby offers a
+    // START button or a countdown.
+    std::string matchCode;
+    MatchKind   matchKind = MatchKind::Custom;
     Phase    phase    = Phase::Unknown; // State only
     float    countdown = 0.0f; // State only: seconds left in the pre-match countdown (0 unless Countdown)
     // State only: the server's match epoch, bumped every time a match is built.
@@ -392,6 +400,8 @@ inline ServerMessage applyBinaryWelcome(const std::string& buf, GameSpace& gs) {
     r.u8();                    // tag (already checked by caller)
     msg.playerId = r.i32();
     msg.tick     = r.u32();
+    msg.matchCode = r.str();
+    msg.matchKind = r.u8() ? MatchKind::Official : MatchKind::Custom;
     gs.getWalls().halfSize = r.f32();
 
     // Platforms arrive once, here. Rebuild from scratch so a reconnect that
@@ -650,8 +660,10 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     const std::string type = j.value("type", "");
     if (type == "welcome") {
         msg.type     = ServerMessage::Type::Welcome;
-        msg.playerId = j.value("playerId", -1);
-        msg.tick     = j.value("tick", 0u);
+        msg.playerId  = j.value("playerId", -1);
+        msg.tick      = j.value("tick", 0u);
+        msg.matchCode = j.value("m", std::string());
+        msg.matchKind = matchKindFromWire(j.value("k", std::string()));
         // Boundary size for this match (the server picked it from the start
         // request's map preset). Sync it so the client renders the right cube -
         // walls aren't in the per-tick state packet.
