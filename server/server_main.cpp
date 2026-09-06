@@ -2546,10 +2546,13 @@ int main() {
         std::cout << "Join key: none (open server; set PLATFORMZ_KEY to require one)\n";
     }
 
-    // Cumulative all-time scores. The default path is RELATIVE on purpose, so it
-    // resolves against the systemd WorkingDirectory (/opt/PLATFORMZ/server - see
-    // docs/deploy-vultr.md); PLATFORMZ_SCORES overrides it, following the
-    // PLATFORMZ_KEY precedent above. A missing file is a normal cold start.
+    // Cumulative all-time scores. The default path is RELATIVE, so a dev build
+    // keeps its scores beside the binary. That default does NOT work under the
+    // systemd unit: DynamicUser=yes cannot write into the root-owned repo at
+    // WorkingDirectory. The box therefore sets PLATFORMZ_SCORES to a path inside
+    // its StateDirectory (/var/lib/platformz) - see docs/deploy-vultr.md. A
+    // missing file is a normal cold start; a failing WRITE is not, so the boot
+    // log below prints the path in use.
     {
         const char* sp = std::getenv("PLATFORMZ_SCORES");
         std::lock_guard<std::mutex> lk(scoreboardMutex);
