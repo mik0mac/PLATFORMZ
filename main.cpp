@@ -577,6 +577,30 @@ int main(int argc, char** argv) {
             TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
             return true;
         }
+        if (m.type == ServerMessage::Type::MatchList) {
+            shell.matches     = std::move(m.matches);
+            shell.listCursor  = m.listCursor;
+            shell.listNext    = m.listNext;
+            shell.listTotal   = m.listTotal;
+            shell.browseScroll = 0;
+            shell.awaitingList = false;
+            return true;
+        }
+        if (m.type == ServerMessage::Type::JoinFail) {
+            // Render a sentence, never the wire token - joinFailureText owns that
+            // mapping so the client and the protocol can drift apart safely.
+            shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
+            shell.awaitingList = false;
+            return true;
+        }
+        if (m.type == ServerMessage::Type::Created) {
+            // A private room is hidden from the list, so this reply is the only
+            // place its code is ever shown. Put it in the code field too, so it
+            // can be copied out of the UI rather than a log.
+            shell.joinCode = m.createdCode;
+            shell.setBrowseStatus("CREATED MATCH " + m.createdCode, GetTime());
+            return true;
+        }
         if (m.type == ServerMessage::Type::Leaderboard) {
             // Server-owned all-time table, already ranked. Replace wholesale -
             // each message is the complete top-N, not a delta.
@@ -697,6 +721,12 @@ int main(int argc, char** argv) {
     auto screenIdOf = [](GameScreen s) {
         switch (s) {
             case GameScreen::TITLE:     return SCREEN_TITLE;
+            // The browser is a menu screen: same track as the title, so walking
+            // in and out of it does not restart the music. It reached the
+            // fallthrough below and happened to land on SCREEN_TITLE anyway, but
+            // by accident rather than intent - and the next screen added would
+            // silently inherit whatever the fallthrough returns.
+            case GameScreen::BROWSE:    return SCREEN_TITLE;
             case GameScreen::COUNTDOWN: return SCREEN_COUNTDOWN;
             case GameScreen::PLAYING:   return SCREEN_GAMEPLAY;
             case GameScreen::GAME_OVER: return SCREEN_GAMEOVER;
@@ -999,6 +1029,18 @@ int main(int argc, char** argv) {
                     return uiEnabled && UiButton(r, label);
                 };
 
+                // Networked-only: the browser lists rooms on a server, so there is
+                // nothing behind it in local play. C3 restructures this screen
+                // properly; for now it is one more button in the same column.
+                if (networked && lobbyButton("FIND A MATCH")) {
+                    screen = GameScreen::BROWSE;
+                    shell.browseStatus.clear();
+                    shell.matches.clear();
+                    shell.awaitingList = true;
+                    shell.lastListAt = GetTime();
+                    if (net.isOpen()) net.send(serializeList(0));
+                    if (IsCursorHidden()) EnableCursor();
+                }
                 if (lobbyButton("CONTROLS")) { shell.showControls = true; if (IsCursorHidden()) EnableCursor(); }
                 // OPTIONS is host-only (it reconfigures the whole match); non-hosts
                 // don't get the button, matching the START gating above.
@@ -1220,6 +1262,69 @@ int main(int argc, char** argv) {
         // frozen (this block continues before the PLAYING sim body). Local mode
         // owns the timer; networked mode follows the server's countdown so every
         // client counts down together and enters on the same tick.
+        //MARK: BROWSE
+        // The match browser. Drawing lives in screens.h; this owns the socket and
+        // turns the screen's reported intent into wire messages.
+        if (screen == GameScreen::BROWSE) {
+            ServerMessage::Phase p = pumpNet();
+            // The server can start a match under us - somebody else's room filling
+            // up, or the one we already sit in. Follow it rather than sitting in a
+            // browser while a match we belong to begins without us.
+            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+
+            // Poll the list while the screen is open. Rooms fill and empty
+            // constantly, and a stale list offers joins that bounce.
+            const double nowT = GetTime();
+            if (net.isOpen() && nowT - shell.lastListAt > 2.0) {
+                shell.lastListAt = nowT;
+                net.send(serializeList(shell.listCursor));
+            }
+
+            if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
+
+            BeginDrawing();
+                ClearBackground(BLACK);
+                DrawStarfieldBackdrop((float)GetTime());
+                BrowseResult r = DrawBrowse(shell, screenWidth, screenHeight,
+                                            net.isOpen(), nowT);
+                switch (r.action) {
+                    case BrowseAction::Back:
+                        screen = GameScreen::TITLE;
+                        break;
+                    case BrowseAction::Refresh:
+                        shell.awaitingList = true;
+                        shell.lastListAt = nowT;
+                        net.send(serializeList(shell.listCursor));
+                        break;
+                    case BrowseAction::Page:
+                        shell.awaitingList = true;
+                        shell.listCursor = r.cursor;
+                        shell.lastListAt = nowT;
+                        net.send(serializeList(r.cursor));
+                        break;
+                    case BrowseAction::Quick:
+                        shell.setBrowseStatus("FINDING A MATCH...", nowT);
+                        net.send(serializeQuick());
+                        break;
+                    case BrowseAction::Create:
+                        // No create dialog yet (C4); make a public room named after
+                        // the player so the flow is exercisable end to end.
+                        net.send(serializeCreate(myDisplayName() + "'S MATCH",
+                                                 "DEFAULT", /*isPrivate*/ false, ""));
+                        shell.awaitingList = true;
+                        break;
+                    case BrowseAction::Join:
+                        shell.setBrowseStatus("JOINING " + r.code + "...", nowT);
+                        net.send(serializeJoin(r.code, r.joinCode));
+                        break;
+                    case BrowseAction::None:
+                        break;
+                }
+            EndDrawing();
+            continue;
+        }
+
         if (screen == GameScreen::COUNTDOWN) {
             float remaining;
             if (networked) {
