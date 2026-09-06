@@ -12,8 +12,9 @@ persistent setup for later.
 ## What goes where
 
 - **On the VPS:** the headless **game server** (`gameserver`) and the **web client
-  files** (`web/platformz.*`). The server reads no files at runtime (pure in-memory),
-  so nothing else needs uploading.
+  files** (`web/platformz.*`). Nothing else needs uploading — the one file the
+  server writes, the cumulative scoreboard, it creates itself under
+  `/var/lib/platformz` (step 6).
 - **Not on the VPS:** the native desktop `platformz` — each player builds/runs that
   on their own Mac and points it at the VPS IP. Only the browser client is hosted.
 - **Ports:** the server listens on **9000** for both TCP/WebSocket (browser + native
@@ -100,6 +101,8 @@ After=network.target
 
 [Service]
 DynamicUser=yes
+StateDirectory=platformz
+Environment=PLATFORMZ_SCORES=/var/lib/platformz/scores
 WorkingDirectory=/opt/PLATFORMZ/server
 ExecStart=/opt/PLATFORMZ/server/gameserver
 Restart=always
@@ -115,10 +118,27 @@ journalctl -u platformz -f     # live log; players climb as people join
 ```
 
 `DynamicUser=yes` runs the server as a throwaway unprivileged user instead of
-root — the process is pure in-memory (reads no files, writes no files, and port
-9000 doesn't need privileges), so it costs nothing and a compromised server
-can't touch the box. The `EnvironmentFile` line below still works with it:
-systemd reads the root-only key file itself before dropping privileges.
+root: port 9000 doesn't need privileges, so this costs nothing and a compromised
+server can't touch the box. Both other lines exist because that user is
+unprivileged and has no home:
+
+- **`StateDirectory=platformz`** creates `/var/lib/platformz` owned by the
+  transient user before the service starts, and keeps it across restarts. The
+  server writes its cumulative scoreboard there. Without it the scoreboard has
+  nowhere to go — the default path is relative to the root-owned
+  `WorkingDirectory`, so every write fails and all-time scores silently reset on
+  each restart. Do **not** fix that by `chown`ing the repo instead: that puts
+  live game data inside a git checkout, where a redeploy or `git clean` can take
+  it, and hands the service write access to its own source.
+- **`EnvironmentFile=/etc/platformz.env`** (added below, for the join key) still
+  works: systemd reads the root-only file itself before dropping privileges.
+
+After a match ends, confirm the scoreboard landed:
+
+```bash
+ls -l /var/lib/platformz/scores
+journalctl -u platformz | grep Scoreboard   # names loaded, and from where
+```
 
 ### Optional: require a join key (recommended once the IP is public)
 
