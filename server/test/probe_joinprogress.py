@@ -61,14 +61,22 @@ if not hurt:
 print("a latecomer joins the live match")
 late = C("LATECOMER")
 late.hello()
-# Sample the score as early as we can see ourselves, and again later. Inheriting
-# the bot's points and EARNING points from the bot's still-in-flight rockets look
-# identical if you only look once.
+# Sample score AND health as early as we can see ourselves, and again later.
+# Inheriting the bot's points and EARNING points from the bot's still-in-flight
+# rockets look identical if you only look once.
+#
+# The same is true of health, and reading it late is a race the test loses: the
+# joiner takes over the bot's BODY WHERE IT STANDS, which mid-match is inside a
+# firefight, so a second later they may legitimately be under 100 having inherited
+# nothing. That is what made this check fail intermittently - only on the runs
+# where the bots had damaged each other, i.e. only when it had any teeth at all.
 firstScore = None
+firstHp    = None
 for _ in range(60):
     time.sleep(0.05)
     if "LATECOMER" in late.players:
         firstScore = late.players["LATECOMER"]["score"]
+        firstHp    = late.players["LATECOMER"]["hp"]
         break
 time.sleep(1.2)
 check(late.slot is not None, f"got a slot in a PLAYING match (slot={late.slot})")
@@ -83,9 +91,10 @@ if me:
     check(me["alive"], "alive, not a corpse someone abandoned")
     check(not me["bot"], "flagged human, so it renders as a player not a bot")
     if hurt:
-        check(me["hp"] == 100, f"full health, not a damaged bot's remaining HP (hurt: {hurt})")
+        check(firstHp == 100, f"arrived on full health, not a damaged bot's HP (hurt: {hurt}, got {firstHp})")
     else:
-        check(me["hp"] == 100, "full health (weak: no bot was damaged to inherit from)")
+        check(firstHp == 100, f"arrived on full health (weak: no bot was damaged to inherit from)")
+    print(f"    hp    at first sighting: {firstHp}, a second later: {me['hp']}")
     print(f"    score at first sighting: {firstScore}, a second later: {me['score']}")
     check(firstScore == 0,
           f"arrived on zero - did NOT inherit the bot's points (first sighting: {firstScore})")

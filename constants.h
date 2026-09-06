@@ -127,8 +127,14 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
 // needs to outlast GAME_OVER_TIMER; past these thresholds nobody is watching, and
 // at N concurrent matches idle GAMEOVER worlds are pure waste. Server-side only -
 // the client is already back on its roster screen well before either fires.
-const double GAMEOVER_SIM_SECONDS   = 15.0; // stop ticking the world
-const double GAMEOVER_LOBBY_SECONDS = 60.0; // free the world, return to LOBBY
+//
+// The two must stay in this order, and both above GAME_OVER_TIMER: the client
+// runs its full death-FX countdown against a live server world, so freeing the
+// world under it would strand that sequence. The static_asserts below are what
+// stop a future retune from inverting them silently - dropping the lobby delay
+// from 60 s to 10 s already made a 15 s sim-idle unreachable once.
+constexpr double GAMEOVER_SIM_SECONDS   = 7.0;  // stop ticking the world
+constexpr double GAMEOVER_LOBBY_SECONDS = 10.0; // free the world, return to LOBBY
 
 //MARK: Match lifecycle (server-side)
 // How long a match with nobody in it survives before the registry destroys it.
@@ -157,9 +163,13 @@ const int    MATCH_MAX_CONCURRENT = 12;
 // migrates to another stranger when they leave. So public rooms lock their
 // options at creation and start themselves.
 const int    PUBLIC_MIN_PLAYERS      = 2;    // humans needed before the countdown arms
-const double PUBLIC_AUTOSTART_SECONDS = 20.0; // lobby countdown once that many are present
+const double PUBLIC_AUTOSTART_SECONDS = 10.0; // lobby countdown once that many are present
 
-const float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
+constexpr float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
+static_assert(GAMEOVER_SIM_SECONDS > GAME_OVER_TIMER,
+              "the server must keep simulating for the whole client death-FX countdown");
+static_assert(GAMEOVER_SIM_SECONDS < GAMEOVER_LOBBY_SECONDS,
+              "sim-idle must come BEFORE the world is freed, or that stage never runs");
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.
 const float MID_MATCH_LEAVE_GRACE_SEC = 15.0f; // seconds a mid-match leaver's body stays open for a reconnect before being eliminated (see Player::leaveGraceSec)
 
