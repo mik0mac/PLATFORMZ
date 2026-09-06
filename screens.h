@@ -120,6 +120,195 @@ struct ShellState {
     }
 };
 
+//MARK: Shared modals
+// The three popups a setup screen needs. They were inline in the title screen,
+// which was fine while that was the only place they could be opened. The lobby
+// and the local-match screen both need them now, and a second copy of a 130-line
+// options panel is not a thing to maintain.
+//
+// Each is called only when its own flag is set; `wasOpen` is that flag SNAPSHOTTED
+// at frame start, so the click that OPENS a modal cannot also hit the CLOSE button
+// underneath it on the same frame.
+
+inline void DrawControlsModal(ShellState& s, bool wasOpen) {
+    Rectangle m = {250, 140, 500, 420};
+    UiModalChrome(m, "CONTROLS");
+    const char* lines[] = {
+        "WASD          move",
+        "Mouse         look",
+        "Left click    fire rocket",
+        "Space         jetpack (up)",
+        "Left Shift    earth gravity enable",
+        "M             end match (host only)",
+        "Esc           toggle cursor capture",
+        "+ / -         volume up/down",
+    };
+    int ly = (int)m.y + 60;
+    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
+    if (UiModalClose(m, wasOpen)) s.showControls = false;
+}
+
+// Read-only: the server owns the table and pushes it on join and after every
+// credited match, so there is nothing to refresh from here.
+inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen) {
+    Rectangle m = {250, 140, 500, 420};
+    UiModalChrome(m, "LEADERBOARD");
+    if (s.leaderboard.empty()) {
+        // Distinguish "nothing recorded yet" from a broken panel -
+        // a fresh server with no score file lands here.
+        UiTextCentered("No scores recorded yet.", screenWidth,
+                       (int)m.y + 120, 20, GRAY);
+    } else {
+        int ly = (int)m.y + 60;
+        for (size_t i = 0; i < s.leaderboard.size(); ++i) {
+            // Rank and name left, score right-aligned inside the panel
+            // so the numbers line up regardless of name length.
+            const char* rank = TextFormat("%d. %s", (int)i + 1,
+                                          s.leaderboard[i].name.c_str());
+            const char* val  = TextFormat("%d", s.leaderboard[i].score);
+            DrawText(rank, (int)m.x + 40, ly, 18, RAYWHITE);
+            DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)),
+                     ly, 18, ui::OUTLINE);
+            ly += 30;
+        }
+    }
+    if (UiModalClose(m, wasOpen)) s.showScores = false;
+}
+
+// Two columns of five sliders plus a row of four gameplay toggles. Returns true
+// on any frame a control changed, so a networked caller can push the new bundle
+// to the server; a local caller ignores it. The modal itself knows nothing about
+// the connection - that stayed in main().
+inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
+    Rectangle m = {110, 10, 780, 680}; // two 5-slider columns + toggle row + CLOSE
+    UiModalChrome(m, "OPTIONS");
+
+    const float colW = 330.0f, gutter = 40.0f;
+    float lxL = m.x + 40, lxR = lxL + colW + gutter;
+    // Right-aligned value readout next to each label, within
+    // the given column's right edge.
+    auto valueAt = [&](const char* v, float colX, int y) {
+        int vw = MeasureText(v, 18);
+        DrawText(v, (int)(colX + colW - vw), y, 18, ui::OUTLINE);
+    };
+
+    // Each control returns true the frame it changes; in networked
+    // play we push the new option set to the server so every client's
+    // modal updates live (mirrors the name-field sync above).
+    bool optChanged = false;
+
+    int y1 = (int)m.y + 80, y2 = y1 + 85, y3 = y2 + 85, y4 = y3 + 85, y5 = y4 + 85;
+
+    // --- Left column ---
+    // NUMBER OF PLAYERS (integer, 1..GAMESPACE_NUMBER_OF_PLAYERS).
+    DrawText("NUMBER OF PLAYERS", (int)lxL, y1, 18, RAYWHITE);
+    valueAt(TextFormat("%d", (int)s.optNumPlayersF), lxL, y1);
+    if (UiSlider({lxL, (float)(y1 + 26), colW, 22}, s.optNumPlayersF,
+             1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
+             s.sliderPlayersActive, 1.0f)) {
+        opt.numPlayers = (int)s.optNumPlayersF; optChanged = true;
+    }
+
+    // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
+    DrawText("BOT DIFFICULTY", (int)lxL, y2, 18, RAYWHITE);
+    valueAt(TextFormat("%.2f", opt.botDifficulty), lxL, y2);
+    if (UiSlider({lxL, (float)(y2 + 26), colW, 22}, opt.botDifficulty,
+             0.0f, BOT_DIFFICULTY, s.sliderDiffActive)) optChanged = true;
+
+    // WALL ELASTICITY (players only; asteroids keep their constant).
+    DrawText("WALL ELASTICITY", (int)lxL, y3, 18, RAYWHITE);
+    valueAt(TextFormat("%.2f", opt.wallElasticity), lxL, y3);
+    if (UiSlider({lxL, (float)(y3 + 26), colW, 22}, opt.wallElasticity,
+             0.0f, 1.0f, s.sliderWElastActive)) optChanged = true;
+
+    // PLATFORM ELASTICITY (players only; asteroids keep their constant).
+    DrawText("PLATFORM ELASTICITY", (int)lxL, y4, 18, RAYWHITE);
+    valueAt(TextFormat("%.2f", opt.platformElasticity), lxL, y4);
+    if (UiSlider({lxL, (float)(y4 + 26), colW, 22}, opt.platformElasticity,
+             0.0f, 1.0f, s.sliderPElastActive)) optChanged = true;
+
+    // SPEED BOOST (walk + jetpack speed/accel, and rocket speed).
+    DrawText("SPEED BOOST", (int)lxL, y5, 18, RAYWHITE);
+    valueAt(TextFormat("%.1fx", opt.speedBoost), lxL, y5);
+    if (UiSlider({lxL, (float)(y5 + 26), colW, 22}, opt.speedBoost,
+             1.0f, 2.0f, s.sliderBoostActive)) optChanged = true;
+
+    // --- Right column ---
+    // ROCKET VELOCITY (on top of SPEED BOOST).
+    DrawText("ROCKET VELOCITY", (int)lxR, y1, 18, RAYWHITE);
+    valueAt(TextFormat("%.1fx", opt.rocketSpeedScale), lxR, y1);
+    if (UiSlider({lxR, (float)(y1 + 26), colW, 22}, opt.rocketSpeedScale,
+             1.0f, 2.0f, s.sliderRSpeedActive)) optChanged = true;
+
+    // JETPACK THRUST (on top of SPEED BOOST; jetpack only).
+    DrawText("JETPACK THRUST", (int)lxR, y2, 18, RAYWHITE);
+    valueAt(TextFormat("%.1fx", opt.jetpackThrust), lxR, y2);
+    if (UiSlider({lxR, (float)(y2 + 26), colW, 22}, opt.jetpackThrust,
+             1.0f, 2.0f, s.sliderJThrustActive)) optChanged = true;
+
+    // FUEL CONSUMPTION (direct units/sec out of the 100-unit tank).
+    DrawText("FUEL CONSUMPTION (%)", (int)lxR, y3, 18, RAYWHITE);
+    valueAt(TextFormat("%d/sec", (int)s.optFuelBurnF), lxR, y3);
+    if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, s.optFuelBurnF,
+             0.0f, 100.0f, s.sliderFBurnActive, 1.0f)) {
+        opt.fuelConsumption = (int)s.optFuelBurnF; optChanged = true;
+    }
+
+    // FUEL REGEN (percentage of the consumption rate; 100% = keeps pace).
+    DrawText("FUEL REGEN (% of consmpt.)", (int)lxR, y4, 18, RAYWHITE);
+    valueAt(TextFormat("%d/sec", (int)s.optFuelRegenF), lxR, y4);
+    if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, s.optFuelRegenF,
+             0.0f, 100.0f, s.sliderFRegenActive, 1.0f)) {
+        opt.fuelRegenPct = (int)s.optFuelRegenF; optChanged = true;
+    }
+
+    // EXPLOSION RADIUS (damage radius + blast visual; last in the
+    // modal per its own domain, grouped away from the speed trio).
+    DrawText("EXPLOSION RADIUS", (int)lxR, y5, 18, RAYWHITE);
+    valueAt(TextFormat("%.1fx", opt.explosionRadiusScale), lxR, y5);
+    if (UiSlider({lxR, (float)(y5 + 26), colW, 22}, opt.explosionRadiusScale,
+             1.0f, 4.0f, s.sliderXRadiusActive)) optChanged = true;
+
+    // Toggles: three across, label on its own line, a compact ON/OFF
+    // control below (labels are long, so keep them off the control's
+    // line). Each defaults to its constants.h value; applied at match
+    // start. Sliders use an 85px rhythm; this row sits just below them.
+    // Four explicit x positions (not the slider columns), spaced by
+    // measured label width at font 18 - 157 / 134 / 115 / 220 px
+    // left to right - so no label runs into its neighbor. The
+    // widest, ROCKETS OBEY PHYSICS, goes last, where it has the
+    // panel's right edge (m.x + m.width = 890) to grow into: it
+    // ends at 870. Each toggle sits under its label's left edge.
+    int y6 = y5 + 85;
+    float txBoundary = lxL;          // 150
+    float txFriendly = lxL + 190.0f; // 340
+    float txCoast    = lxL + 350.0f; // 500
+    float txPhysics  = lxL + 500.0f; // 650
+
+    DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
+    if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
+        optChanged = true; s.optSentWalls = opt.wallsEnabled;
+    }
+
+    DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
+    if (UiToggle({txFriendly, (float)(y6 + 26), 100, 24}, opt.friendlyFire)) {
+        optChanged = true; s.optSentFf = opt.friendlyFire;
+    }
+
+    DrawText("COAST MODE", (int)txCoast, y6, 18, RAYWHITE);
+    if (UiToggle({txCoast, (float)(y6 + 26), 100, 24}, opt.coastMode)) {
+        optChanged = true; s.optSentCoast = opt.coastMode;
+    }
+
+    DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
+    if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
+        optChanged = true; s.optSentPhys = opt.rocketsObeyPhysics;
+    }
+
+    if (UiModalClose(m, wasOpen)) s.showOptions = false;
+    return optChanged;
+}
+
 //MARK: BROWSE
 // What the player asked for this frame. The screen reports intent only - main()
 // owns the socket and decides what to send - so this stays free of networking.
