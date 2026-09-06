@@ -191,10 +191,20 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                 }
             } else {
                 // Inert but drawn: a row that just loses its button looks broken,
-                // where a greyed FULL explains itself.
+                // where a greyed reason explains itself.
+                //
+                // SAY WHICH REASON. A room is unjoinable either because it has no
+                // seat or because it is winding down, and labelling both "FULL"
+                // meant a 1/4 room that had just ended read as full - for the 60 s
+                // of GAMEOVER_LOBBY_SECONDS, after every single match. The row
+                // already carries the phase and the counts, so no server help is
+                // needed to tell the two apart.
+                const char* why = (m.phase == "gameover") ? "ENDING"
+                                : (m.players >= m.maxPlayers) ? "FULL"
+                                : "CLOSED";   // shouldn't happen; better than lying
                 UiPanel(joinBtn, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));
-                int tw = MeasureText("FULL", 16);
-                DrawText("FULL", (int)(joinBtn.x + (joinBtn.width - tw) / 2),
+                int tw = MeasureText(why, 16);
+                DrawText(why, (int)(joinBtn.x + (joinBtn.width - tw) / 2),
                          (int)(joinBtn.y + 7), 16, GRAY);
             }
         }
