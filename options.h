@@ -42,10 +42,36 @@ struct MatchOptions {
     bool coastMode          = COAST_MODE;
 };
 
+//MARK: Match kind
+// How a room is GOVERNED: who may change its rules, and who starts it.
+//
+// Deliberately independent of VISIBILITY (public vs invite-only), which decides
+// only whether the room is advertised in the browser. These were once the same
+// flag - public meant locked-and-self-starting, invite-only meant host-run -
+// which made a public room with a host impossible to express, and that is exactly
+// what a public CUSTOM match is.
+//
+//   OFFICIAL  fixed preset, nobody may retune it, no host, starts itself once
+//             PUBLIC_MIN_PLAYERS arrive. Created by the SERVER only: if a player
+//             could mint one, "official rules" would guarantee nothing.
+//   CUSTOM    the creator is host and sets the rules, starts and ends it.
+//             Public or invite-only, their choice.
+enum class MatchKind { Official, Custom };
+
+inline const char* matchKindWire(MatchKind k) {
+    return k == MatchKind::Official ? "official" : "custom";
+}
+// Anything that is not the official token is custom - a room whose governance we
+// cannot read should be assumed host-run, never assumed to carry the preset
+// guarantee.
+inline MatchKind matchKindFromWire(const std::string& s) {
+    return s == "official" ? MatchKind::Official : MatchKind::Custom;
+}
+
 //MARK: Match option presets
-// A named bundle of match rules, used to seed a new match. Public rooms are
-// created from one and then LOCK it (nobody may retune mid-lobby); private rooms
-// use it only as the host's starting point.
+// A named bundle of match rules, used to seed a new match. An OFFICIAL room is
+// created from one and then LOCKS it (nobody may retune it, ever); a CUSTOM room
+// uses it only as the host's starting point.
 //
 // This is a catalogue of values, not state - which is why it lives here beside
 // MatchOptions rather than in the match registry. The registry records WHICH
@@ -60,12 +86,16 @@ struct MatchPreset {
     // Key into mapSizePresets (constants.h). Separate only until B3 folds map
     // size into MatchOptions, at which point this collapses into `options`.
     std::string  mapSize;
+    // What the browser calls the official room built from this preset. The key
+    // ("DEFAULT") names a rule set; this names a place to play, and those want
+    // different words in a list a player is reading.
+    std::string  label;
 };
 
 // MatchOptions{} is exactly the compile-time tuning in constants.h, so DEFAULT
 // plays identically to an untouched OPTIONS modal.
 inline std::unordered_map<std::string, MatchPreset> matchOptionPresets = {
-    {"DEFAULT", { MatchOptions{}, "MEDIUM" }},
+    {"DEFAULT", { MatchOptions{}, "MEDIUM", "OFFICIAL MATCH" }},
 };
 
 // Look up a preset by name, falling back to DEFAULT for an unknown one - a bad

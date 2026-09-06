@@ -1378,6 +1378,7 @@ static std::string buildMatchList(int cursor) {
         std::string row = "{\"c\":"   + js(r.code)
                         + ",\"n\":"   + js(r.name)
                         + ",\"pre\":" + js(r.presetName)
+                        + ",\"k\":"   + js(matchKindWire(r.kind))
                         + ",\"ph\":"  + js(phaseString(r.phase))
                         + ",\"p\":"   + ji(r.players)
                         + ",\"max\":" + ji(r.maxPlayers)
@@ -1393,6 +1394,17 @@ static std::string buildMatchList(int cursor) {
          + ",\"next\":" + ji(more ? i : -1)
          + ",\"total\":" + ji((int)all.size())
          + ",\"m\":[" + rows + "]}";
+}
+
+// Give a freshly created room its lobby: player slots and a welcome fragment,
+// but no world - the world is generated when the match starts. Every room needs
+// this before anyone can be told about it, or a joiner gets a welcome with no
+// slots in it. Boot does the same thing for its resident rooms.
+static void PrimeLobby(Match& m) {
+    std::lock_guard<std::mutex> lock(m.gameMutex);
+    m.gameSpace.spawnPlayers();
+    m.rosterSize.store((int)m.gameSpace.getPlayers().size());
+    m.rebuildWelcomeStatic();
 }
 
 // Tell the creator which room they just made. Load-bearing for a PRIVATE room:
@@ -1421,31 +1433,27 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         const std::string code    = clampName(parseString(msg, "code"));
         const bool        isPriv  = parseBool(msg, "priv", false);
 
-        // A public room is hostless: nobody may retune or start it, so it starts
-        // itself once PUBLIC_MIN_PLAYERS arrive. A private room keeps the host
-        // rule, since whoever made it is there deliberately.
+        // A player-created room is ALWAYS custom: they made it, they host it,
+        // they set the rules and press START. `priv` chooses only whether it is
+        // advertised in the browser - a public custom room is a normal thing to
+        // want, and deriving governance from that flag is what #107 removed.
+        //
+        // There is deliberately no way to ask for an OFFICIAL room here. Only the
+        // server mints those, or the preset they promise would guarantee nothing.
         MatchRegistry::CreateResult why;
         std::string newCode;
         auto m = g_registry.Create(name, preset.empty() ? "DEFAULT" : preset,
-                                   isPriv, code,
-                                   /*optionsLocked*/ !isPriv, /*autoStart*/ !isPriv,
+                                   MatchKind::Custom, isPriv, code,
                                    newCode, why);
         if (!m) {
             SendToClient(c, buildJoinFail("server_full"));
             std::cout << "Create refused: at capacity (" << g_registry.Size() << ")\n";
             return true;
         }
-        // The world does not exist until a match starts; give it its lobby slots
-        // and a welcome fragment now, exactly as the default room gets at boot.
-        {
-            std::lock_guard<std::mutex> lock(m->gameMutex);
-            m->gameSpace.spawnPlayers();
-            m->rosterSize.store((int)m->gameSpace.getPlayers().size());
-            m->rebuildWelcomeStatic();
-        }
-        std::cout << "Match " << newCode << " created"
-                  << (isPriv ? " (private)" : " (public, locked + auto-start)")
-                  << " preset=" << (preset.empty() ? "DEFAULT" : preset) << "\n";
+        PrimeLobby(*m);
+        std::cout << "Match " << newCode << " created (custom, "
+                  << (isPriv ? "invite-only" : "public")
+                  << ") preset=" << (preset.empty() ? "DEFAULT" : preset) << "\n";
         // Tell them the code, then put them in it - making a room and not being in
         // it would be a strange thing to offer.
         SendToClient(c, buildCreated(newCode));
@@ -1461,26 +1469,31 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
     }
 
     if (msg.find("\"type\":\"quick\"") != std::string::npos) {
-        // Fullest joinable public lobby, else make one. One round trip, and the
+        // Fullest joinable OFFICIAL lobby, else make one. One round trip, and the
         // "fullest" rule packs players together instead of scattering one each
         // across empty rooms.
+        //
+        // Official only, on purpose. QUICK MATCH promises a game that starts:
+        // dropping someone into a stranger's public custom room hands their
+        // experience to a host who chose the rules and may never press START.
+        // Someone who wants that room can still pick it out of the browser.
         std::string best;
         int bestPlayers = -1;
         for (const MatchListing& r : g_registry.List(/*includePrivate*/ false)) {
+            if (r.kind != MatchKind::Official) continue;
             if (r.phase != Phase::LOBBY || !r.joinable) continue;
             if (r.players > bestPlayers) { bestPlayers = r.players; best = r.code; }
         }
         if (best.empty()) {
+            // The resident official rooms are pinned, so reaching here means they
+            // are all full or already playing. Server-created, so still official.
             MatchRegistry::CreateResult why;
-            auto m = g_registry.Create("QUICK MATCH", "DEFAULT", false, "",
-                                       /*optionsLocked*/ true, /*autoStart*/ true,
+            auto m = g_registry.Create(MatchPresetByName("DEFAULT").label, "DEFAULT",
+                                       MatchKind::Official, /*isPrivate*/ false, "",
                                        best, why);
             if (!m) { SendToClient(c, buildJoinFail("server_full")); return true; }
-            std::lock_guard<std::mutex> lock(m->gameMutex);
-            m->gameSpace.spawnPlayers();
-            m->rosterSize.store((int)m->gameSpace.getPlayers().size());
-            m->rebuildWelcomeStatic();
-            std::cout << "Match " << best << " created for quick match\n";
+            PrimeLobby(*m);
+            std::cout << "Match " << best << " created (official) for quick match\n";
         }
         MoveConnToMatch(connId, c, best, "");
         return true;
@@ -2568,15 +2581,20 @@ int main() {
     // swaps a fixed lookup for a per-connection one instead of introducing the
     // whole mechanism at once.
     //
-    // Host-controlled and unlocked, exactly like today's single global match, so
-    // nothing observable changes. Public locked+auto-start rooms only become
-    // reachable once clients can create them (A3/B1). Pinned: it must outlive
-    // every client, or the reaper would delete the only room on the box.
+    // CUSTOM, so it behaves exactly like today's single global match: whoever
+    // holds the lowest slot hosts it and presses START. This is the landing room
+    // for a client that connects without naming one, and it stays host-run so a
+    // solo player can still start a game. Once the client always picks a room
+    // explicitly (#105/#83/#84), this room has no reason to exist and the
+    // resident official room below becomes the place you land.
+    //
+    // Pinned: it must outlive every client, or the reaper would delete it out
+    // from under the next person to connect.
     {
         MatchRegistry::CreateResult why;
         g_defaultMatch = g_registry.Create(/*name*/ "PLATFORMZ", /*preset*/ "DEFAULT",
-                                           /*isPrivate*/ false, /*joinCode*/ "",
-                                           /*optionsLocked*/ false, /*autoStart*/ false,
+                                           MatchKind::Custom, /*isPrivate*/ false,
+                                           /*joinCode*/ "",
                                            g_defaultCode, why);
         if (!g_defaultMatch) { std::cerr << "could not create the default match\n"; return 1; }
         g_registry.Pin(g_defaultCode);
@@ -2595,6 +2613,32 @@ int main() {
         std::cout << "GameSpace: lobby ready, "
                   << g_defaultMatch->gameSpace.getPlayers().size()
                   << " player slots (waiting for a player to start)\n";
+    }
+
+    // One resident OFFICIAL room per preset, pinned so it is always there.
+    //
+    // Answering A2's open question the expensive-looking way, because the cheap
+    // way is worse: a room created only on demand means the browser is empty
+    // until somebody asks for one, and "NO MATCHES YET" is the first thing a new
+    // player sees in a game whose whole premise is finding a match. An idle LOBBY
+    // room costs almost nothing to tick - A1b's work is what makes this
+    // affordable - and it is what QUICK MATCH lands in, so the common path never
+    // pays for creation at all.
+    //
+    // One per preset: adding CHAOS to matchOptionPresets adds its room here with
+    // no code change, which is the point of that table being data.
+    for (const auto& [presetName, preset] : matchOptionPresets) {
+        MatchRegistry::CreateResult why;
+        std::string code;
+        auto m = g_registry.Create(preset.label, presetName,
+                                   MatchKind::Official, /*isPrivate*/ false,
+                                   /*joinCode*/ "", code, why);
+        if (!m) { std::cerr << "could not create the official " << presetName << " room\n"; return 1; }
+        PrimeLobby(*m);
+        g_registry.Pin(code);
+        std::cout << "Match registry: official room " << code
+                  << " preset=" << presetName
+                  << " (locked, auto-starts at " << PUBLIC_MIN_PLAYERS << " players)\n";
     }
 
     const int threads = std::max(1u, std::thread::hardware_concurrency());

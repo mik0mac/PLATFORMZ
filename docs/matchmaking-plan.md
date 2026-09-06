@@ -383,6 +383,56 @@ destroyed it and a player joining a busy match never learned their slot.*
 > was for. The plan is the map, not the territory — when the numbers disagree with
 > it, the numbers win and the plan gets updated.
 
+### A9. OFFICIAL vs CUSTOM: governance is not visibility — **DONE** (#107)
+*Not in the original plan. A2 shipped public rooms as hostless, locked and
+self-starting, and expressed that by deriving both flags from `isPrivate`:*
+
+```cpp
+g_registry.Create(..., /*optionsLocked*/ !isPriv, /*autoStart*/ !isPriv, ...);
+```
+
+*That conflates two independent questions. **Visibility** is whether a room is
+advertised in the browser; **governance** is who sets its rules and who starts it.
+Tying them together made one of the four combinations — public **and** host-run —
+impossible to express, and that combination is exactly what a public custom match
+is. A player who wants to run their own game and let strangers find it could only
+have one or the other.*
+
+**The model.** A room's `MatchKind` (`options.h`) decides governance; `isPrivate`
+decides visibility, and they do not interact:
+
+| | Official | Custom |
+|---|---|---|
+| Options | fixed preset, locked to everyone | the host sets them |
+| Starting | itself, at `PUBLIC_MIN_PLAYERS` | the host starts and ends it |
+| Host | none | the creator |
+| Visibility | public | public **or** invite-only |
+| Created by | the server | a player |
+
+**Where the fix went.** `optionsLocked` and `autoStart` are now derived inside
+`MatchRegistry::Create` from the kind and nowhere else — they are not independent
+choices and must never disagree, so no call site gets to pass them. `create` from
+a client is always `MatchKind::Custom`; only the server mints official rooms, or
+the preset they promise guarantees nothing.
+
+**A2's open question, answered: official rooms are resident.** One per entry in
+`matchOptionPresets`, created at boot and pinned. The cheap alternative — create
+on demand from QUICK MATCH — leaves the browser empty until somebody asks, and
+"NO MATCHES YET" is a bad first screen for a game whose premise is finding a
+match. An idle LOBBY room costs almost nothing to tick (which is A1b's doing), and
+it is what QUICK MATCH lands in, so the common path never pays for creation.
+Adding a preset adds its room with no code change.
+
+**QUICK MATCH now targets official rooms only.** It promises a game that starts;
+dropping someone into a stranger's public custom room hands their experience to a
+host who picked the rules and may never press START. That room is still one click
+away in the browser.
+
+**The default room stays CUSTOM.** It is where a client that names no room lands,
+and keeping it host-run means a solo player can still start a game exactly as
+before. Once the client always picks a room explicitly (C3/C4), it has no reason
+to exist and the resident official room becomes the landing place.
+
 ### A6. Per-match logging + a `/status` endpoint — **DONE** (#77)
 **Why:** today's operational signal is one `tick N players C asteroids A` line —
 and the GH Actions idle-watchdog greps it. With N matches that's meaningless, and
@@ -846,6 +896,7 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | A6 | #77 | Server: per-match heartbeat + `GET /status` (and fix the Actions idle watchdog) | server, ops | A2 |
 | A7 | #99 | Server: bucket static platforms once per match (found by A4) | server, perf | A4 |
 | A8 | #100 | Protocol: state packets over the MTU budget + unsurvivable chunking (found by A4) | server, protocol | A4 |
+| A9 | #107 | Server: split online matches into OFFICIAL (preset, auto-start) and CUSTOM (host-run) | server, protocol | A2 |
 | B1 | #78 | Protocol: directory messages — `list`/`create`/`join`/`quick`/`leave` + `matchlist`/`joinfail` | protocol | A2 |
 | B2 | #79 | Protocol: welcome carries the match code (`WELCOME_BIN_VERSION` 0x02→0x0A) + server-wide epoch | protocol | B1 |
 | B3 | #80 | Protocol: move map size into `MatchOptions` so the lobby shows it before start | protocol | B2 |

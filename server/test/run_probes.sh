@@ -36,7 +36,7 @@ trap cleanup EXIT INT TERM PIPE
 # produced a page of nonsense failures.
 port_free() { ! lsof -nP -iTCP:9000 -sTCP:LISTEN >/dev/null 2>&1; }
 
-for probe in probe probe_leaderboard probe_directory probe_multimatch probe_joinprogress; do
+for probe in probe probe_leaderboard probe_directory probe_official probe_multimatch probe_joinprogress; do
   log="$TMP/$probe.log"
   rm -f "$TMP/$probe.scores"
 

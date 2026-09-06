@@ -29,9 +29,14 @@ check(len(a.matchlists) >= 1, "a match list came back")
 lst = a.matchlists[-1] if a.matchlists else {}
 rows = lst.get("m", [])
 check(lst.get("total", 0) >= 1, f"at least the default room is listed (total={lst.get('total')})")
-check(all(k in rows[0] for k in ("c", "n", "ph", "p", "max", "j")) if rows else False,
-      "rows carry code/name/phase/players/max/joinable")
-check(lst.get("next", -1) == -1, "one page is enough for one room (next=-1)")
+check(all(k in rows[0] for k in ("c", "n", "ph", "p", "max", "j", "k")) if rows else False,
+      "rows carry code/name/phase/players/max/joinable/kind")
+check(lst.get("next", -1) == -1, "the boot rooms fit one page (next=-1)")
+
+print("official rooms are resident")
+official = [r for r in rows if r.get("k") == "official"]
+check(len(official) >= 1, f"an official room exists at boot: {[r['n'] for r in official]}")
+check(all(r.get("j") for r in official), "and it is joinable, so the browser is never empty")
 
 print("create - public")
 before = lst.get("total", 0)
@@ -46,6 +51,12 @@ lst = a.matchlists[-1]
 check(lst.get("total", 0) == before + 1, f"list grew to {lst.get('total')}")
 names = [r.get("n") for r in lst.get("m", [])]
 check("PUBLIC ROOM" in names, f"the new room is listed: {names}")
+# The whole point of #107. Before the split, "public" derived optionsLocked and
+# autoStart, so a public room was ALWAYS hostless - a public host-run room could
+# not be expressed at all.
+mine = [r for r in lst.get("m", []) if r.get("n") == "PUBLIC ROOM"]
+check(bool(mine) and mine[0].get("k") == "custom",
+      f"a player-created PUBLIC room is custom, not official: {mine}")
 
 print("create - private stays hidden")
 before = lst.get("total", 0)
@@ -55,6 +66,24 @@ a.send({"type": "list", "cur": 0})
 time.sleep(0.6)
 lst = a.matchlists[-1]
 check(lst.get("total", 0) == before, "a private room does NOT appear in the public list")
+
+print("quick match goes to an official room")
+offCode = official[0]["c"] if official else ""
+b = C("QUICKER")
+b.hello()
+time.sleep(1.0)
+b.send({"type": "quick"})
+time.sleep(0.9)
+a.send({"type": "list", "cur": 0})
+time.sleep(0.6)
+row = [r for r in a.matchlists[-1].get("m", []) if r.get("c") == offCode]
+# Not "some room got a player" - the resident OFFICIAL room specifically, while a
+# joinable public custom room ("PUBLIC ROOM") was also sitting there to be picked.
+check(bool(row) and row[0].get("p", 0) >= 1,
+      f"quick landed in the official room {offCode}: {row}")
+b.alive = False
+b.send({"type": "goodbye"})
+time.sleep(0.3)
 
 print("paging + capacity")
 for i in range(20):                       # cap is 12; this must start refusing

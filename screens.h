@@ -172,7 +172,14 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18, RAYWHITE);
             DrawText(TextFormat("%d/%d", m.players, m.maxPlayers),
                      (int)listX + 300, (int)ry + 10, 18, ui::OUTLINE);
-            DrawText(m.preset.c_str(), (int)listX + 380, (int)ry + 10, 16, GRAY);
+            // Kind, not preset. "DEFAULT" in every row tells a player nothing,
+            // where OFFICIAL vs CUSTOM tells them whether the rules are fixed and
+            // the room starts itself, or whether somebody is running it and
+            // decides both. Official is drawn brighter because it is the row you
+            // can join and expect a game from without knowing anyone.
+            const bool official = (m.kind == MatchKind::Official);
+            DrawText(official ? "OFFICIAL" : "CUSTOM",
+                     (int)listX + 380, (int)ry + 10, 16, official ? ui::OUTLINE : GRAY);
             DrawText(m.phase.c_str(),  (int)listX + 500, (int)ry + 10, 16,
                      m.phase == "playing" ? ui::OUTLINE : GRAY);
 
