@@ -10,7 +10,7 @@
 // holding ONLY registryMutex - never a Match's gameMutex or clientMutex, which
 // the sim thread holds every tick. So each entry splits its facts by mutability:
 //
-//   static  (in Entry)          code, name, private, joinCode, presetName,
+//   static  (in Entry)          code, name, kind, private, joinCode, presetName,
 //                               optionsLocked, autoStart, createdAt
 //   live    (atomics on Match)  gamePhase, connectedCount
 //
@@ -39,9 +39,19 @@ struct MatchEntry {
 
     std::string code;        // 4 chars, also the invite code
     std::string name;        // display name in the browser
+
+    // KIND is how the room is governed; isPrivate is only whether it is
+    // advertised. Independent on purpose - a public custom room needs both
+    // "anyone may find this" and "I am running it" (see MatchKind in options.h).
+    MatchKind   kind = MatchKind::Custom;
     bool        isPrivate = false;
+
     std::string joinCode;    // set only when private; gates joining
     std::string presetName = "DEFAULT";
+
+    // Derived from `kind` inside Create(), never passed in. Kept on the entry so
+    // the directory can answer "is this room host-run?" without touching a live
+    // match, and stored on the Match itself for the message handlers.
     bool        optionsLocked = false;
     bool        autoStart     = false;
     Match::Clock::time_point createdAt{};
@@ -57,6 +67,7 @@ struct MatchEntry {
 // without holding any lock at all.
 struct MatchListing {
     std::string code, name, presetName;
+    MatchKind kind = MatchKind::Custom;
     Phase phase = Phase::LOBBY;
     int   players = 0;
     int   maxPlayers = GAMESPACE_NUMBER_OF_PLAYERS;
@@ -75,31 +86,42 @@ public:
 
     // Create a room seeded from a named preset. Returns nullptr (and sets `why`)
     // if the process is already at capacity.
+    //
+    // Governance takes a KIND, not two loose booleans. optionsLocked and
+    // autoStart are derived here and only here: they are not independent choices
+    // and must never disagree. A locked room with no auto-start has nothing that
+    // can press START and would sit in its lobby forever; an unlocked room that
+    // starts itself would yank the rules out from under a host mid-setup.
+    //
+    // Callers previously passed the pair, and one of them derived it from
+    // isPrivate - which is what made a public host-run room unrepresentable.
     std::shared_ptr<Match> Create(const std::string& name,
                                   const std::string& presetName,
+                                  MatchKind kind,
                                   bool isPrivate,
                                   const std::string& joinCode,
-                                  bool optionsLocked,
-                                  bool autoStart,
                                   std::string& codeOut,
                                   CreateResult& why) {
+        const bool official = (kind == MatchKind::Official);
+
         std::lock_guard<std::mutex> lk(mutex_);
         if ((int)entries_.size() >= maxMatches_) { why = CreateResult::AtCapacity; return nullptr; }
 
         MatchEntry e;
         e.code          = MintCode();
         e.name          = name.empty() ? e.code : name;
+        e.kind          = kind;
         e.isPrivate     = isPrivate;
         e.joinCode      = joinCode;
         e.presetName    = presetName;
-        e.optionsLocked = optionsLocked;
-        e.autoStart     = autoStart;
+        e.optionsLocked = official;
+        e.autoStart     = official;
         e.createdAt     = Match::Clock::now();
         e.emptySince    = e.createdAt;
         e.match         = std::make_shared<Match>();
 
-        e.match->optionsLocked = optionsLocked;
-        e.match->autoStart     = autoStart;
+        e.match->optionsLocked = e.optionsLocked;
+        e.match->autoStart     = e.autoStart;
         e.match->ApplyPreset(MatchPresetByName(presetName));
 
         codeOut = e.code;
@@ -136,6 +158,7 @@ public:
             r.code       = e.code;
             r.name       = e.name;
             r.presetName = e.presetName;
+            r.kind       = e.kind;
             r.isPrivate  = e.isPrivate;
             // Live fields via atomics only - never the match's own mutexes.
             r.phase      = e.match->gamePhase.load();

@@ -26,9 +26,11 @@ check(a.slot is not None and b.slot is not None, f"joined (slots {a.slot}, {b.sl
 check(a.slot != b.slot, "different slots in the same room")
 
 print("ALPHA makes a room - and is put in it")
-# PRIVATE on purpose: a public room is locked and self-starting by design, so
-# ALPHA could not start it manually and, alone, would never reach
-# PUBLIC_MIN_PLAYERS. Private rooms keep the host rule.
+# PRIVATE on purpose - but only so the next check can prove a private room stays
+# out of the public list. Governance no longer follows visibility: a room a player
+# creates is CUSTOM either way, so ALPHA hosts it and its START works regardless
+# (probe_official covers that). Boot's resident OFFICIAL room is the locked,
+# self-starting one.
 a.send({"type": "create", "n": "ALPHA HOUSE", "pre": "DEFAULT", "priv": True, "code": "letmein"})
 wait(1.5)
 check(len(a.created) == 1, f"server returned the new room's code: {a.created}")

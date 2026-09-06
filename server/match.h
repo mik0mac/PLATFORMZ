@@ -190,11 +190,14 @@ struct Match {
     std::mutex  welcomeStaticMutex;
 
     // ---- Governance -----------------------------------------------------
-    // A public room has no meaningful host. isHostConn() hands host to whoever
-    // holds the lowest connected slot, so without this an arbitrary stranger
-    // controls everyone's options and START button - and that control migrates
-    // to another stranger when they leave. Public rooms therefore lock their
-    // rules at creation and start themselves.
+    // Set from the room's KIND at creation (MatchKind in options.h); the registry
+    // derives them together so they cannot disagree. Never read as "is this room
+    // public" - visibility is a separate fact, and a PUBLIC CUSTOM room is host-run.
+    //
+    // An OFFICIAL room has no meaningful host. isHostConn() hands host to whoever
+    // holds the lowest connected slot, so without this an arbitrary stranger would
+    // control everyone's options and START button - and that control would migrate
+    // to another stranger when they left.
     //
     // optionsLocked rejects "options"/"start"/"endmatch" from EVERYONE, not just
     // non-hosts. autoStart is what replaces the missing START button; the two

@@ -1,7 +1,7 @@
 // Exercises MatchRegistry directly. A2 adds the registry but clients cannot yet
 // reach a room by code (that is A3), so this is how its mechanics get tested:
 // capacity, code uniqueness, reaping and its graces, preset seeding, and the
-// public-room lock.
+// governance a room's KIND implies.
 //
 //   g++ -std=c++17 -O2 -I server -I . -I/opt/homebrew/include -DPLATFORMZ_SERVER \
 //       server/test/registry_test.cpp -o /tmp/registry_test && /tmp/registry_test
@@ -18,9 +18,10 @@ static void check(bool ok, const char* what) {
 using Clock = Match::Clock;
 
 static std::shared_ptr<Match> make(MatchRegistry& r, std::string& code,
-                                   bool priv = false, bool locked = false, bool various = false) {
+                                   bool priv = false,
+                                   MatchKind kind = MatchKind::Custom) {
     MatchRegistry::CreateResult why;
-    return r.Create("room", "DEFAULT", priv, "", locked, various, code, why);
+    return r.Create("room", "DEFAULT", kind, priv, "", code, why);
 }
 
 int main() {
@@ -30,7 +31,8 @@ int main() {
         std::string c;
         for (int i = 0; i < 3; i++) check(make(r, c) != nullptr, "create under cap");
         MatchRegistry::CreateResult why;
-        check(r.Create("x", "DEFAULT", false, "", false, false, c, why) == nullptr, "refused at cap");
+        check(r.Create("x", "DEFAULT", MatchKind::Custom, false, "", c, why) == nullptr,
+              "refused at cap");
         check(why == MatchRegistry::CreateResult::AtCapacity, "reason is AtCapacity");
         check(r.Size() == 3, "size stays at cap");
     }
@@ -61,14 +63,42 @@ int main() {
               "unknown preset falls back to DEFAULT");
     }
 
-    printf("public room policy\n");
+    // The point of #107: governance comes from KIND, and visibility is a
+    // separate, independent fact. The four combinations must all be expressible,
+    // and the two flags must always agree with each other - a locked room that
+    // cannot start itself has nothing able to begin it.
+    printf("governance follows kind, not visibility\n");
     {
-        MatchRegistry r{4};
-        std::string c;
-        auto pub = make(r, c, /*priv*/false, /*locked*/true, /*auto*/true);
-        check(pub->optionsLocked && pub->autoStart, "public room is locked and self-starting");
-        auto priv = make(r, c, /*priv*/true, /*locked*/false, /*auto*/false);
-        check(!priv->optionsLocked && !priv->autoStart, "private room keeps host control");
+        MatchRegistry r{8};
+        std::string c, offPubCode, cusPubCode;
+
+        auto offPub = make(r, offPubCode, /*priv*/false, MatchKind::Official);
+        check(offPub->optionsLocked && offPub->autoStart,
+              "official: locked and self-starting");
+
+        auto offPriv = make(r, c, /*priv*/true, MatchKind::Official);
+        check(offPriv->optionsLocked && offPriv->autoStart,
+              "official stays official when hidden");
+
+        // The combination the old code could not express at all: public, but
+        // host-run. Before the split, public MEANT locked + auto-start.
+        auto cusPub = make(r, cusPubCode, /*priv*/false, MatchKind::Custom);
+        check(!cusPub->optionsLocked && !cusPub->autoStart,
+              "public CUSTOM room keeps host control");
+
+        auto cusPriv = make(r, c, /*priv*/true, MatchKind::Custom);
+        check(!cusPriv->optionsLocked && !cusPriv->autoStart,
+              "custom stays host-run when hidden");
+
+        // The browser has to be able to tell them apart, and both are public, so
+        // the kind cannot be inferred from the listing's other fields.
+        MatchKind listedOfficial = MatchKind::Custom, listedCustom = MatchKind::Official;
+        for (const MatchListing& row : r.List()) {
+            if (row.code == offPubCode) listedOfficial = row.kind;
+            if (row.code == cusPubCode) listedCustom   = row.kind;
+        }
+        check(listedOfficial == MatchKind::Official, "listing reports the official room as official");
+        check(listedCustom   == MatchKind::Custom,   "listing reports the custom room as custom");
     }
 
     printf("listing\n");
@@ -77,7 +107,7 @@ int main() {
         std::string pubCode, privCode;
         make(r, pubCode, /*priv*/false);
         MatchRegistry::CreateResult why;
-        r.Create("secret", "DEFAULT", /*priv*/true, "abcd", false, false, privCode, why);
+        r.Create("secret", "DEFAULT", MatchKind::Custom, /*priv*/true, "abcd", privCode, why);
         check(r.List().size() == 1, "private rooms are not advertised");
         check(r.List(true).size() == 2, "...but are listed when asked for");
         check(r.List()[0].code == pubCode, "public room appears by code");

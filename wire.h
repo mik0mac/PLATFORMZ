@@ -72,6 +72,13 @@ struct MatchSummary {
     int  players    = 0;
     int  maxPlayers = 0;
     bool joinable   = false; // has room AND is in a state you can enter
+
+    // How the room is governed. The single most useful thing the browser can say
+    // about a row: OFFICIAL means the rules are fixed and it starts itself once
+    // enough people arrive, CUSTOM means somebody is running it and decides both.
+    // Not the same question as public-vs-invite-only - a public room can be
+    // either kind, and only public ones are listed here anyway.
+    MatchKind kind = MatchKind::Custom;
 };
 
 // Why a join was refused. Kept as an enum rather than a free string so the client
@@ -683,6 +690,9 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 r.players    = jo.value("p",   0);
                 r.maxPlayers = jo.value("max", 0);
                 r.joinable   = jo.value("j",   false);
+                // Absent on a server from before the split; matchKindFromWire
+                // reads that as custom, which is the safe assumption.
+                r.kind       = matchKindFromWire(jo.value("k", std::string()));
                 msg.matches.push_back(std::move(r));
             }
         }
