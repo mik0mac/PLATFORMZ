@@ -209,8 +209,15 @@ change, so it can be measured cleanly.
 - **GAMEOVER simulates forever.** The sim deliberately keeps running through
   GAMEOVER for local-parity during the client's 5 s death-FX countdown
   (`server_main.cpp:1588`). At ×20 that's full-cost ticks for matches nobody is
-  playing. Stop simulating after ~15 s and return to LOBBY (freeing the world)
-  after ~60 s — both well past `GAME_OVER_TIMER = 5`.
+  playing. Stop simulating after `GAMEOVER_SIM_SECONDS` and return to LOBBY
+  (freeing the world) after `GAMEOVER_LOBBY_SECONDS` — both well past
+  `GAME_OVER_TIMER = 5`, which two `static_assert`s now enforce.
+
+> **Retuned to 7 s / 10 s** (was 15 s / 60 s). A room in GAMEOVER is deliberately
+> unjoinable, so at 60 s a popular room advertised itself as unavailable for a
+> full minute after every match — dead air a match browser cannot afford. Lowering
+> the lobby delay alone would have made the 15 s sim-idle unreachable; the asserts
+> exist so that ordering cannot invert silently again.
 - **Drop the per-tick `std::set`s.** `gatherClaimedSlots()` and
   `BroadcastState`'s `connectedSlots` each build a red-black tree per tick for a
   roster of ≤ 8. Use a `uint8_t` bitmask.

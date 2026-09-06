@@ -10,7 +10,7 @@ public custom room - the combination that could not be expressed before the spli
     cd server && ./gameserver &
     python3 test/probe_official.py
 
-Takes ~30 s: PUBLIC_AUTOSTART_SECONDS is 20, and waiting it out is the test.
+Takes ~25 s: PUBLIC_AUTOSTART_SECONDS is 10, and waiting it out is the test.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,7 +18,7 @@ from probe import C, OPTS
 
 # constants.h - if these change there, change them here.
 PUBLIC_MIN_PLAYERS = 2
-PUBLIC_AUTOSTART_SECONDS = 20.0
+PUBLIC_AUTOSTART_SECONDS = 10.0
 
 fails = 0
 def check(ok, what):
