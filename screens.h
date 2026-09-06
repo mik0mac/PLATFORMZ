@@ -21,14 +21,28 @@
 #include "random.h"
 #include "wire.h"        // LeaderboardEntry, MatchSummary
 #include "ui.h"          // the immediate-mode widgets the screens are built from
+#include "audio.h"       // MasterVolumeAmpToDb/DbToAmp (the volume slider)
 
 #include <string>
 #include <vector>
 
 //MARK: Screens
-// TITLE doubles as the lobby in networked play; BROWSE and LOBBY split that in
-// two once the match browser lands (C2/C3).
-enum class GameScreen { TITLE, BROWSE, COUNTDOWN, PLAYING, GAME_OVER };
+// TITLE used to be three things at once: the menu, the local-match setup, and -
+// in networked play - the live lobby of the one room that existed. With many
+// rooms those are different places, and a player arriving could not tell which
+// of the three they were looking at.
+//
+//   TITLE   a router, and nothing else. Asks one question: what kind of game?
+//           No match options live here, and no gameplay starts from here.
+//   LOCAL   offline setup: its own options, its own map size, START.
+//   BROWSE  the rooms on a server. JOIN, QUICK MATCH, CREATE.
+//   CUSTOM  name and visibility for a room you are about to host.
+//   LOBBY   a room you are standing in: roster, its code, and either the host's
+//           controls or what it is waiting for.
+//
+// LOCAL and CUSTOM deliberately do NOT share options. A local game and an online
+// room are different things and are allowed to be configured differently.
+enum class GameScreen { TITLE, LOCAL, BROWSE, CUSTOM, LOBBY, COUNTDOWN, PLAYING, GAME_OVER };
 
 //MARK: Shell state
 // Everything the menu screens own between frames. Not the game world, not the
@@ -95,6 +109,18 @@ struct ShellState {
     // named lands us in one we never chose, so only the server knows.
     std::string inMatchCode;
     MatchKind   inMatchKind = MatchKind::Custom;
+
+    // Set when WE asked to move rooms (join / quick / create), so the welcome
+    // that lands us somewhere new can be told apart from the one every client
+    // gets on connect - and from the one that comes back after LEAVE, which
+    // would otherwise bounce us straight into the room we just left.
+    bool joinPending = false;
+    bool roomChanged = false;   // a requested move completed; the screen acts on it
+
+    // ---- Custom match setup (CUSTOM) ------------------------------------
+    std::string customName;                 // room name, defaulted from the player's
+    bool        customNameFocused = false;
+    bool        customPrivate = false;      // invite-only: hidden from the browser
 
     std::string joinCode;                   // JOIN CODE field contents
     bool        joinCodeFocused = false;
@@ -446,5 +472,350 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             UiTextCentered(s.browseStatus.c_str(), screenW, (int)by + 60, 18, c);
         }
     }
+    return out;
+}
+
+//MARK: Shared chrome
+// Master volume, pinned bottom-right on every setup screen. Rides the dB scale
+// (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left) so track travel
+// matches perceived loudness instead of bunching everything audible into the top
+// of the range. Reads and writes raylib's master volume directly - no shadow
+// copy - so it and the +/- keys can never disagree about the level.
+inline void DrawVolumeSlider(ShellState& s, int screenWidth, int screenHeight, bool uiEnabled) {
+    const float volW = 200.0f;
+    Rectangle volTrack = {screenWidth - volW - 30.0f, screenHeight - 44.0f, volW, 22.0f};
+    float volDb = MasterVolumeAmpToDb(GetMasterVolume());
+    DrawText("VOLUME", (int)volTrack.x, (int)volTrack.y - 26, 18, RAYWHITE);
+    const char* volVal = volDb <= MASTER_VOLUME_MIN_DB ? "MUTE"
+                       : TextFormat("%d dB", (int)roundf(volDb));
+    DrawText(volVal, (int)(volTrack.x + volW - MeasureText(volVal, 18)),
+             (int)volTrack.y - 26, 18, ui::OUTLINE);
+    // No feedback blip here (unlike the +/- keys): the slider shows the level on
+    // screen, and a drag would machine-gun the sound.
+    if (uiEnabled && UiSlider(volTrack, volDb, MASTER_VOLUME_MIN_DB, 0.0f, s.sliderVolumeActive))
+        SetMasterVolume(MasterVolumeDbToAmp(volDb));
+}
+
+// The roster panel, shared by LOBBY (the live room) and LOCAL (a preview of the
+// roster the offline match will build). Returns the panel's bottom edge so the
+// caller can stack under a box whose height depends on the row count.
+//
+// `players` is the client's mirror of the server's slots in networked play, and
+// the local sim's own slots offline. `myName` is passed in rather than read off
+// ShellState because it is the LIVE-TYPED name, defaults included, which only
+// main() can resolve.
+inline float DrawRosterPanel(ShellState& s, const std::vector<Player>& players,
+                             int myIndex, const std::string& myName,
+                             const MatchOptions& opt, bool networked,
+                             const std::string& roomCode, MatchKind roomKind,
+                             float top) {
+    int rowsShown;
+    int previewCount = 0;   // networked: rows to draw (slots 0..previewCount-1)
+    if (networked) {
+        // Never hide a connected human sitting above the chosen count - a
+        // mid-roster slot can be free while a higher one is taken.
+        int lastHumanSlot = -1;
+        for (int i = 0; i < (int)players.size(); ++i)
+            if (players[i].isConnected && !players[i].isBot) lastHumanSlot = i;
+        previewCount = std::min(std::max(opt.numPlayers, lastHumanSlot + 1), (int)players.size());
+        rowsShown = previewCount > 0 ? previewCount : 1;   // >=1 so the "waiting" line has a row
+    } else {
+        rowsShown = opt.numPlayers;   // the OPTIONS slider previews the roster
+    }
+
+    const float rowH = 24.0f, headerH = 30.0f;
+    // The panel grows with the roster - eight slots is 232px - and everything
+    // below it is stacked from its bottom edge. `top` is what keeps a full house
+    // from pushing the buttons off the window, which a fixed 300 did.
+    Rectangle box = {350, top, 300, headerH + rowsShown * rowH + 10.0f};
+    UiPanel(box);
+    DrawText("PLAYERS", (int)box.x + 10, (int)box.y + 8, 14, ui::OUTLINE);
+
+    // Which room this is, right-aligned in the header. The code IS the invite for
+    // an invite-only room, so a player who cannot see it cannot ask anyone to join
+    // them.
+    if (networked && !roomCode.empty()) {
+        const char* tag   = roomKind == MatchKind::Official ? "OFFICIAL" : "ROOM";
+        const char* label = TextFormat("%s %s", tag, roomCode.c_str());
+        DrawText(label, (int)(box.x + box.width - 10 - MeasureText(label, 14)),
+                 (int)box.y + 8, 14, GRAY);
+    }
+
+    if (networked) {
+        if (previewCount == 0)
+            DrawText("Waiting for players...", (int)box.x + 10, (int)(box.y + headerH), 18, GRAY);
+        // Slots 0..previewCount-1 are all occupied (human or bot), so they draw as
+        // contiguous rows.
+        for (int i = 0; i < previewCount; ++i) {
+            int  ry  = (int)(box.y + headerH + i * rowH);
+            bool you = (i == myIndex);
+            // Our row shows the live-typed name; other rows show the server-synced
+            // name, falling back to a slot label until they have set one.
+            std::string shown = you ? myName
+                : (players[i].name.empty() ? TextFormat("PLAYER %d", i + 1) : players[i].name);
+            DrawText(TextFormat("%d. %s%s", i + 1, shown.c_str(), you ? " (YOU)" : ""),
+                     (int)box.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
+        }
+    } else {
+        for (int i = 0; i < rowsShown; ++i) {
+            int ry = (int)(box.y + headerH + i * rowH);
+            if (i == 0)
+                DrawText(TextFormat("1. %s (YOU)", myName.c_str()), (int)box.x + 10, ry, 18, RAYWHITE);
+            else
+                DrawText(TextFormat("%d. %s", i + 1,
+                                    BOT_NAME_STRINGS[s.botNameOrder[(i - 1) % BOT_NAME_COUNT]]),
+                         (int)box.x + 10, ry, 18, ui::OUTLINE);
+        }
+    }
+    return box.y + box.height;
+}
+
+// The four map-size presets, as a row of START buttons. Shared by LOCAL and by a
+// custom room's host. Returns the preset name that was pressed, or "".
+inline std::string DrawMapSizeRow(float y, bool uiEnabled) {
+    const char* names[] = {"SMALL", "MEDIUM", "LARGE", "XL"};
+    for (int i = 0; i < 4; ++i) {
+        Rectangle r = {110.0f + i * 200.0f, y, 180.0f, 50.0f};
+        if (uiEnabled && UiButton(r, names[i])) return names[i];
+    }
+    return std::string();
+}
+
+//MARK: TITLE
+// A router, and nothing else. Every path below leads somewhere that configures
+// and starts a game; this screen only asks which one.
+//
+// No OPTIONS button, on purpose. Options configure the match you are about to
+// start, which makes no sense on a screen that starts nothing - and the three
+// destinations do not share a rule set anyway.
+enum class TitleAction { None, FindMatch, CustomMatch, LocalMatch, Controls, Leaderboard, Quit };
+
+inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
+                             bool networked, bool connected, bool uiEnabled,
+                             bool& nameEdited) {
+    TitleAction action = TitleAction::None;
+
+    UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE);
+
+    // Name entry stays: it is identity for every path below it.
+    UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
+    Rectangle nameBox = {350, 240, 300, 40};
+    // Let the name fill the space the UI allots but never overflow it. The
+    // tightest renderer is the lobby roster row: "%d. NAME (YOU)" at font 18
+    // inside the 300px players panel. Convert its leftover width to the field's
+    // font size (20) and let UiTextField reject chars past that budget.
+    int nameBudget = (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * 20 / 18;
+    nameEdited = UiTextField(nameBox, s.playerName, s.nameFocused,
+                             PLAYER_NAME_MAX_CHARS, 20, &s.namePristine, nameBudget);
+
+    float y = 330.0f;
+    auto row = [&](const char* label, bool enabled) {
+        Rectangle r = {350, y, 300, 52};
+        y += 60.0f;
+        if (!enabled) {
+            // DISABLED, not hidden. A button that vanishes reads as a bug; a
+            // greyed one reads as "not right now" - the same rule the browser's
+            // unjoinable rows follow.
+            UiPanel(r, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));
+            int tw = MeasureText(label, 20);
+            DrawText(label, (int)(r.x + (r.width - tw) / 2), (int)(r.y + 16), 20, GRAY);
+            return false;
+        }
+        return uiEnabled && UiButton(r, label, 20);
+    };
+
+    const bool online = networked && connected;
+    if (row("FIND A MATCH", online))  action = TitleAction::FindMatch;
+    if (row("CUSTOM MATCH", online))  action = TitleAction::CustomMatch;
+    if (row("LOCAL MATCH", true))     action = TitleAction::LocalMatch;
+
+    if (networked && !connected) {
+        UiTextCentered("CONNECTING TO SERVER...", screenWidth, (int)y + 6, 18, GRAY);
+    } else if (!networked) {
+        UiTextCentered("OFFLINE - START WITH A SERVER URL TO PLAY ONLINE",
+                       screenWidth, (int)y + 6, 16, GRAY);
+    }
+
+    float by = screenHeight - 100.0f;
+#if defined(__EMSCRIPTEN__)
+    // No QUIT in a browser tab: breaking the loop would leave a dead canvas with
+    // no way back. Closing the tab is the platform's own quit.
+    if (uiEnabled && UiButton({350, by, 300, 44}, "CONTROLS", 18)) action = TitleAction::Controls;
+#else
+    if (uiEnabled && UiButton({350, by, 140, 44}, "CONTROLS", 18)) action = TitleAction::Controls;
+    if (uiEnabled && UiButton({510, by, 140, 44}, "QUIT", 18))     action = TitleAction::Quit;
+#endif
+    // Networked-only: the table is owned and persisted by the server, so offline
+    // there is nothing behind it. Not a match option - it is a place to look, so
+    // it is allowed on the router.
+    if (online && uiEnabled && UiButton({350, by - 56.0f, 300, 40}, "LEADERBOARD", 18))
+        action = TitleAction::Leaderboard;
+
+    DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
+    return action;
+}
+
+//MARK: LOCAL
+// Offline setup. Its own options and its own map size, deliberately not shared
+// with an online room - a local game and a networked match are different things.
+enum class LocalAction { None, Start, Options, Back };
+
+struct LocalResult {
+    LocalAction action = LocalAction::None;
+    std::string mapSize;   // Start: which preset
+};
+
+inline LocalResult DrawLocalSetup(ShellState& s, const std::vector<Player>& players,
+                                  const std::string& myName, const MatchOptions& opt,
+                                  int screenWidth, int screenHeight, bool uiEnabled) {
+    LocalResult out;
+    UiTextCentered("LOCAL MATCH", screenWidth, 110, 48, RAYWHITE);
+    UiTextCentered("OFFLINE - YOU AND THE BOTS", screenWidth, 170, 18, GRAY);
+
+    const float bottom = DrawRosterPanel(s, players, /*myIndex*/ 0, myName, opt,
+                                         /*networked*/ false, "", MatchKind::Custom,
+                                         /*top*/ 240.0f);
+
+    const float startY = bottom + 26.0f;
+    std::string picked = DrawMapSizeRow(startY, uiEnabled);
+    if (!picked.empty()) { out.action = LocalAction::Start; out.mapSize = picked; }
+
+    const float by = startY + 70.0f;
+    if (uiEnabled && UiButton({300, by, 180, 44}, "OPTIONS")) out.action = LocalAction::Options;
+    if (uiEnabled && UiButton({520, by, 180, 44}, "BACK"))    out.action = LocalAction::Back;
+
+    DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
+    return out;
+}
+
+//MARK: CUSTOM
+// Name and visibility for a room you are about to host. The RULES are set in the
+// lobby afterwards, where everyone who joins can see them - setting them here,
+// before anyone has arrived, would hide them from the people they apply to.
+enum class CustomAction { None, Create, Back };
+
+inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHeight,
+                                    bool connected, bool uiEnabled) {
+    CustomAction action = CustomAction::None;
+
+    UiTextCentered("CUSTOM MATCH", screenWidth, 110, 48, RAYWHITE);
+    UiTextCentered("A ROOM YOU HOST - YOU SET THE RULES AND PRESS START",
+                   screenWidth, 170, 18, GRAY);
+
+    UiTextCentered("MATCH NAME", screenWidth, 250, 18, ui::OUTLINE);
+    UiTextField({300, 276, 400, 44}, s.customName, s.customNameFocused, 24, 22);
+
+    UiTextCentered("INVITE ONLY", screenWidth, 356, 18, ui::OUTLINE);
+    if (uiEnabled) UiToggle({470, 382, 100, 26}, s.customPrivate);
+    UiTextCentered(s.customPrivate
+                       ? "Hidden from FIND A MATCH. Share the code to let people in."
+                       : "Listed in FIND A MATCH for anyone to join.",
+                   screenWidth, 424, 16, GRAY);
+
+    if (uiEnabled && connected && UiButton({350, 480, 300, 52}, "CREATE", 20))
+        action = CustomAction::Create;
+    if (uiEnabled && UiButton({350, 546, 300, 44}, "BACK", 18))
+        action = CustomAction::Back;
+
+    DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
+    return action;
+}
+
+//MARK: LOBBY
+// A room you are standing in. What it offers depends entirely on how that room is
+// governed (#107) - offer a control the server refuses and it reads as the game
+// ignoring you.
+//
+//   custom, you host it  OPTIONS, a map size, START
+//   custom, you do not   who you are waiting on
+//   official             the head count, then the countdown. No START at all:
+//                        the server rejects options/start/endmatch from every
+//                        connection in an official room.
+enum class LobbyAction { None, Start, Options, Controls, Leaderboard, Leave };
+
+struct LobbyResult {
+    LobbyAction action = LobbyAction::None;
+    std::string mapSize;   // Start: which preset
+};
+
+inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
+                             int myIndex, const std::string& myName,
+                             const MatchOptions& opt, int screenWidth, int screenHeight,
+                             bool ready, float autoStartIn, bool uiEnabled) {
+    LobbyResult out;
+    const bool official = (s.inMatchKind == MatchKind::Official);
+
+    UiTextCentered(official ? "OFFICIAL MATCH" : "MATCH LOBBY", screenWidth, 100, 44, RAYWHITE);
+    if (!s.inMatchCode.empty())
+        UiTextCentered(TextFormat("CODE  %s", s.inMatchCode.c_str()), screenWidth, 156, 22,
+                       official ? GRAY : ui::OUTLINE);
+    if (!official && !s.inMatchCode.empty())
+        UiTextCentered("SHARE THAT CODE TO INVITE ANYONE", screenWidth, 186, 15, GRAY);
+
+    // Host is whatever slot the SERVER flagged. We do not recompute it: the host
+    // is the room's creator, not the lowest slot, and an official room has none.
+    int hostSlot = -1;
+    for (int i = 0; i < (int)players.size(); ++i)
+        if (players[i].isHost) { hostSlot = i; break; }
+    const bool amHost = (myIndex >= 0 && myIndex == hostSlot);
+
+    const float bottom = DrawRosterPanel(s, players, myIndex, myName, opt, /*networked*/ true,
+                                         s.inMatchCode, s.inMatchKind, /*top*/ 220.0f);
+    const float startY = bottom + 26.0f;
+
+    if (!ready) {
+        const char* msg = s.serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
+                        : myIndex >= 0 ? "JOINING..." : "CONNECTING...";
+        UiTextCentered(msg, screenWidth, (int)startY + 14, 20, GRAY);
+    } else if (official) {
+        // No host to wait on: this room waits on a HEAD COUNT, then on a clock.
+        // Saying neither left a window in which the room had silently committed
+        // to starting and nobody in it could tell.
+        int humans = 0;
+        for (const Player& p : players) if (p.isConnected && !p.isBot) humans++;
+        const int needed = PUBLIC_MIN_PLAYERS - humans;
+        if (autoStartIn > 0.0f) {
+            UiTextCentered(TextFormat("MATCH STARTING IN %d...", (int)ceilf(autoStartIn)),
+                           screenWidth, (int)startY + 14, 26, RAYWHITE);
+        } else if (needed > 0) {
+            UiTextCentered(needed == 1 ? "WAITING FOR 1 MORE PLAYER..."
+                                       : TextFormat("WAITING FOR %d MORE PLAYERS...", needed),
+                           screenWidth, (int)startY + 14, 20, GRAY);
+        } else {
+            // Head count met but the countdown has not reached us yet - one
+            // packet's worth of gap, not an error.
+            UiTextCentered("STARTING...", screenWidth, (int)startY + 14, 20, GRAY);
+        }
+    } else if (amHost) {
+        std::string picked = DrawMapSizeRow(startY, uiEnabled);
+        if (!picked.empty()) { out.action = LobbyAction::Start; out.mapSize = picked; }
+    } else if (hostSlot >= 0) {
+        std::string hostName = !players[hostSlot].name.empty()
+            ? players[hostSlot].name : TextFormat("PLAYER %d", hostSlot + 1);
+        UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
+                       screenWidth, (int)startY + 14, 20, GRAY);
+    } else {
+        // Custom room with nobody hosting it: only possible in the gap between a
+        // host leaving and the next state packet.
+        UiTextCentered("WAITING FOR A HOST...", screenWidth, (int)startY + 14, 20, GRAY);
+    }
+
+    // A GRID, filled in order, not a column. OPTIONS is conditional, so a column
+    // would leave a hole wherever it is hidden - and four stacked rows under a
+    // full eight-slot roster run off the bottom of the window.
+    float bx = 300.0f, by = startY + (amHost && !official ? 70.0f : 44.0f);
+    auto button = [&](const char* label) {
+        Rectangle r = {bx, by, 180, 44};
+        if (bx < 400.0f) { bx = 520.0f; } else { bx = 300.0f; by += 52.0f; }
+        return uiEnabled && UiButton(r, label);
+    };
+    // OPTIONS reconfigures the whole match, so it is the host's alone - and in an
+    // official room it belongs to nobody, because the preset is the point.
+    if (amHost && !official && button("OPTIONS")) out.action = LobbyAction::Options;
+    if (button("LEADERBOARD")) out.action = LobbyAction::Leaderboard;
+    if (button("CONTROLS"))    out.action = LobbyAction::Controls;
+    if (button("LEAVE"))       out.action = LobbyAction::Leave;
+
+    DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
     return out;
 }
