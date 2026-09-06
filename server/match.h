@@ -213,10 +213,11 @@ struct Match {
     // WS and UDP clients share one registry; the id order is stable
     // (deterministic state serialization). Protected by clientMutex.
     std::map<uint64_t, ConnectedClient> clients;
-    // UDP source endpoint -> connId, so an inbound datagram finds its client.
-    // UDP only. Protected by clientMutex (same lock as `clients`).
-    std::map<boost::asio::ip::udp::endpoint, uint64_t> udpIndex;
     std::mutex clientMutex;
+    // NOTE: udpIndex is NOT here. Endpoint -> connId is server-wide, because there
+    // is one UDP socket for the whole process and a datagram has to be routed to
+    // its match before any match's lock is taken. It lives in server_main.cpp as
+    // g_udpIndex under g_connMutex.
 
     // Connected human count, mirrored out of `clients` so the directory can list
     // this match WITHOUT taking clientMutex. Listing runs on an io thread while

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """B1: the directory verbs - listing rooms and making them.
 
-Entering a room is A3 (it needs connection -> match routing), so `join`, `quick`
-and `leave` are expected to be REFUSED here rather than silently ignored. A client
-that asks should get an answer, not a timeout.
+Covers listing, creating, paging and refusals. Actually moving between rooms is
+exercised by probe_multimatch.py.
 
     cd server && ./gameserver &
     python3 test/probe_directory.py
@@ -38,6 +37,11 @@ print("create - public")
 before = lst.get("total", 0)
 a.send({"type": "create", "n": "PUBLIC ROOM", "pre": "DEFAULT", "priv": False, "code": ""})
 time.sleep(0.8)
+check(len(a.created) == 1, f"create returns the room's code: {a.created}")
+# `create` replies with the code and puts you in the room; it does NOT return a
+# list any more, so ask for one.
+a.send({"type": "list", "cur": 0})
+time.sleep(0.6)
 lst = a.matchlists[-1]
 check(lst.get("total", 0) == before + 1, f"list grew to {lst.get('total')}")
 names = [r.get("n") for r in lst.get("m", [])]
@@ -47,6 +51,8 @@ print("create - private stays hidden")
 before = lst.get("total", 0)
 a.send({"type": "create", "n": "SECRET", "pre": "DEFAULT", "priv": True, "code": "abcd"})
 time.sleep(0.8)
+a.send({"type": "list", "cur": 0})
+time.sleep(0.6)
 lst = a.matchlists[-1]
 check(lst.get("total", 0) == before, "a private room does NOT appear in the public list")
 
@@ -71,11 +77,11 @@ if p0.get("next", -1) > 0:
 else:
     check(False, "expected more than one page after filling the server")
 
-print("not-yet-implemented verbs answer rather than hang")
+print("refusals are answered, not left to time out")
 n = len(a.joinfails)
 a.send({"type": "join", "m": "ZZZZ", "code": ""})
 time.sleep(0.5)
-check(len(a.joinfails) > n, "join gets a refusal (routing arrives in A3)")
+check(len(a.joinfails) > n, "join to an unknown room gets a refusal")
 
 a.alive = False
 a.send({"type": "goodbye"})

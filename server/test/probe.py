@@ -48,6 +48,7 @@ class C:
         self.leaderboards = []     # list of (phase_when_received, [(name, score)])
         self.matchlists   = []     # directory replies: dicts as sent
         self.joinfails    = []     # refusal reasons, in order
+        self.created      = []     # codes of rooms we made
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.connect((HOST, PORT)); self.s.settimeout(0.2)
         self.parts = {}
@@ -97,6 +98,8 @@ class C:
                     self.leaderboards.append((self.phase, rows))
                 elif t == "matchlist":
                     self.matchlists.append(j)
+                elif t == "created":
+                    self.created.append(j.get("m", ""))
                 elif t == "joinfail":
                     self.joinfails.append(j.get("why", "?"))
 

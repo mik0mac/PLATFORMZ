@@ -88,6 +88,20 @@ inline JoinFailure joinFailureFromWire(const std::string& s) {
     return JoinFailure::Unknown;
 }
 
+// The wire token for a failure - the inverse of joinFailureFromWire, used by the
+// server when it builds a refusal.
+inline const char* joinFailureWire(JoinFailure f) {
+    switch (f) {
+        case JoinFailure::NotFound:    return "notfound";
+        case JoinFailure::Full:        return "full";
+        case JoinFailure::BadCode:     return "badcode";
+        case JoinFailure::InProgress:  return "inprogress";
+        case JoinFailure::ServerFull:  return "server_full";
+        case JoinFailure::RateLimited: return "rate_limited";
+        default:                       return "unknown";
+    }
+}
+
 // What to put on screen. The client should never show raw wire tokens.
 inline const char* joinFailureText(JoinFailure f) {
     switch (f) {
@@ -103,7 +117,7 @@ inline const char* joinFailureText(JoinFailure f) {
 
 struct ServerMessage {
     enum class Type { None, Welcome, State, Full, VersionMismatch, Leaderboard,
-                      MatchList, JoinFail, Unknown };
+                      MatchList, JoinFail, Created, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -147,6 +161,12 @@ struct ServerMessage {
 
     // JoinFail only.
     JoinFailure joinFail = JoinFailure::None;
+
+    // Created only: the room you just made. You are placed in it automatically,
+    // but you still need the code to invite anyone - and a PRIVATE room is hidden
+    // from the match list, so this reply is the only way its creator ever learns
+    // it. Without this you could make a room nobody could be told about.
+    std::string createdCode;
 };
 
 //MARK: Outbound - start request
@@ -666,6 +686,11 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 msg.matches.push_back(std::move(r));
             }
         }
+        return msg;
+    }
+    if (type == "created") {
+        msg.type        = ServerMessage::Type::Created;
+        msg.createdCode = j.value("m", std::string());
         return msg;
     }
     if (type == "joinfail") {

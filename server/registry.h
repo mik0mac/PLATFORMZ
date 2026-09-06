@@ -149,6 +149,18 @@ public:
 
     size_t Size() const { std::lock_guard<std::mutex> lk(mutex_); return entries_.size(); }
 
+    // Every live match, for the sim loop to tick. Returns shared_ptrs so a room
+    // reaped mid-beat stays alive until this beat is done with it - the alternative
+    // is the driver holding the registry lock across every tick, which would put
+    // every join and every list behind the whole simulation.
+    std::vector<std::shared_ptr<Match>> All() const {
+        std::vector<std::shared_ptr<Match>> out;
+        std::lock_guard<std::mutex> lk(mutex_);
+        out.reserve(entries_.size());
+        for (const auto& [code, e] : entries_) out.push_back(e.match);
+        return out;
+    }
+
     // Totals for the heartbeat and /status. Reads the live fields as atomics, so
     // like List() it never takes a match's own mutexes and cannot be delayed by a
     // simulation mid-tick.
