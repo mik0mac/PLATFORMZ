@@ -140,14 +140,33 @@ public:
             // Live fields via atomics only - never the match's own mutexes.
             r.phase      = e.match->gamePhase.load();
             r.players    = e.match->connectedCount.load();
-            r.maxPlayers = GAMESPACE_NUMBER_OF_PLAYERS;
-            r.joinable   = r.players < r.maxPlayers;
+            // The match's OWN roster, not the global cap. A match that started
+            // with four humans has four slots, and a fifth player cannot join it
+            // however empty the arena looks - reporting 8 here made the browser
+            // offer joins that were always refused.
+            r.maxPlayers = e.match->rosterSize.load();
+            // A GAMEOVER room is winding down and about to return to its lobby;
+            // dropping someone into those last seconds is worse than making them
+            // wait for it.
+            r.joinable   = r.players < r.maxPlayers && r.phase != Phase::GAMEOVER;
             out.push_back(std::move(r));
         }
         return out;
     }
 
     size_t Size() const { std::lock_guard<std::mutex> lk(mutex_); return entries_.size(); }
+
+    // Every live match, for the sim loop to tick. Returns shared_ptrs so a room
+    // reaped mid-beat stays alive until this beat is done with it - the alternative
+    // is the driver holding the registry lock across every tick, which would put
+    // every join and every list behind the whole simulation.
+    std::vector<std::shared_ptr<Match>> All() const {
+        std::vector<std::shared_ptr<Match>> out;
+        std::lock_guard<std::mutex> lk(mutex_);
+        out.reserve(entries_.size());
+        for (const auto& [code, e] : entries_) out.push_back(e.match);
+        return out;
+    }
 
     // Totals for the heartbeat and /status. Reads the live fields as atomics, so
     // like List() it never takes a match's own mutexes and cannot be delayed by a

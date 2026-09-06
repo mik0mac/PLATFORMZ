@@ -136,6 +136,22 @@ EgressCounters g_egress;
 // by GET /status, which is the cheapest way to answer "did it restart?".
 std::atomic<int> g_uptimeSeconds{0};
 
+//MARK: Connection routing
+// Which match each connection is in, and how a UDP datagram finds its connection.
+// Both are server-wide: there is one UDP socket, and a packet has to be routed to
+// a match BEFORE any match lock is taken.
+//
+// LOCK ORDER: g_connMutex > match.gameMutex > match.clientMutex > udpSendMutex.
+//
+// The sim thread does not take g_connMutex on its per-tick path - a match's tick
+// touches only its own clients map, so routing can never convoy behind a
+// simulation. The once-a-second reaper in the driver loop does take it, to move a
+// destroyed room's clients home; that is outside every match lock, so it obeys the
+// order above.
+std::map<uint64_t, std::string> g_connMatch;   // connId -> match code ("" = homeless)
+std::map<udp::endpoint, uint64_t> g_udpIndex;  // UDP source -> connId
+std::mutex g_connMutex;
+
 // Monotonic connection id. Process-level, not per-match: an id must stay unique
 // across every match so a stale packet can never be mistaken for a live client.
 std::atomic<uint64_t> nextConnId{1};
@@ -163,6 +179,9 @@ std::shared_ptr<Match> g_defaultMatch;
 // the definitions live just after the Session class.
 static void SendToClient(const ConnectedClient& c, const std::string& msg);
 static void HandleClientMessage(uint64_t connId, const std::string& msg);
+// Which match a connection is bound to; defined with the routing helpers below,
+// but Session::Read needs it to clean up the right room on disconnect.
+static std::shared_ptr<Match> MatchForConn(uint64_t connId);
 
 // Lowest player slot not owned by a connected client, or -1 if the server is
 // full. Caller MUST hold gameMutex (reads players) AND clientMutex (reads clients).
@@ -194,7 +213,7 @@ void Match::ReapIdleUdpClients() {
             now - it->second.lastSeenSec > timeout) {
             std::cout << "UDP player " << it->second.playerId
                       << " timed out. Active: " << (clients.size() - 1) << "\n";
-            udpIndex.erase(it->second.udpEndpoint);
+            { std::lock_guard<std::mutex> cl(g_connMutex); g_udpIndex.erase(it->second.udpEndpoint); }
             it = clients.erase(it);
             connectedCount.store((int)clients.size());
         } else {
@@ -350,6 +369,56 @@ void Match::ServiceAutoStart(Clock::time_point now) {
         autoStartArmed = false;
         startRequested = true;   // consumed by the normal start path next tick
         std::cout << "Auto-start firing\n";
+    }
+}
+
+//MARK: Join in progress
+// Hand a bot's slot to a human who has just joined a live match.
+//
+// WHAT IS INHERITED AND WHAT IS NOT, because "take over the bot" is ambiguous and
+// the wrong split is either unfair or miserable:
+//
+//   position/velocity  INHERITED. A valid, in-world spot. Spawning fresh mid-match
+//                      risks dropping someone inside a platform or on top of a
+//                      firefight, and placePlayersSpread only makes sense against
+//                      an empty arena.
+//   health/fuel/ammo   RESET. Inheriting a bot on 5 HP means joining a match is
+//                      usually instant death, which is a bad first five seconds.
+//   score              RESET. You did not earn the bot's points, and the scoreboard
+//                      credits at match end - inheriting would put unearned points
+//                      on a permanent leaderboard.
+//   alive              REVIVED. ClaimFreeSlot does not check isAlive, so without
+//                      this you can join straight into a corpse and spectate a
+//                      match you never played.
+//   colour             RESET to this slot's human colour. Otherwise the newcomer
+//                      renders in bot magenta for the rest of the match.
+//
+// Caller holds gameMutex. Safe in any phase: in LOBBY there is no world yet and
+// this is a harmless no-op on preview data.
+void Match::TakeOverSlot(int slot, const std::string& joinerName) {
+    auto& players = gameSpace.getPlayers();
+    if (slot < 0 || slot >= (int)players.size()) return;
+    Player& p = players[slot];
+
+    const bool wasBot = p.isBot;
+    p.isBot   = false;
+    p.isAlive = true;
+    p.health  = PLAYER_STARTING_HEALTH;
+    p.fuel    = PLAYER_STARTING_FUEL;
+    p.ammo    = PLAYER_STARTING_AMMO;
+    p.score   = 0;
+    p.leaveGraceSec      = -1.0f;   // cancel any mid-match-leaver countdown
+    p.deathBurstSpawned  = false;
+    p.isSpectating       = false;
+    p.spectatingTimer    = p.countdownToSpectating;
+    assignPlayerColor(p, slot);
+
+    // Only announce a real mid-match takeover. A lobby join is already visible in
+    // the roster, and saying it there would be noise.
+    if (wasBot && gamePhase.load() == Phase::PLAYING) {
+        const std::string who = joinerName.empty() ? p.name : joinerName;
+        Message msg(MSG_TYPE_JOINED_GAME, who, who, p.id, p.id);
+        gameSpace.emitMessage(msg);
     }
 }
 
@@ -949,30 +1018,47 @@ public:
 
             // Assign player slot - acquire locks in a consistent order:
             // always gameMutex before clientMutex to match SimulationLoop.
+            // ?match=CODE on the upgrade URL picks the room - that is how an
+            // invite link works. Unknown or absent lands in the default room, so
+            // every deployed client keeps working exactly as before.
+            std::string targetCode =
+                clampName(QueryParam(std::string(self->req_.target()), "match"));
+            auto target = targetCode.empty() ? nullptr : g_registry.Find(targetCode);
+            if (!target) { target = g_defaultMatch; targetCode = g_defaultCode; }
+
             int playerId = -1;
             {
-                std::lock_guard<std::mutex> gg(g_defaultMatch->gameMutex);
-                std::lock_guard<std::mutex> gc(g_defaultMatch->clientMutex);
+                std::lock_guard<std::mutex> gg(target->gameMutex);
+                std::lock_guard<std::mutex> gc(target->clientMutex);
                 // Reap eagerly, not just on the periodic tick: a stale UDP slot
                 // (e.g. a client whose network identity changed across a sleep)
                 // must not be able to push this new WS client above it.
-                g_defaultMatch->ReapIdleUdpClients();
-                playerId = g_defaultMatch->ClaimFreeSlot();
+                target->ReapIdleUdpClients();
+                playerId = target->ClaimFreeSlot();
                 if (playerId != -1) {
                     self->connId_ = nextConnId++;
+                    // Mid-match this slot is a live bot; hand its body over. Every
+                    // path that seats a human has to do this, not just the
+                    // join-by-code one - a latecomer CONNECTING to a running match
+                    // arrives here, and without it they inherited the bot's score
+                    // and its magenta colour.
+                    target->TakeOverSlot(playerId, std::string());
                     ConnectedClient c;
                     c.playerId  = playerId;
                     c.transport = Transport::WS;
                     c.session   = self;
-                    g_defaultMatch->clients[self->connId_] = c;
-                    g_defaultMatch->connectedCount.store((int)g_defaultMatch->clients.size());
+                    target->clients[self->connId_] = c;
+                    { std::lock_guard<std::mutex> cl(g_connMutex);
+                      g_connMatch[self->connId_] = targetCode; }
+                    target->connectedCount.store((int)target->clients.size());
                     // Note: no bot-slot refresh here. Bots exist only during a match
                     // (set at match start + reconciled each sim tick), so the lobby
                     // stays bot-free and a mid-match join's slot yields on the next
                     // tick's reconcile (see SimulationLoop). Marking bots here would
                     // also invert the gameMutex->clientMutex order we hold above.
                     std::cout << "Client connected -> player slot " << playerId
-                              << ". Active: " << g_defaultMatch->clients.size() << "\n";
+                              << " in " << targetCode
+                          << ". Active: " << target->clients.size() << "\n";
                 }
             }
 
@@ -996,7 +1082,7 @@ public:
             // Send welcome with the assigned slot + the current platform layout
             // (empty in the lobby; the client renders from it instead of running
             // generate()). Re-sent to everyone when a match (re)starts.
-            self->Send(g_defaultMatch->buildWelcome(playerId));
+            self->Send(target->buildWelcome(playerId));
             // All-time table, right behind the welcome. The client's LEADERBOARD
             // modal lives on the title screen, so a client that has just joined and
             // never seen a match end still needs it.
@@ -1068,15 +1154,23 @@ private:
         ws_.async_read(buffer_,
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) {
-                    std::lock_guard<std::mutex> lock(g_defaultMatch->clientMutex);
-                    auto it = g_defaultMatch->clients.find(self->connId_);
-                    if (it != g_defaultMatch->clients.end()) {
-                        std::cout << "Player " << it->second.playerId
-                                  << " disconnected. Active: "
-                                  << (g_defaultMatch->clients.size() - 1) << "\n";
-                        g_defaultMatch->clients.erase(it);
-                        g_defaultMatch->connectedCount.store((int)g_defaultMatch->clients.size());
+                    // Whichever room holds this connection, not necessarily the
+                    // default one.
+                    auto m = MatchForConn(self->connId_);
+                    if (!m) m = g_defaultMatch;
+                    {
+                        std::lock_guard<std::mutex> lock(m->clientMutex);
+                        auto it = m->clients.find(self->connId_);
+                        if (it != m->clients.end()) {
+                            std::cout << "Player " << it->second.playerId
+                                      << " disconnected. Active: "
+                                      << (m->clients.size() - 1) << "\n";
+                            m->clients.erase(it);
+                            m->connectedCount.store((int)m->clients.size());
+                        }
                     }
+                    { std::lock_guard<std::mutex> cl(g_connMutex);
+                      g_connMatch.erase(self->connId_); }
                     return;
                 }
 
@@ -1133,6 +1227,276 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
     }
 }
 
+//MARK: Routing helpers
+static std::string buildJoinFail(const char* why);
+
+// The match a connection currently belongs to, or nullptr if it has none.
+static std::shared_ptr<Match> MatchForConn(uint64_t connId) {
+    std::string code;
+    {
+        std::lock_guard<std::mutex> lk(g_connMutex);
+        auto it = g_connMatch.find(connId);
+        if (it == g_connMatch.end()) return nullptr;
+        code = it->second;
+    }
+    return code.empty() ? nullptr : g_registry.Find(code);
+}
+
+// Take a connection out of whatever match holds it, returning its record so the
+// caller can put it somewhere else. The slot it vacates is left to the match's
+// own per-tick reconcile, exactly as a disconnect is.
+static bool DetachConn(uint64_t connId, ConnectedClient& out) {
+    auto m = MatchForConn(connId);
+    if (!m) return false;
+    {
+        std::lock_guard<std::mutex> lock(m->clientMutex);
+        auto it = m->clients.find(connId);
+        if (it == m->clients.end()) return false;
+        out = it->second;
+        m->clients.erase(it);
+        m->connectedCount.store((int)m->clients.size());
+    }
+    std::lock_guard<std::mutex> lk(g_connMutex);
+    g_connMatch[connId].clear();
+    return true;
+}
+
+// Put a connection into a match and tell it which slot it got. A client learns
+// "which body is mine" ONLY from a welcome, so binding without sending one leaves
+// it rendering and steering as whatever slot it held before.
+// `why` receives the wire token for a refusal (see joinFailureFromWire in
+// wire.h, which is how the client turns it into something readable).
+static bool AttachConn(uint64_t connId, const std::string& code,
+                       ConnectedClient rec, const char*& why) {
+    auto m = g_registry.Find(code);
+    if (!m) { why = "notfound"; return false; }
+
+    int slot = -1;
+    {
+        std::lock_guard<std::mutex> gg(m->gameMutex);
+        std::lock_guard<std::mutex> gc(m->clientMutex);
+        m->ReapIdleUdpClients();
+        slot = m->ClaimFreeSlot();
+        if (slot != -1) {
+            // Mid-match, this slot is a live bot: hand its body over rather than
+            // leaving the newcomer as a magenta bot with someone else's score.
+            m->TakeOverSlot(slot, rec.name);
+            rec.playerId  = slot;
+            rec.hasInput  = false;      // never carry aim or a fire latch across rooms
+            rec.lastInput = PlayerInput{};
+            rec.firePending = false;
+            rec.nameDirty = true;       // re-apply our name onto the new slot
+            rec.lastSeenSec = NowSec(); // arrive alive, not with the old room's stamp
+            m->clients[connId] = rec;
+            m->connectedCount.store((int)m->clients.size());
+        }
+    }
+    if (slot == -1) { why = "full"; return false; }
+
+    { std::lock_guard<std::mutex> lk(g_connMutex); g_connMatch[connId] = code; }
+    // Off every match lock, like every other send site.
+    SendToClient(rec, m->welcomeFor(rec));
+    SendToClient(rec, buildLeaderboard());
+    return true;
+}
+
+// Move a connection into `code`, refusing with a reason the client can render.
+// Private rooms need their join code; a wrong one is refused the same way a
+// missing room is, so probing cannot distinguish "no such room" from "wrong code"
+// by timing or reply.
+static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
+                            const std::string& code, const std::string& joinCode) {
+    ConnectedClient rec;
+    MatchEntry entry;
+    const char* why = "unknown";
+
+    // Refuse to the sink the CALLER already handed us, rather than looking the
+    // connection up again: when that lookup missed it sent to a
+    // default-constructed record - no session, no endpoint - so the refusal went
+    // nowhere and the client just waited. Silence is the one thing a refusal must
+    // never be.
+    auto refuse = [&](const char* token) { SendToClient(caller, buildJoinFail(token)); };
+
+    if (!g_registry.FindEntry(code, entry)) { refuse("notfound"); return; }
+    if (entry.isPrivate && entry.joinCode != joinCode) { refuse("badcode"); return; }
+
+    // Already there: re-welcome rather than churn the roster, so a duplicate join
+    // is harmless instead of costing the player their slot.
+    if (auto cur = MatchForConn(connId)) {
+        if (cur == entry.match) {
+            std::lock_guard<std::mutex> lock(cur->clientMutex);
+            auto it = cur->clients.find(connId);
+            if (it != cur->clients.end()) SendToClient(it->second, cur->welcomeFor(it->second));
+            return;
+        }
+    }
+
+    if (!DetachConn(connId, rec)) { refuse("notfound"); return; }
+    if (!AttachConn(connId, code, rec, why)) {
+        // Put them back where they were rather than stranding them nowhere.
+        const char* ignored = "";
+        AttachConn(connId, g_defaultCode, rec, ignored);
+        refuse(why);
+        return;
+    }
+    std::cout << "conn " << connId << " -> match " << code << "\n";
+}
+
+//MARK: Directory
+// The verbs that operate on the ROOM LIST rather than on a match: what exists,
+// and making a new one. Entering a room is A3's job - it needs the connection ->
+// match routing that does not exist yet - so `join`, `quick` and `leave` are not
+// handled here.
+//
+// Reply size is capped so it stays one datagram. That was once a correctness
+// requirement (a chunked list could destroy an in-flight welcome against the old
+// single-slot reassembler) but #100 fixed that; it is now about keeping an
+// unauthenticated UDP `list` from being an amplification vector, which E1 closes
+// properly.
+const size_t DIR_LIST_BUDGET_BYTES = 1160;   // under UDP_SAFE_DATAGRAM with slack
+// Rows per page. Deliberately BELOW MATCH_MAX_CONCURRENT: set at or above it and
+// every list fits one page, so the paging path never runs and quietly rots until
+// the day the match cap is raised - at which point the browser would silently
+// show a truncated list. 8 keeps paging on the tested path from day one, and
+// smaller replies also shrink the amplification window E1 has to close.
+const int    DIR_LIST_MAX_ROWS     = 8;
+static_assert(DIR_LIST_MAX_ROWS < MATCH_MAX_CONCURRENT,
+              "page size must stay under the match cap or paging is unreachable");
+
+static std::string buildMatchList(int cursor) {
+    std::vector<MatchListing> all = g_registry.List(/*includePrivate*/ false);
+    // Stable order, so paging can't show the same room twice or skip one as
+    // rooms come and go between requests.
+    std::sort(all.begin(), all.end(),
+              [](const MatchListing& a, const MatchListing& b) { return a.code < b.code; });
+
+    if (cursor < 0) cursor = 0;
+    std::string rows;
+    int i = cursor, emitted = 0;
+    for (; i < (int)all.size() && emitted < DIR_LIST_MAX_ROWS; ++i) {
+        const MatchListing& r = all[i];
+        std::string row = "{\"c\":"   + js(r.code)
+                        + ",\"n\":"   + js(r.name)
+                        + ",\"pre\":" + js(r.presetName)
+                        + ",\"ph\":"  + js(phaseString(r.phase))
+                        + ",\"p\":"   + ji(r.players)
+                        + ",\"max\":" + ji(r.maxPlayers)
+                        + ",\"j\":"   + jb(r.joinable) + "}";
+        // Stop before overrunning the datagram rather than after.
+        if (rows.size() + row.size() + 2 > DIR_LIST_BUDGET_BYTES) break;
+        if (!rows.empty()) rows += ",";
+        rows += row;
+        emitted++;
+    }
+    const bool more = i < (int)all.size();
+    return std::string("{\"type\":\"matchlist\",\"cur\":") + ji(cursor)
+         + ",\"next\":" + ji(more ? i : -1)
+         + ",\"total\":" + ji((int)all.size())
+         + ",\"m\":[" + rows + "]}";
+}
+
+// Tell the creator which room they just made. Load-bearing for a PRIVATE room:
+// it is hidden from the match list, so this is the only place its code is ever
+// revealed. Without it you could create a room and have no way to invite anyone.
+static std::string buildCreated(const std::string& code) {
+    return std::string("{\"type\":\"created\",\"m\":") + js(code) + "}";
+}
+
+static std::string buildJoinFail(const char* why) {
+    return std::string("{\"type\":\"joinfail\",\"why\":") + js(why) + "}";
+}
+
+// Returns true if the message was a directory verb (handled here, or explicitly
+// refused), false if it belongs to a match.
+static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
+                                  const std::string& msg) {
+    if (msg.find("\"type\":\"list\"") != std::string::npos) {
+        SendToClient(c, buildMatchList((int)parseUInt(msg, "cur", 0)));
+        return true;
+    }
+
+    if (msg.find("\"type\":\"create\"") != std::string::npos) {
+        const std::string name    = clampName(parseString(msg, "n"));
+        const std::string preset  = clampName(parseString(msg, "pre"));
+        const std::string code    = clampName(parseString(msg, "code"));
+        const bool        isPriv  = parseBool(msg, "priv", false);
+
+        // A public room is hostless: nobody may retune or start it, so it starts
+        // itself once PUBLIC_MIN_PLAYERS arrive. A private room keeps the host
+        // rule, since whoever made it is there deliberately.
+        MatchRegistry::CreateResult why;
+        std::string newCode;
+        auto m = g_registry.Create(name, preset.empty() ? "DEFAULT" : preset,
+                                   isPriv, code,
+                                   /*optionsLocked*/ !isPriv, /*autoStart*/ !isPriv,
+                                   newCode, why);
+        if (!m) {
+            SendToClient(c, buildJoinFail("server_full"));
+            std::cout << "Create refused: at capacity (" << g_registry.Size() << ")\n";
+            return true;
+        }
+        // The world does not exist until a match starts; give it its lobby slots
+        // and a welcome fragment now, exactly as the default room gets at boot.
+        {
+            std::lock_guard<std::mutex> lock(m->gameMutex);
+            m->gameSpace.spawnPlayers();
+            m->rosterSize.store((int)m->gameSpace.getPlayers().size());
+            m->rebuildWelcomeStatic();
+        }
+        std::cout << "Match " << newCode << " created"
+                  << (isPriv ? " (private)" : " (public, locked + auto-start)")
+                  << " preset=" << (preset.empty() ? "DEFAULT" : preset) << "\n";
+        // Tell them the code, then put them in it - making a room and not being in
+        // it would be a strange thing to offer.
+        SendToClient(c, buildCreated(newCode));
+        MoveConnToMatch(connId, c, newCode, code);
+        return true;
+    }
+
+    if (msg.find("\"type\":\"join\"") != std::string::npos) {
+        const std::string want = clampName(parseString(msg, "m"));
+        const std::string code = clampName(parseString(msg, "code"));
+        MoveConnToMatch(connId, c, want, code);
+        return true;
+    }
+
+    if (msg.find("\"type\":\"quick\"") != std::string::npos) {
+        // Fullest joinable public lobby, else make one. One round trip, and the
+        // "fullest" rule packs players together instead of scattering one each
+        // across empty rooms.
+        std::string best;
+        int bestPlayers = -1;
+        for (const MatchListing& r : g_registry.List(/*includePrivate*/ false)) {
+            if (r.phase != Phase::LOBBY || !r.joinable) continue;
+            if (r.players > bestPlayers) { bestPlayers = r.players; best = r.code; }
+        }
+        if (best.empty()) {
+            MatchRegistry::CreateResult why;
+            auto m = g_registry.Create("QUICK MATCH", "DEFAULT", false, "",
+                                       /*optionsLocked*/ true, /*autoStart*/ true,
+                                       best, why);
+            if (!m) { SendToClient(c, buildJoinFail("server_full")); return true; }
+            std::lock_guard<std::mutex> lock(m->gameMutex);
+            m->gameSpace.spawnPlayers();
+            m->rosterSize.store((int)m->gameSpace.getPlayers().size());
+            m->rebuildWelcomeStatic();
+            std::cout << "Match " << best << " created for quick match\n";
+        }
+        MoveConnToMatch(connId, c, best, "");
+        return true;
+    }
+
+    if (msg.find("\"type\":\"leave\"") != std::string::npos) {
+        // Back to the default room, which is the closest thing to a lobby until
+        // the client grows a browser screen (C2/C3). Leaving to NO match would be
+        // the eventual shape, but a client with nowhere to be would simply stop
+        // receiving state and look frozen.
+        MoveConnToMatch(connId, c, g_defaultCode, "");
+        return true;
+    }
+    return false;
+}
+
 //MARK: Handle client message
 // -------------------------------------------------------------------------
 // Dispatch one inbound text frame from an already-registered client (WS or UDP).
@@ -1141,6 +1505,23 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
 // this is called, so here the client always exists in `clients`.
 // -------------------------------------------------------------------------
 void Match::HandleMessage(uint64_t connId, const std::string& msg) {
+    // Directory verbs first: they are about the room LIST, not this room, and a
+    // connection can ask about them whatever match it happens to be in.
+    //
+    // Copy the sink out under the lock, then release it BEFORE writing to a
+    // socket - the same discipline every other send site here follows, so a slow
+    // client can never stall the sim behind clientMutex.
+    {
+        ConnectedClient sink;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            auto it = clients.find(connId);
+            if (it != clients.end()) { sink = it->second; found = true; }
+        }
+        if (found && HandleDirectoryMessage(connId, sink, msg)) return;
+    }
+
     //MARK: Msg: hello
     // Handshake / keepalive: (re)send the welcome to this client. UDP clients
     // resend hello until welcomed (unreliable transport); a WS client's hello
@@ -1170,7 +1551,10 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         if (it != clients.end()) {
             std::cout << "Player " << it->second.playerId << " said goodbye. Active: "
                       << (clients.size() - 1) << "\n";
-            if (it->second.transport == Transport::UDP) udpIndex.erase(it->second.udpEndpoint);
+            if (it->second.transport == Transport::UDP) {
+                std::lock_guard<std::mutex> cl(g_connMutex);
+                g_udpIndex.erase(it->second.udpEndpoint);
+            }
             clients.erase(it);
             connectedCount.store((int)clients.size());
         }
@@ -1306,11 +1690,28 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
     }
 }
 
-// Router: find the match this connection belongs to, and forward. Only the
-// default room exists today, so that lookup is a constant; A3 turns it into a
-// real one (connId -> match) and handles the directory verbs ahead of it.
+// Router: find the match this connection belongs to, and forward.
+//
+// A connection is bound to at most one match at a time, so this is a lookup, not
+// a broadcast. A packet for a room that has since been reaped falls back to the
+// default room rather than being dropped - the client is real and still
+// connected, it just has nowhere to be.
 static void HandleClientMessage(uint64_t connId, const std::string& msg) {
-    g_defaultMatch->HandleMessage(connId, msg);
+    auto m = MatchForConn(connId);
+    if (!m) m = g_defaultMatch;
+
+    // Stamp liveness HERE, because only here do we know which match holds the
+    // record. UDP has no disconnect event, so ReapIdleUdpClients culls anyone
+    // unstamped for 3s in a lobby - and when endpoint->connId moved to a global
+    // index, this stamp lost its home. The result was every UDP client being
+    // reaped mid-session: joins looked like they worked and the player vanished
+    // three seconds later.
+    {
+        std::lock_guard<std::mutex> lock(m->clientMutex);
+        auto it = m->clients.find(connId);
+        if (it != m->clients.end()) it->second.lastSeenSec = NowSec();
+    }
+    m->HandleMessage(connId, msg);
 }
 
 //MARK: Broadcast
@@ -1499,6 +1900,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                           << " (UDP packet budget, " << want << " player slots)\n";
             gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
             gameSpace.setPlayerCount(want);
+            rosterSize.store(want);   // the directory's joinable test reads this
             // OPTIONS: apply the requesting client's full options bundle to the
             // sim before the world is built - generatePlatforms() below stamps
             // PLATFORM ELASTICITY per-platform from the value applyOptions sets,
@@ -1678,6 +2080,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 // vectors, and the grid's cells age out on their own sweep.
                 gameSpace.clear();
                 gameSpace.spawnPlayers();
+                rosterSize.store((int)gameSpace.getPlayers().size());
                 rebuildWelcomeStatic();
                 gamePhase       = Phase::LOBBY;
                 gameOverStamped = false;
@@ -1925,7 +2328,17 @@ void SimulationLoop() {
             continue;
         }
         lastTick = now;
-        g_defaultMatch->Tick(scratchGrid);
+
+        // EVERY match, not just the default one. Rooms created at runtime were
+        // being routed to correctly and then never simulated, so a match in one
+        // could be started and would simply sit in the lobby forever - the join
+        // worked and the game never began.
+        //
+        // Sequential and single-threaded, which is what A4's measurements chose:
+        // ~0.6 ms per full match against a 10 ms budget. It also means all these
+        // matches share one warm scratch grid (see match.h), which a worker pool
+        // could not do.
+        for (auto& m : g_registry.All()) m->Tick(scratchGrid);
 
         // Registry upkeep, once a second rather than per tick - destroying rooms
         // is not something 60 Hz buys anything. The default room is pinned, so
@@ -2011,14 +2424,9 @@ private:
         uint64_t connId = 0;
         bool known = false;
         {
-            std::lock_guard<std::mutex> lock(g_defaultMatch->clientMutex);
-            auto idx = g_defaultMatch->udpIndex.find(from);
-            if (idx != g_defaultMatch->udpIndex.end()) {
-                connId = idx->second;
-                known  = true;
-                auto it = g_defaultMatch->clients.find(connId);
-                if (it != g_defaultMatch->clients.end()) it->second.lastSeenSec = NowSec();
-            }
+            std::lock_guard<std::mutex> lock(g_connMutex);
+            auto idx = g_udpIndex.find(from);
+            if (idx != g_udpIndex.end()) { connId = idx->second; known = true; }
         }
         if (known) { HandleClientMessage(connId, msg); return; }
         // Unknown endpoint: only a hello registers a slot; ignore stray datagrams.
@@ -2034,19 +2442,28 @@ private:
             return;
         }
         int playerId = -1;
+        // A hello may name the room it wants (that is how an invite link works over
+        // UDP, mirroring ?match= on the WebSocket side). Unknown or absent lands
+        // in the default room, so every existing client keeps working untouched.
+        std::string targetCode = clampName(parseString(helloMsg, "match"));
+        auto target = targetCode.empty() ? nullptr : g_registry.Find(targetCode);
+        if (!target) { target = g_defaultMatch; targetCode = g_defaultCode; }
+
         ConnectedClient sink;
         {
             // Lock order gameMutex->clientMutex, matching Session::Start.
-            std::lock_guard<std::mutex> gg(g_defaultMatch->gameMutex);
-            std::lock_guard<std::mutex> gc(g_defaultMatch->clientMutex);
+            std::lock_guard<std::mutex> gg(target->gameMutex);
+            std::lock_guard<std::mutex> gc(target->clientMutex);
             // Reap eagerly, not just on the periodic tick: a client reconnecting
             // under a new source endpoint (e.g. after its laptop slept and WiFi
             // got a new NAT mapping) must reclaim its old slot immediately
             // rather than racing this tick's scheduled sweep and losing to it.
-            g_defaultMatch->ReapIdleUdpClients();
-            playerId = g_defaultMatch->ClaimFreeSlot();
+            target->ReapIdleUdpClients();
+            playerId = target->ClaimFreeSlot();
             if (playerId != -1) {
                 uint64_t connId = nextConnId++;
+                std::string nm0 = clampName(parseString(helloMsg, "name"));
+                target->TakeOverSlot(playerId, nm0);   // see the WS path
                 ConnectedClient c;
                 c.playerId    = playerId;
                 c.transport   = Transport::UDP;
@@ -2054,19 +2471,21 @@ private:
                 c.lastSeenSec = NowSec();
                 std::string nm = clampName(parseString(helloMsg, "name"));
                 if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
-                g_defaultMatch->clients[connId] = c;
-                g_defaultMatch->udpIndex[from]  = connId;
-                g_defaultMatch->connectedCount.store((int)g_defaultMatch->clients.size());
+                target->clients[connId] = c;
+                { std::lock_guard<std::mutex> cl(g_connMutex);
+                  g_udpIndex[from]  = connId;
+                  g_connMatch[connId] = targetCode; }
+                target->connectedCount.store((int)target->clients.size());
                 sink = c;
                 std::cout << "UDP client connected -> player slot " << playerId
-                          << ". Active: " << g_defaultMatch->clients.size() << "\n";
+                          << ". Active: " << target->clients.size() << "\n";
             }
         }
         // Welcome/reject after releasing locks (mirrors Session::Start): both
         // buildWelcome and SendToClient's UDP path only take clientMutex-free
         // locks (welcomeStaticMutex / udpSendMutex), unlike gameMutex/clientMutex.
         if (playerId != -1) {
-            SendToClient(sink, g_defaultMatch->welcomeFor(sink));
+            SendToClient(sink, target->welcomeFor(sink));
             SendToClient(sink, buildLeaderboard()); // see the WS join path
         } else {
             std::cout << "Server full, rejecting UDP client\n";
@@ -2168,6 +2587,7 @@ int main() {
         // and be listed), but no world. A client "start" message generates the
         // world and begins the match (see SimulationLoop).
         g_defaultMatch->gameSpace.spawnPlayers();
+        g_defaultMatch->rosterSize.store((int)g_defaultMatch->gameSpace.getPlayers().size());
         g_defaultMatch->rebuildWelcomeStatic(); // seed the cached welcome (empty lobby world) before clients connect
         std::cout << "GameSpace: lobby ready, "
                   << g_defaultMatch->gameSpace.getPlayers().size()

@@ -213,16 +213,24 @@ struct Match {
     // WS and UDP clients share one registry; the id order is stable
     // (deterministic state serialization). Protected by clientMutex.
     std::map<uint64_t, ConnectedClient> clients;
-    // UDP source endpoint -> connId, so an inbound datagram finds its client.
-    // UDP only. Protected by clientMutex (same lock as `clients`).
-    std::map<boost::asio::ip::udp::endpoint, uint64_t> udpIndex;
     std::mutex clientMutex;
+    // NOTE: udpIndex is NOT here. Endpoint -> connId is server-wide, because there
+    // is one UDP socket for the whole process and a datagram has to be routed to
+    // its match before any match's lock is taken. It lives in server_main.cpp as
+    // g_udpIndex under g_connMutex.
 
     // Connected human count, mirrored out of `clients` so the directory can list
     // this match WITHOUT taking clientMutex. Listing runs on an io thread while
     // the sim holds that lock every tick; making the browser wait on it would put
     // directory latency behind the simulation. Maintained wherever clients is.
     std::atomic<int> connectedCount{0};
+
+    // Slots this match actually has. NOT GAMESPACE_NUMBER_OF_PLAYERS: the roster
+    // is sized at match start to clamp(requested, connectedHumans, 8), so a match
+    // that began with four humans has four slots and a fifth player cannot join
+    // it however empty the arena looks. Mirrored as an atomic so the directory can
+    // answer "is this joinable?" without taking gameMutex.
+    std::atomic<int> rosterSize{GAMESPACE_NUMBER_OF_PLAYERS};
 
     // ---- A4 instrumentation ---------------------------------------------
     // Sim-thread only, so plain PerfStats need no lock. Split three ways because
@@ -255,6 +263,9 @@ struct Match {
     SlotMask gatherClaimedSlots();
     bool isHostConn(uint64_t connId);
     void refreshBotSlots(SlotMask claimed, bool allowBotify);
+    // Hand a live bot's slot to a human who just joined mid-match. Caller holds
+    // gameMutex.
+    void TakeOverSlot(int slot, const std::string& joinerName);
     void HandleMidMatchLeavers(SlotMask claimed, bool allowBotify, float dt);
 
     // ---- Packet builders ------------------------------------------------

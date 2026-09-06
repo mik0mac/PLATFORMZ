@@ -364,7 +364,26 @@ raw int, so a new value must be **appended last**, per the note at
 
 ---
 
-### A6. Per-match logging + a `/status` endpoint
+### A7. Bucket static platforms once per match — **DONE** (#99)
+*Not in the original plan. A4's measurement found the grid rebuild was still ~80%
+of a tick after A1b removed its allocation churn, and ~99% of that was platforms,
+which never move. Bucketed once per match into a static layer keyed on a platform
+epoch; grid p95 on the box is 0.03 ms. Verified at 6,591 probe points against a
+brute-force reference, because `probe.py` cannot see a wrong platform bucket.*
+
+### A8. UDP state packets exceeded the MTU budget — **DONE** (#100)
+*Not in the original plan. Found running A4 on the box: state packets chunked at
+18 asteroids against a documented cap of 42, because `ACTION_HEADROOM` was 65 B
+(sized for the 2-player roster this began as) against ~617 B of real 8-player
+action. Raised to 200 B — and, more importantly, chunking was made survivable:
+the client's reassembler held ONE message, so a chunked state arriving mid-welcome
+destroyed it and a player joining a busy match never learned their slot.*
+
+> **Both of these came out of measuring rather than planning**, which is what A4
+> was for. The plan is the map, not the territory — when the numbers disagree with
+> it, the numbers win and the plan gets updated.
+
+### A6. Per-match logging + a `/status` endpoint — **DONE** (#77)
 **Why:** today's operational signal is one `tick N players C asteroids A` line —
 and the GH Actions idle-watchdog greps it. With N matches that's meaningless, and
 "is anyone playing?" becomes unanswerable.
@@ -395,15 +414,22 @@ and the GH Actions idle-watchdog greps it. With N matches that's meaningless, an
 **the whole directory can be JSON-only, on both transports** — no new binary tags,
 no new decoders, and the browser build gets it for free.
 
-**But the match list must fit ONE datagram — do not let it chunk.**
-`UdpTransport::Reassemble` (`net_client.h:311`) is **single-slot**: `parts_` /
-`chunkGen_` hold exactly one in-flight message, and a chunk with a new `gen`
-discards a half-done buffer. Today only welcomes chunk, one at a time, so that is
-safe. A chunked `matchlist` racing a chunked re-welcome would silently destroy
-one of them. Fix it in the protocol, not the transport: **hard-cap the reply to
-~1160 bytes and page with a cursor** (~60 B/entry ⇒ ~19 matches; page at 12 for
-slack). This also bounds the amplification factor E1 is about, so it is the right
-call on two independent grounds.
+**Cap the reply to one datagram and page with a cursor** — ~1160 bytes, 8 rows
+per page.
+
+*Originally this was justified on two grounds and one of them has since gone
+away.* The correctness argument was that `UdpTransport::Reassemble` held a single
+in-flight message, so a chunked `matchlist` racing a chunked welcome would destroy
+one of them. **A8 (#100) replaced that with a multi-slot reassembler**, so
+chunking is now survivable and the cap is no longer load-bearing for correctness.
+
+What remains is the amplification argument, and it is enough on its own: an
+unauthenticated UDP `list` returning kilobytes is a reflector until E1 lands.
+
+**Page size must stay below `MATCH_MAX_CONCURRENT`.** Set at or above it and every
+list fits one page, so the paging path never executes and rots until the day the
+match cap is raised — at which point the browser silently shows a truncated list.
+A `static_assert` enforces it.
 
 Client → server (new builders in `wire.h`, parsed with the existing
 `parseString`/`parseUInt` helpers on the server):
@@ -818,6 +844,8 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | A4 | #75 | Server: measure tick cost **and egress**, then pick the sim scheduler and the caps | server, perf | A1b |
 | A5 | #76 | Server: join-in-progress by taking over a bot slot | server | A1, A3 |
 | A6 | #77 | Server: per-match heartbeat + `GET /status` (and fix the Actions idle watchdog) | server, ops | A2 |
+| A7 | #99 | Server: bucket static platforms once per match (found by A4) | server, perf | A4 |
+| A8 | #100 | Protocol: state packets over the MTU budget + unsurvivable chunking (found by A4) | server, protocol | A4 |
 | B1 | #78 | Protocol: directory messages — `list`/`create`/`join`/`quick`/`leave` + `matchlist`/`joinfail` | protocol | A2 |
 | B2 | #79 | Protocol: welcome carries the match code (`WELCOME_BIN_VERSION` 0x02→0x0A) + server-wide epoch | protocol | B1 |
 | B3 | #80 | Protocol: move map size into `MatchOptions` so the lobby shows it before start | protocol | B2 |

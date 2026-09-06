@@ -59,8 +59,65 @@ struct LeaderboardEntry {
     int         score = 0;
 };
 
+//MARK: Directory
+// One room as the match browser sees it. Deliberately a flat row rather than a
+// preformatted string: the server hand-rolls its JSON and its escaper only
+// handles " and \\, so anything with newlines in it would emit invalid JSON. The
+// client renders these itself.
+struct MatchSummary {
+    std::string code;        // 4 chars, also the invite code
+    std::string name;        // display name
+    std::string preset;      // rule set it was created from
+    std::string phase;       // lobby | countdown | playing | gameover
+    int  players    = 0;
+    int  maxPlayers = 0;
+    bool joinable   = false; // has room AND is in a state you can enter
+};
+
+// Why a join was refused. Kept as an enum rather than a free string so the client
+// can render a sentence a player understands instead of echoing wire text.
+enum class JoinFailure { None, NotFound, Full, BadCode, InProgress, ServerFull, RateLimited, Unknown };
+
+inline JoinFailure joinFailureFromWire(const std::string& s) {
+    if (s == "notfound")     return JoinFailure::NotFound;
+    if (s == "full")         return JoinFailure::Full;
+    if (s == "badcode")      return JoinFailure::BadCode;
+    if (s == "inprogress")   return JoinFailure::InProgress;
+    if (s == "server_full")  return JoinFailure::ServerFull;
+    if (s == "rate_limited") return JoinFailure::RateLimited;
+    return JoinFailure::Unknown;
+}
+
+// The wire token for a failure - the inverse of joinFailureFromWire, used by the
+// server when it builds a refusal.
+inline const char* joinFailureWire(JoinFailure f) {
+    switch (f) {
+        case JoinFailure::NotFound:    return "notfound";
+        case JoinFailure::Full:        return "full";
+        case JoinFailure::BadCode:     return "badcode";
+        case JoinFailure::InProgress:  return "inprogress";
+        case JoinFailure::ServerFull:  return "server_full";
+        case JoinFailure::RateLimited: return "rate_limited";
+        default:                       return "unknown";
+    }
+}
+
+// What to put on screen. The client should never show raw wire tokens.
+inline const char* joinFailureText(JoinFailure f) {
+    switch (f) {
+        case JoinFailure::NotFound:    return "NO SUCH MATCH";
+        case JoinFailure::Full:        return "MATCH IS FULL";
+        case JoinFailure::BadCode:     return "WRONG CODE";
+        case JoinFailure::InProgress:  return "MATCH ALREADY STARTED";
+        case JoinFailure::ServerFull:  return "SERVER IS AT CAPACITY";
+        case JoinFailure::RateLimited: return "TOO MANY ATTEMPTS - WAIT A MOMENT";
+        default:                       return "COULD NOT JOIN";
+    }
+}
+
 struct ServerMessage {
-    enum class Type { None, Welcome, State, Full, VersionMismatch, Leaderboard, Unknown };
+    enum class Type { None, Welcome, State, Full, VersionMismatch, Leaderboard,
+                      MatchList, JoinFail, Created, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -89,6 +146,27 @@ struct ServerMessage {
     // behind the welcome (so a fresh client can open the modal immediately) and
     // again to everyone whenever a finished match is credited.
     std::vector<LeaderboardEntry> leaderboard;
+
+    // MatchList only. `listCursor`/`listNext` page the browser: the reply is
+    // capped so it stays a single datagram over UDP, and listNext < 0 means this
+    // was the last page. (The cap used to be a correctness requirement too - a
+    // chunked list could destroy an in-flight welcome - until #100 gave the client
+    // a reassembler that handles interleaved messages. It is now purely about
+    // keeping the reply small, which still matters: an unauthenticated UDP `list`
+    // is an amplification vector until E1 lands.)
+    std::vector<MatchSummary> matches;
+    int listCursor = 0;
+    int listNext   = -1;
+    int listTotal  = 0;
+
+    // JoinFail only.
+    JoinFailure joinFail = JoinFailure::None;
+
+    // Created only: the room you just made. You are placed in it automatically,
+    // but you still need the code to invite anyone - and a PRIVATE room is hidden
+    // from the match list, so this reply is the only way its creator ever learns
+    // it. Without this you could make a room nobody could be told about.
+    std::string createdCode;
 };
 
 //MARK: Outbound - start request
@@ -204,6 +282,57 @@ inline std::string serializeStart(float half, int platforms, int asteroids,
 // flips the phase to GAMEOVER, which reaches everyone in the next state packet.
 inline std::string serializeEndMatch() {
     nlohmann::json j = { {"type", "endmatch"} };
+    return j.dump();
+}
+
+//MARK: Outbound - directory
+// The verbs a client uses to find and make matches. All JSON, on both transports:
+// the client dispatches inbound on byte 0 ('{' == JSON), so the directory needs no
+// binary tags, no new decoders, and the browser build gets it for free.
+
+// Ask for a page of the public match list. `cursor` is 0 for the first page, or
+// the `next` from the previous reply.
+inline std::string serializeList(int cursor = 0) {
+    nlohmann::json j = { {"type", "list"}, {"cur", cursor} };
+    return j.dump();
+}
+
+// Make a room. `presetName` keys into matchOptionPresets (options.h). A private
+// room is hidden from the list and needs `code` to enter; pass an empty code for
+// a public one, which is also locked and self-starting (see Match::autoStart).
+inline std::string serializeCreate(const std::string& name,
+                                   const std::string& presetName,
+                                   bool isPrivate,
+                                   const std::string& code = "") {
+    nlohmann::json j = {
+        {"type", "create"},
+        {"n",    name},
+        {"pre",  presetName},
+        {"priv", isPrivate},
+        {"code", code}
+    };
+    return j.dump();
+}
+
+// Enter a room by its 4-character code. `code` is the private room's password,
+// not the match code - unfortunate collision of the word, but the match code is
+// public and the join code is not.
+inline std::string serializeJoin(const std::string& matchCode,
+                                 const std::string& code = "") {
+    nlohmann::json j = { {"type", "join"}, {"m", matchCode}, {"code", code} };
+    return j.dump();
+}
+
+// "Put me in something." The server picks the fullest joinable public room, or
+// makes one. One round trip, no list needed.
+inline std::string serializeQuick() {
+    nlohmann::json j = { {"type", "quick"} };
+    return j.dump();
+}
+
+// Leave the current room and return to the directory WITHOUT dropping the socket.
+inline std::string serializeLeave() {
+    nlohmann::json j = { {"type", "leave"} };
     return j.dump();
 }
 
@@ -539,6 +668,36 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
 
     // All-time score table. Rows arrive already ranked best-first (the server
     // partial_sorts before sending), so the client renders them in order as-is.
+    if (type == "matchlist") {
+        msg.type       = ServerMessage::Type::MatchList;
+        msg.listCursor = j.value("cur", 0);
+        msg.listNext   = j.value("next", -1);
+        msg.listTotal  = j.value("total", 0);
+        if (j.contains("m") && j["m"].is_array()) {
+            for (const auto& jo : j["m"]) {
+                MatchSummary r;
+                r.code       = jo.value("c",   std::string());
+                r.name       = jo.value("n",   std::string());
+                r.preset     = jo.value("pre", std::string());
+                r.phase      = jo.value("ph",  std::string("lobby"));
+                r.players    = jo.value("p",   0);
+                r.maxPlayers = jo.value("max", 0);
+                r.joinable   = jo.value("j",   false);
+                msg.matches.push_back(std::move(r));
+            }
+        }
+        return msg;
+    }
+    if (type == "created") {
+        msg.type        = ServerMessage::Type::Created;
+        msg.createdCode = j.value("m", std::string());
+        return msg;
+    }
+    if (type == "joinfail") {
+        msg.type     = ServerMessage::Type::JoinFail;
+        msg.joinFail = joinFailureFromWire(j.value("why", std::string()));
+        return msg;
+    }
     if (type == "leaderboard") {
         msg.type = ServerMessage::Type::Leaderboard;
         if (j.contains("lb") && j["lb"].is_array()) {
