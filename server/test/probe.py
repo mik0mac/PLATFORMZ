@@ -46,6 +46,8 @@ class C:
         # The server sends the table BEFORE the state packet announcing GAMEOVER,
         # so a correct client must handle it while still in "playing".
         self.leaderboards = []     # list of (phase_when_received, [(name, score)])
+        self.matchlists   = []     # directory replies: dicts as sent
+        self.joinfails    = []     # refusal reasons, in order
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.connect((HOST, PORT)); self.s.settimeout(0.2)
         self.parts = {}
@@ -89,9 +91,14 @@ class C:
                     j = json.loads(d.decode("utf-8", "replace"))
                 except ValueError:
                     continue
-                if j.get("type") == "leaderboard":
+                t = j.get("type")
+                if t == "leaderboard":
                     rows = [(e.get("n", ""), e.get("s", 0)) for e in j.get("lb", [])]
                     self.leaderboards.append((self.phase, rows))
+                elif t == "matchlist":
+                    self.matchlists.append(j)
+                elif t == "joinfail":
+                    self.joinfails.append(j.get("why", "?"))
 
 def step(label, cs, secs=1.2):
     time.sleep(secs)

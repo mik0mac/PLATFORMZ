@@ -1133,6 +1133,119 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
     }
 }
 
+//MARK: Directory
+// The verbs that operate on the ROOM LIST rather than on a match: what exists,
+// and making a new one. Entering a room is A3's job - it needs the connection ->
+// match routing that does not exist yet - so `join`, `quick` and `leave` are not
+// handled here.
+//
+// Reply size is capped so it stays one datagram. That was once a correctness
+// requirement (a chunked list could destroy an in-flight welcome against the old
+// single-slot reassembler) but #100 fixed that; it is now about keeping an
+// unauthenticated UDP `list` from being an amplification vector, which E1 closes
+// properly.
+const size_t DIR_LIST_BUDGET_BYTES = 1160;   // under UDP_SAFE_DATAGRAM with slack
+// Rows per page. Deliberately BELOW MATCH_MAX_CONCURRENT: set at or above it and
+// every list fits one page, so the paging path never runs and quietly rots until
+// the day the match cap is raised - at which point the browser would silently
+// show a truncated list. 8 keeps paging on the tested path from day one, and
+// smaller replies also shrink the amplification window E1 has to close.
+const int    DIR_LIST_MAX_ROWS     = 8;
+static_assert(DIR_LIST_MAX_ROWS < MATCH_MAX_CONCURRENT,
+              "page size must stay under the match cap or paging is unreachable");
+
+static std::string buildMatchList(int cursor) {
+    std::vector<MatchListing> all = g_registry.List(/*includePrivate*/ false);
+    // Stable order, so paging can't show the same room twice or skip one as
+    // rooms come and go between requests.
+    std::sort(all.begin(), all.end(),
+              [](const MatchListing& a, const MatchListing& b) { return a.code < b.code; });
+
+    if (cursor < 0) cursor = 0;
+    std::string rows;
+    int i = cursor, emitted = 0;
+    for (; i < (int)all.size() && emitted < DIR_LIST_MAX_ROWS; ++i) {
+        const MatchListing& r = all[i];
+        std::string row = "{\"c\":"   + js(r.code)
+                        + ",\"n\":"   + js(r.name)
+                        + ",\"pre\":" + js(r.presetName)
+                        + ",\"ph\":"  + js(phaseString(r.phase))
+                        + ",\"p\":"   + ji(r.players)
+                        + ",\"max\":" + ji(r.maxPlayers)
+                        + ",\"j\":"   + jb(r.joinable) + "}";
+        // Stop before overrunning the datagram rather than after.
+        if (rows.size() + row.size() + 2 > DIR_LIST_BUDGET_BYTES) break;
+        if (!rows.empty()) rows += ",";
+        rows += row;
+        emitted++;
+    }
+    const bool more = i < (int)all.size();
+    return std::string("{\"type\":\"matchlist\",\"cur\":") + ji(cursor)
+         + ",\"next\":" + ji(more ? i : -1)
+         + ",\"total\":" + ji((int)all.size())
+         + ",\"m\":[" + rows + "]}";
+}
+
+static std::string buildJoinFail(const char* why) {
+    return std::string("{\"type\":\"joinfail\",\"why\":") + js(why) + "}";
+}
+
+// Returns true if the message was a directory verb (handled here, or explicitly
+// refused), false if it belongs to a match.
+static bool HandleDirectoryMessage(const ConnectedClient& c, const std::string& msg) {
+    if (msg.find("\"type\":\"list\"") != std::string::npos) {
+        SendToClient(c, buildMatchList((int)parseUInt(msg, "cur", 0)));
+        return true;
+    }
+
+    if (msg.find("\"type\":\"create\"") != std::string::npos) {
+        const std::string name    = clampName(parseString(msg, "n"));
+        const std::string preset  = clampName(parseString(msg, "pre"));
+        const std::string code    = clampName(parseString(msg, "code"));
+        const bool        isPriv  = parseBool(msg, "priv", false);
+
+        // A public room is hostless: nobody may retune or start it, so it starts
+        // itself once PUBLIC_MIN_PLAYERS arrive. A private room keeps the host
+        // rule, since whoever made it is there deliberately.
+        MatchRegistry::CreateResult why;
+        std::string newCode;
+        auto m = g_registry.Create(name, preset.empty() ? "DEFAULT" : preset,
+                                   isPriv, code,
+                                   /*optionsLocked*/ !isPriv, /*autoStart*/ !isPriv,
+                                   newCode, why);
+        if (!m) {
+            SendToClient(c, buildJoinFail("server_full"));
+            std::cout << "Create refused: at capacity (" << g_registry.Size() << ")\n";
+            return true;
+        }
+        // The world does not exist until a match starts; give it its lobby slots
+        // and a welcome fragment now, exactly as the default room gets at boot.
+        {
+            std::lock_guard<std::mutex> lock(m->gameMutex);
+            m->gameSpace.spawnPlayers();
+            m->rebuildWelcomeStatic();
+        }
+        std::cout << "Match " << newCode << " created"
+                  << (isPriv ? " (private)" : " (public, locked + auto-start)")
+                  << " preset=" << (preset.empty() ? "DEFAULT" : preset) << "\n";
+        // Reply with the fresh list so the creator sees their room. Entering it is
+        // A3; until then a client creates and then joins by code.
+        SendToClient(c, buildMatchList(0));
+        return true;
+    }
+
+    // join / quick / leave need connection -> match routing, which is A3. They are
+    // deliberately NOT silently ignored: a client that asks gets a real answer
+    // rather than a timeout.
+    if (msg.find("\"type\":\"join\"")  != std::string::npos ||
+        msg.find("\"type\":\"quick\"") != std::string::npos ||
+        msg.find("\"type\":\"leave\"") != std::string::npos) {
+        SendToClient(c, buildJoinFail("notfound"));
+        return true;
+    }
+    return false;
+}
+
 //MARK: Handle client message
 // -------------------------------------------------------------------------
 // Dispatch one inbound text frame from an already-registered client (WS or UDP).
@@ -1141,6 +1254,23 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
 // this is called, so here the client always exists in `clients`.
 // -------------------------------------------------------------------------
 void Match::HandleMessage(uint64_t connId, const std::string& msg) {
+    // Directory verbs first: they are about the room LIST, not this room, and a
+    // connection can ask about them whatever match it happens to be in.
+    //
+    // Copy the sink out under the lock, then release it BEFORE writing to a
+    // socket - the same discipline every other send site here follows, so a slow
+    // client can never stall the sim behind clientMutex.
+    {
+        ConnectedClient sink;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            auto it = clients.find(connId);
+            if (it != clients.end()) { sink = it->second; found = true; }
+        }
+        if (found && HandleDirectoryMessage(sink, msg)) return;
+    }
+
     //MARK: Msg: hello
     // Handshake / keepalive: (re)send the welcome to this client. UDP clients
     // resend hello until welcomed (unreliable transport); a WS client's hello
