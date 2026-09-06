@@ -49,6 +49,7 @@ class C:
         self.matchlists   = []     # directory replies: dicts as sent
         self.joinfails    = []     # refusal reasons, in order
         self.created      = []     # codes of rooms we made
+        self.players      = {}     # name -> {hp, score, alive, bot} from the last state
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.connect((HOST, PORT)); self.s.settimeout(0.2)
         self.parts = {}
@@ -85,6 +86,30 @@ class C:
                 self.phase = PHASES.get(d[9], "?")
                 self.epoch = struct.unpack_from("<I", d, 14)[0]
                 self.nplayers = d[50]
+                # Decode the roster so tests can assert on a player's actual
+                # state. Layout per buildStateBodyBinary: u32 id, 3x qpos(i16),
+                # 3x qvel(i16), yaw+pitch(u16), u8 hp, u8 fuel, u8 ammo,
+                # u8 flash, u8 spectate, u16 score, u8 flags, u8 oob, then a
+                # length-prefixed name.
+                self.players = {}
+                off = 51
+                try:
+                    for _ in range(self.nplayers):
+                        pid   = struct.unpack_from("<I", d, off)[0]; off += 4
+                        off  += 6 + 6 + 4                      # pos, vel, yaw, pitch
+                        hp    = d[off]; off += 1
+                        off  += 1 + 1 + 1 + 1                  # fuel, ammo, flash, spectate
+                        score = struct.unpack_from("<H", d, off)[0]; off += 2
+                        flags = d[off]; off += 1
+                        off  += 1                              # oob timer
+                        nlen  = d[off]; off += 1
+                        name  = d[off:off + nlen].decode("utf-8", "replace"); off += nlen
+                        self.players[name] = {
+                            "id": pid, "hp": hp, "score": score,
+                            "alive": bool(flags & 1), "bot": bool(flags & 2),
+                        }
+                except (IndexError, struct.error):
+                    pass                                       # truncated/chunked frame
             elif tag == FULL:
                 self.phase = "full"
             elif tag == 0x7B:                      # '{' - a JSON message

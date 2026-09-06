@@ -140,8 +140,15 @@ public:
             // Live fields via atomics only - never the match's own mutexes.
             r.phase      = e.match->gamePhase.load();
             r.players    = e.match->connectedCount.load();
-            r.maxPlayers = GAMESPACE_NUMBER_OF_PLAYERS;
-            r.joinable   = r.players < r.maxPlayers;
+            // The match's OWN roster, not the global cap. A match that started
+            // with four humans has four slots, and a fifth player cannot join it
+            // however empty the arena looks - reporting 8 here made the browser
+            // offer joins that were always refused.
+            r.maxPlayers = e.match->rosterSize.load();
+            // A GAMEOVER room is winding down and about to return to its lobby;
+            // dropping someone into those last seconds is worse than making them
+            // wait for it.
+            r.joinable   = r.players < r.maxPlayers && r.phase != Phase::GAMEOVER;
             out.push_back(std::move(r));
         }
         return out;

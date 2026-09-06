@@ -372,6 +372,56 @@ void Match::ServiceAutoStart(Clock::time_point now) {
     }
 }
 
+//MARK: Join in progress
+// Hand a bot's slot to a human who has just joined a live match.
+//
+// WHAT IS INHERITED AND WHAT IS NOT, because "take over the bot" is ambiguous and
+// the wrong split is either unfair or miserable:
+//
+//   position/velocity  INHERITED. A valid, in-world spot. Spawning fresh mid-match
+//                      risks dropping someone inside a platform or on top of a
+//                      firefight, and placePlayersSpread only makes sense against
+//                      an empty arena.
+//   health/fuel/ammo   RESET. Inheriting a bot on 5 HP means joining a match is
+//                      usually instant death, which is a bad first five seconds.
+//   score              RESET. You did not earn the bot's points, and the scoreboard
+//                      credits at match end - inheriting would put unearned points
+//                      on a permanent leaderboard.
+//   alive              REVIVED. ClaimFreeSlot does not check isAlive, so without
+//                      this you can join straight into a corpse and spectate a
+//                      match you never played.
+//   colour             RESET to this slot's human colour. Otherwise the newcomer
+//                      renders in bot magenta for the rest of the match.
+//
+// Caller holds gameMutex. Safe in any phase: in LOBBY there is no world yet and
+// this is a harmless no-op on preview data.
+void Match::TakeOverSlot(int slot, const std::string& joinerName) {
+    auto& players = gameSpace.getPlayers();
+    if (slot < 0 || slot >= (int)players.size()) return;
+    Player& p = players[slot];
+
+    const bool wasBot = p.isBot;
+    p.isBot   = false;
+    p.isAlive = true;
+    p.health  = PLAYER_STARTING_HEALTH;
+    p.fuel    = PLAYER_STARTING_FUEL;
+    p.ammo    = PLAYER_STARTING_AMMO;
+    p.score   = 0;
+    p.leaveGraceSec      = -1.0f;   // cancel any mid-match-leaver countdown
+    p.deathBurstSpawned  = false;
+    p.isSpectating       = false;
+    p.spectatingTimer    = p.countdownToSpectating;
+    assignPlayerColor(p, slot);
+
+    // Only announce a real mid-match takeover. A lobby join is already visible in
+    // the roster, and saying it there would be noise.
+    if (wasBot && gamePhase.load() == Phase::PLAYING) {
+        const std::string who = joinerName.empty() ? p.name : joinerName;
+        Message msg(MSG_TYPE_JOINED_GAME, who, who, p.id, p.id);
+        gameSpace.emitMessage(msg);
+    }
+}
+
 //MARK: Input parse
 // -------------------------------------------------------------------------
 // Packet parsing - JSON input from client into PlayerInput.
@@ -987,6 +1037,12 @@ public:
                 playerId = target->ClaimFreeSlot();
                 if (playerId != -1) {
                     self->connId_ = nextConnId++;
+                    // Mid-match this slot is a live bot; hand its body over. Every
+                    // path that seats a human has to do this, not just the
+                    // join-by-code one - a latecomer CONNECTING to a running match
+                    // arrives here, and without it they inherited the bot's score
+                    // and its magenta colour.
+                    target->TakeOverSlot(playerId, std::string());
                     ConnectedClient c;
                     c.playerId  = playerId;
                     c.transport = Transport::WS;
@@ -1222,6 +1278,9 @@ static bool AttachConn(uint64_t connId, const std::string& code,
         m->ReapIdleUdpClients();
         slot = m->ClaimFreeSlot();
         if (slot != -1) {
+            // Mid-match, this slot is a live bot: hand its body over rather than
+            // leaving the newcomer as a magenta bot with someone else's score.
+            m->TakeOverSlot(slot, rec.name);
             rec.playerId  = slot;
             rec.hasInput  = false;      // never carry aim or a fire latch across rooms
             rec.lastInput = PlayerInput{};
@@ -1381,6 +1440,7 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         {
             std::lock_guard<std::mutex> lock(m->gameMutex);
             m->gameSpace.spawnPlayers();
+            m->rosterSize.store((int)m->gameSpace.getPlayers().size());
             m->rebuildWelcomeStatic();
         }
         std::cout << "Match " << newCode << " created"
@@ -1418,6 +1478,7 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
             if (!m) { SendToClient(c, buildJoinFail("server_full")); return true; }
             std::lock_guard<std::mutex> lock(m->gameMutex);
             m->gameSpace.spawnPlayers();
+            m->rosterSize.store((int)m->gameSpace.getPlayers().size());
             m->rebuildWelcomeStatic();
             std::cout << "Match " << best << " created for quick match\n";
         }
@@ -1839,6 +1900,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                           << " (UDP packet budget, " << want << " player slots)\n";
             gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
             gameSpace.setPlayerCount(want);
+            rosterSize.store(want);   // the directory's joinable test reads this
             // OPTIONS: apply the requesting client's full options bundle to the
             // sim before the world is built - generatePlatforms() below stamps
             // PLATFORM ELASTICITY per-platform from the value applyOptions sets,
@@ -2018,6 +2080,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 // vectors, and the grid's cells age out on their own sweep.
                 gameSpace.clear();
                 gameSpace.spawnPlayers();
+                rosterSize.store((int)gameSpace.getPlayers().size());
                 rebuildWelcomeStatic();
                 gamePhase       = Phase::LOBBY;
                 gameOverStamped = false;
@@ -2399,6 +2462,8 @@ private:
             playerId = target->ClaimFreeSlot();
             if (playerId != -1) {
                 uint64_t connId = nextConnId++;
+                std::string nm0 = clampName(parseString(helloMsg, "name"));
+                target->TakeOverSlot(playerId, nm0);   // see the WS path
                 ConnectedClient c;
                 c.playerId    = playerId;
                 c.transport   = Transport::UDP;
@@ -2522,6 +2587,7 @@ int main() {
         // and be listed), but no world. A client "start" message generates the
         // world and begins the match (see SimulationLoop).
         g_defaultMatch->gameSpace.spawnPlayers();
+        g_defaultMatch->rosterSize.store((int)g_defaultMatch->gameSpace.getPlayers().size());
         g_defaultMatch->rebuildWelcomeStatic(); // seed the cached welcome (empty lobby world) before clients connect
         std::cout << "GameSpace: lobby ready, "
                   << g_defaultMatch->gameSpace.getPlayers().size()

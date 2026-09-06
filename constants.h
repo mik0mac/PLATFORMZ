@@ -71,7 +71,8 @@ enum MessageType {
     // MSG_TYPE_OUT_OF_BOUNDS, replaced by the in-game warning and timer system.
     MSG_TYPE_LOST_IN_SPACE,
     MSG_TYPE_ASTEROID_ELIMINATION,
-    MSG_TYPE_LEFT_GAME, // appended last: MessageType crosses the wire as a raw int
+    MSG_TYPE_LEFT_GAME,
+    MSG_TYPE_JOINED_GAME, // appended last: MessageType crosses the wire as a raw int
     COUNT
 };
 

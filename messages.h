@@ -198,6 +198,15 @@ class Message {
                 color = GRAY;
                 visibility.set(VIS_ALL); // all players see this message, like an elimination
                 break;
+            case MSG_TYPE_JOINED_GAME:
+                // Someone dropped into a live match by taking over a bot. Worth
+                // announcing: the slot's name and colour change mid-fight, and
+                // without a line everyone else just sees a bot suddenly start
+                // playing well.
+                text = pa + " JOINED THE MATCH.";
+                color = SKYBLUE;
+                visibility.set(VIS_ALL);
+                break;
             case MSG_TYPE_LEFT_GAME:
                 // No "YOU" substitution: by construction the local viewer is
                 // never the one who left (they wouldn't be here to see it).

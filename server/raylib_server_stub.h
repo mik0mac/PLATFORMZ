@@ -48,6 +48,10 @@ static const Color GREEN    = {0,   228, 48,  255};
 static const Color BLUE     = {0,   121, 241, 255};
 static const Color GRAY     = {130, 130, 130, 255};
 static const Color DARKGRAY = {80,  80,  80,  255};
+// Values match real raylib. messages.h is compiled by BOTH client and server -
+// the server never draws, but it must still compile every colour the kill feed
+// names.
+static const Color SKYBLUE  = {102, 191, 255, 255};
 
 // -------------------------------------------------------------------------
 // Math constants
