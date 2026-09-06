@@ -172,6 +172,27 @@ Page is now at `http://SERVER_IP/platformz.html`. It loads over **http** and
 auto-connects to `ws://<same-host>:9000`, so no `?server=` is needed and there's no
 mixed-content block.
 
+## Health check: `GET /status`
+
+The game port answers a plain HTTP GET as well as WebSocket upgrades, so you can
+check a running server without an SSH session:
+
+```bash
+curl http://SERVER_IP:9000/status
+```
+```json
+{"uptime":8412,"matches":3,"active":1,"players":5,"maxMatches":12,
+ "maxPlayers":8,"stateTag":9,"welcomeTag":2,"egressBytes":91442310}
+```
+
+`stateTag`/`welcomeTag` are the protocol versions the running binary actually
+speaks — the quickest answer to *"is this the build I deployed?"*, which has
+caught a stale server here before. `uptime` answers *"did it restart?"*.
+
+**It respects the join key.** With `PLATFORMZ_KEY` set the endpoint is as silent
+as everything else, so a scanner still sees a dead port; pass `?key=...` to reach
+it. Nothing from the request is echoed back into the response.
+
 ## 8. Connect and play
 
 - **Browser:** open `http://SERVER_IP/platformz.html`. Press a key on the title

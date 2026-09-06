@@ -132,6 +132,10 @@ static std::string QueryParam(const std::string& target, const std::string& name
 // transfer quota is a property of the box, not of any one match.
 EgressCounters g_egress;
 
+// Seconds since boot, ticked by the driver loop. Reported by the heartbeat and
+// by GET /status, which is the cheapest way to answer "did it restart?".
+std::atomic<int> g_uptimeSeconds{0};
+
 // Monotonic connection id. Process-level, not per-match: an id must stay unique
 // across every match so a stale packet can never be mistaken for a live client.
 std::atomic<uint64_t> nextConnId{1};
@@ -882,13 +886,59 @@ public:
         http::async_read(ws_.next_layer(), buffer_, req_,
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) return; // not even HTTP; drop silently
-                if (!websocket::is_upgrade(self->req_)) return;
+                if (!websocket::is_upgrade(self->req_)) { self->MaybeServeStatus(); return; }
                 if (!JoinKeyOk(QueryParam(std::string(self->req_.target()), "key"))) {
                     std::cout << "WS join rejected (bad key)\n";
                     return;
                 }
                 self->Accept();
             });
+    }
+
+    // A plain GET /status - not a WebSocket upgrade - answers with a small JSON
+    // health blob and closes. Free monitoring, and it answers "is the running
+    // binary the one I deployed?" without an SSH session, because it reports the
+    // protocol tags the server is actually speaking.
+    //
+    // GATED BY THE JOIN KEY when one is set. PLATFORMZ_KEY exists so a scanner
+    // sees a dead port; an endpoint that cheerfully described the server would
+    // undo that, so without the key this stays as silent as every other path.
+    //
+    // Fixed shape, and nothing from the request is echoed back - a reply must
+    // never be a way to get the server to repeat attacker-chosen bytes. TCP has
+    // already proved the caller's address by this point, so unlike the UDP paths
+    // there is no amplification concern.
+    void MaybeServeStatus() {
+        const std::string target(req_.target());
+        if (req_.method() != http::verb::get) return;
+        if (target.rfind("/status", 0) != 0) return;
+        if (!JoinKeyOk(QueryParam(target, "key"))) return;
+
+        const MatchRegistry::Totals t = g_registry.Summarise();
+        std::string body = "{";
+        body += "\"uptime\":"   + ji(g_uptimeSeconds.load());
+        body += ",\"matches\":" + ji(t.matches);
+        body += ",\"active\":"  + ji(t.active);
+        body += ",\"players\":" + ji(t.players);
+        body += ",\"maxMatches\":" + ji(MATCH_MAX_CONCURRENT);
+        body += ",\"maxPlayers\":" + ji(GAMESPACE_NUMBER_OF_PLAYERS);
+        // The deployed-binary question: these must match the client's netbin.h.
+        body += ",\"stateTag\":"   + ji((int)nb::STATE_BIN_VERSION);
+        body += ",\"welcomeTag\":" + ji((int)nb::WELCOME_BIN_VERSION);
+        body += ",\"egressBytes\":" + std::to_string(g_egress.bytes.load());
+        body += "}";
+
+        auto res = std::make_shared<http::response<http::string_body>>(
+            http::status::ok, req_.version());
+        res->set(http::field::content_type, "application/json");
+        res->keep_alive(false);
+        res->body() = std::move(body);
+        res->prepare_payload();
+
+        // Keep both the response and the session alive until the write finishes;
+        // the socket closes when the last reference drops.
+        http::async_write(ws_.next_layer(), *res,
+            [self = shared_from_this(), res](beast::error_code, std::size_t) {});
     }
 
     // Key passed (or gate off): finish the WebSocket handshake from the
@@ -1795,15 +1845,56 @@ void Match::Tick(CollisionGrid& scratchGrid) {
     // bandwidth is trivial; revisit delta-compression if player count grows.
     { ScopedTime _bc(statBroadcast); BroadcastState(tick); }
 
-    // Heartbeat (~1/sec) so the Actions live log shows the sim is alive.
-    // clientMutex is taken alone here (not nested under gameMutex) so it
-    // can't deadlock. std::endl flushes - stdout to a file is fully
-    // buffered, so without the flush this wouldn't appear under `tail -f`.
-    if (tick % 60 == 0) {
-        int connected;
-        { std::lock_guard<std::mutex> gc(clientMutex); connected = (int)clients.size(); }
-        std::cout << "tick " << tick << "  players " << connected
-                  << "  asteroids " << asteroidCount << std::endl;
+    // The heartbeat used to live here, one line per second per match. With N
+    // matches that is N lines a second, and - worse - the Actions idle watchdog
+    // greps the LAST "players N" in the log, so it would have been reading one
+    // arbitrary match's count instead of the total. It now prints once from the
+    // driver loop with real totals; see ReportHeartbeat.
+    lastAsteroidCount = asteroidCount;
+}
+
+//MARK: Heartbeat
+// One line per second proving the sim is alive, plus a per-match roll-call less
+// often.
+//
+// FORMAT IS LOAD-BEARING. .github/workflows/gameserver.yml shuts an idle server
+// down by grepping the LAST `players <n>` in the log:
+//
+//     players=$(grep -oE 'players [0-9]+' server.log | tail -1 | awk '{print $2}')
+//
+// So exactly one line per interval may carry that pattern, and it has to be the
+// total across every match. The per-match lines below deliberately say "slots
+// 3/8" rather than "players 3" - the regex would otherwise match them, `tail -1`
+// would pick whichever printed last, and the watchdog would silently start
+// reading one arbitrary room's population instead of the server's.
+const int HEARTBEAT_ROLLCALL_SECONDS = 10;
+
+static void ReportHeartbeat(uint32_t tick, int secondsElapsed) {
+    const MatchRegistry::Totals t = g_registry.Summarise();
+
+    // Worst p95 across matches - the number that decides whether the box is
+    // keeping up, since a sequential scheduler is only as good as its slowest room.
+    double worst = 0.0;
+    for (const MatchListing& row : g_registry.List(/*includePrivate*/ true)) {
+        if (auto m = g_registry.Find(row.code))
+            worst = std::max(worst, m->statSim.Summarise().p95 + m->statBroadcast.Summarise().p95);
+    }
+
+    std::cout << "tick " << tick
+              << "  matches " << t.matches << " (" << t.active << " active)"
+              << "  players " << t.players           // <- the watchdog reads this
+              << "  worst " << std::fixed << std::setprecision(2) << worst << "ms"
+              << std::endl;
+
+    if (secondsElapsed % HEARTBEAT_ROLLCALL_SECONDS != 0) return;
+    for (const MatchListing& row : g_registry.List(true)) {
+        auto m = g_registry.Find(row.code);
+        if (!m) continue;
+        std::cout << "    " << row.code << "  " << phaseString(row.phase)
+                  << "  slots " << row.players << "/" << row.maxPlayers
+                  << "  asteroids " << m->lastAsteroidCount
+                  << (row.isPrivate ? "  private" : "")
+                  << std::endl;
     }
 }
 
@@ -1841,8 +1932,10 @@ void SimulationLoop() {
         // today this only ever logs nothing.
         if (++beat >= (int)TICK_RATE) {
             beat = 0;
+            ++g_uptimeSeconds;
             for (const std::string& code : g_registry.Reap(now))
                 std::cout << "Match " << code << " reaped\n";
+            ReportHeartbeat(g_defaultMatch->serverTick.load(), g_uptimeSeconds.load());
             if (PerfEnabled() && ++perfBeat >= PERF_REPORT_SECONDS) {
                 perfBeat = 0;
                 ReportPerf(*g_defaultMatch, now);

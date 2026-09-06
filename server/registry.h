@@ -149,6 +149,22 @@ public:
 
     size_t Size() const { std::lock_guard<std::mutex> lk(mutex_); return entries_.size(); }
 
+    // Totals for the heartbeat and /status. Reads the live fields as atomics, so
+    // like List() it never takes a match's own mutexes and cannot be delayed by a
+    // simulation mid-tick.
+    struct Totals { int matches = 0, players = 0, active = 0; };
+    Totals Summarise() const {
+        Totals t;
+        std::lock_guard<std::mutex> lk(mutex_);
+        for (const auto& [code, e] : entries_) {
+            t.matches++;
+            t.players += e.match->connectedCount.load();
+            const Phase ph = e.match->gamePhase.load();
+            if (ph == Phase::COUNTDOWN || ph == Phase::PLAYING) t.active++;
+        }
+        return t;
+    }
+
     // Destroy rooms that have been empty past their grace, or that have simply
     // been alive too long. Returns the codes destroyed, so the caller can log or
     // evict any connection still pointing at them.
