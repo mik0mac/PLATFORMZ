@@ -914,16 +914,17 @@ int main(int argc, char** argv) {
                 // row count.
                 std::vector<Player>& titlePlayers = gameSpace.getPlayers();
 
-                // Host identity: only "player 1" - the lowest connected HUMAN slot
-                // - may adjust OPTIONS and START the match; everyone else sees a
-                // passive lobby with a "waiting for the host" line. hostSlot is the
-                // smallest human-occupied slot (-1 until the server tells us who's
-                // connected); host migrates automatically if that client leaves.
-                // Bot slots also carry isConnected (their bodies render in a match),
-                // so exclude them with !isBot. Local single-player is always host.
+                // Host identity: the host may adjust OPTIONS and START the match;
+                // everyone else sees a passive lobby with a "waiting for the host"
+                // line. The SERVER decides who that is and flags their slot - we
+                // used to recompute "lowest connected human slot" here, which was
+                // a second implementation of a rule the server also had, and the
+                // two are now impossible to keep in sync: host is the room's
+                // creator, and an official room has no host at all (hostSlot stays
+                // -1, and nobody gets a START button). Local play is always host.
                 int hostSlot = -1;
                 for (int i = 0; i < (int)titlePlayers.size(); ++i)
-                    if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) { hostSlot = i; break; }
+                    if (titlePlayers[i].isHost) { hostSlot = i; break; }
                 bool amHost = !networked || (myIndex >= 0 && myIndex == hostSlot);
                 if (!amHost) shell.showOptions = false; // never leave the OPTIONS modal open on a non-host (e.g. after a host handoff)
 
@@ -1007,11 +1008,21 @@ int main(int argc, char** argv) {
                     // Show who we're waiting on (their synced name, or the slot-
                     // numbered default until they've set one - same fallback as the
                     // roster rows above).
-                    std::string hostName = (hostSlot >= 0 && !titlePlayers[hostSlot].name.empty())
+                    // No host at all: an official room, which starts itself. Naming
+                    // a player here would be a lie, and with hostSlot -1 it used to
+                    // read "Waiting for PLAYER 0". What it should say instead - the
+                    // player count and the auto-start countdown - is #111; this is
+                    // just the honest placeholder until then.
+                    if (hostSlot < 0) {
+                        UiTextCentered("This match starts automatically.",
+                                       screenWidth, (int)startY + 14, 20, GRAY);
+                    } else {
+                    std::string hostName = !titlePlayers[hostSlot].name.empty()
                         ? titlePlayers[hostSlot].name
                         : TextFormat("PLAYER %d", hostSlot + 1);
                     UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
                                    screenWidth, (int)startY + 14, 20, GRAY);
+                    }
                 }
 
                 // Opening a modal must leave the cursor free (the popups are
@@ -1922,7 +1933,7 @@ int main(int argc, char** argv) {
                 auto& ps = gameSpace.getPlayers();
                 int hostSlot = -1;
                 for (int i = 0; i < (int)ps.size(); i++)
-                    if (ps[i].isConnected && !ps[i].isBot) { hostSlot = i; break; }
+                    if (ps[i].isHost) { hostSlot = i; break; }
                 if (myIndex >= 0 && myIndex == hostSlot)
                     net.send(serializeEndMatch());
             }

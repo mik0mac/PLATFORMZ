@@ -107,6 +107,7 @@ class C:
                         self.players[name] = {
                             "id": pid, "hp": hp, "score": score,
                             "alive": bool(flags & 1), "bot": bool(flags & 2),
+                            "host": bool(flags & 32),
                         }
                 except (IndexError, struct.error):
                     pass                                       # truncated/chunked frame

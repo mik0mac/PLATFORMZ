@@ -206,6 +206,19 @@ struct Match {
     bool optionsLocked = false;
     bool autoStart     = false;
 
+    // WHO hosts a custom room. The creator, set when they are put into the room
+    // they just made - not derived from slot order, which is what it used to be.
+    //
+    // The old rule ("lowest connected non-bot slot") migrated on its own and so
+    // never needed storing, but it also handed the room to whoever happened to
+    // hold slot 0. In a PUBLIC custom room that is a stranger who walked in, and
+    // the creator loses control of their own match.
+    //
+    // Zero means nobody: always the case in an OFFICIAL room, which has no host
+    // by design, and briefly true for a custom room between its host leaving and
+    // the next resolve. Guarded by clientMutex.
+    uint64_t hostConn = 0;
+
     // Auto-start countdown, LOBBY only. Armed once connectedCount reaches
     // PUBLIC_MIN_PLAYERS, disarmed if the room empties back below it.
     bool              autoStartArmed = false;
@@ -265,6 +278,13 @@ struct Match {
     std::vector<uint64_t> CompactConnectedSlots();
     SlotMask gatherClaimedSlots();
     bool isHostConn(uint64_t connId);
+    // Current host, migrating it if the one on file has gone. Caller holds
+    // clientMutex. Resolving lazily rather than on every departure path means
+    // there is no removal site that can forget to do it - and there are five of
+    // them (detach, disconnect, the UDP idle reaper, room moves, compaction).
+    uint64_t ResolveHostLocked();
+    // Slot the host occupies, or -1 if the room has none. Caller holds clientMutex.
+    int      HostSlotLocked();
     void refreshBotSlots(SlotMask claimed, bool allowBotify);
     // Hand a live bot's slot to a human who just joined mid-match. Caller holds
     // gameMutex.
@@ -277,9 +297,9 @@ struct Match {
     std::string buildWelcome(int playerId);
     std::string buildWelcomeBinary(int playerId);
     std::string welcomeFor(const ConnectedClient& c);
-    std::string buildStateBodyJson(SlotMask connectedSlots);
+    std::string buildStateBodyJson(SlotMask connectedSlots, int hostSlot);
     std::string buildStatePacket(uint32_t tick, uint32_t lastSeq, const std::string& body);
-    std::string buildStateBodyBinary(SlotMask connectedSlots);
+    std::string buildStateBodyBinary(SlotMask connectedSlots, int hostSlot);
     std::string buildStateBinary(uint32_t tick, uint32_t lastSeq, const std::string& body);
 
     // ---- Tick + dispatch ------------------------------------------------

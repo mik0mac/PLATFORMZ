@@ -498,6 +498,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             p->isConnected   = (flags & 4) != 0;
             p->isSpectating  = (flags & 8) != 0;
             p->isOutOfBounds = (flags & 16) != 0;
+            p->isHost        = (flags & 32) != 0;
             p->outOfBoundsTimer = oobTimer;
             p->name          = name;
         }
@@ -778,6 +779,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 p.isSpectating    = jo.value("spec", false); // server-owned: dead player is now a free-fly spectator
                 p.spectatingTimer = jo.value("stmr", p.spectatingTimer); // drives the client-side greyscale ramp
                 p.isBot    = jo.value("bot", false); // server-owned: which slots are bots (absent on older packets)
+                p.isHost   = jo.value("host", false); // server-owned: who may start/retune this room
                 p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
                 p.isOutOfBounds    = jo.value("oob", false);  // server-owned: outside the boundary, elimination pending
                 p.outOfBoundsTimer = jo.value("oobt", p.outOfBoundsTimer); // drives the HUD countdown
