@@ -9,7 +9,8 @@
 #include "starfield.h" // distant starry-vista background (client-only)
 #include <algorithm>   // std::nth_element (F3 perf overlay p95)
 #include "input.h"
-#include "ui.h"        // immediate-mode menu widgets (title screen)
+#include "ui.h"
+#include "screens.h"   // GameScreen + ShellState: the menu shell        // immediate-mode menu widgets (title screen)
 #include "audio.h"     // sound FX que, load/unload, trigger
 #include "jukebox.h"
 #include "net_client.h" // multiplayer: WebSocket client
@@ -349,15 +350,13 @@ int main(int argc, char** argv) {
 
     // MARK: Leaderboard
     // The all-time table is owned and persisted by the SERVER; the client only
-    // displays it. Rows arrive ranked best-first in a "leaderboard" message - once
+    // displays it. Rows arrive ranked best-first in a "shell.leaderboard" message - once
     // just behind the welcome, then again whenever a finished match is credited -
     // and are shown by the title-screen LEADERBOARD modal (networked play only).
-    std::vector<LeaderboardEntry> leaderboard;
 
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
-    bool      serverFull = false; // last join attempt was rejected: every slot claimed (mid-match, no bot filler)
     bool      protoMismatch = false; // server is speaking a different build's binary protocol (see netbin.h tags)
     uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
     // Handshake/reconnect bookkeeping (networked): resend hello until welcomed, and
@@ -408,7 +407,9 @@ int main(int argc, char** argv) {
     // original game body (update -> draw). Play is gated by TITLE and ends back
     // there via GAME_OVER, so the world is set up on each PLAYING entry (not
     // before the loop) and torn down on the way back to the title.
-    enum class GameScreen { TITLE, COUNTDOWN, PLAYING, GAME_OVER };
+    // GameScreen and the menu state now live in screens.h; `shell` owns
+    // everything the title/countdown/game-over screens keep between frames.
+    ShellState shell;
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
@@ -431,12 +432,6 @@ int main(int argc, char** argv) {
 
     // Title-screen menu state (widgets live in ui.h). The name is local-only for
     // now (input + visuals); syncing it over the network is a later step.
-    std::string playerName  = "PLAYER";
-    bool        nameFocused = true;  // text field owns keyboard focus on entry (type without a click)
-    bool        namePristine = true; // still the untouched "PLAYER" default; first keystroke clears it
-    bool        showControls = false; // controls popup is open
-    bool        showOptions  = false; // options popup is open
-    bool        showScores   = false; // leaderboard popup is open (networked only)
 
     // OPTIONS (see the OPTIONS modal below): one MatchOptions bundle drives the
     // sim (locally applied via GameSpace::applyOptions, remotely threaded
@@ -446,34 +441,15 @@ int main(int argc, char** argv) {
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
-    std::vector<int> botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
-    bool sliderPlayersActive = false; // drag latch: NUMBER OF PLAYERS
-    bool sliderDiffActive    = false; // drag latch: BOT DIFFICULTY
-    bool sliderWElastActive  = false; // drag latch: WALL ELASTICITY
-    bool sliderPElastActive  = false; // drag latch: PLATFORM ELASTICITY
-    bool sliderBoostActive   = false; // drag latch: SPEED BOOST
-    bool sliderRSpeedActive  = false; // drag latch: ROCKET VELOCITY
-    bool sliderJThrustActive = false; // drag latch: JETPACK THRUST
-    bool sliderFBurnActive   = false; // drag latch: FUEL CONSUMPTION
-    bool sliderFRegenActive  = false; // drag latch: FUEL REGEN
-    bool sliderXRadiusActive = false; // drag latch: EXPLOSION RADIUS
-    bool sliderVolumeActive  = false; // drag latch: MASTER VOLUME (title screen)
     // UiSlider needs a float&; NUMBER OF PLAYERS and the two fuel controls are
     // ints in MatchOptions, so they get float shadows here, synced into
     // opt.numPlayers/fuelConsumption/fuelRegenPct on change (see the modal below).
-    float optNumPlayersF = (float)opt.numPlayers;
-    float optFuelBurnF   = (float)opt.fuelConsumption;
-    float optFuelRegenF  = (float)opt.fuelRegenPct;
     // Networked options sync (lobby): the server echoes the match-wide options in
     // every state packet so any client's change shows live. Sliders are guarded
     // from server echoes while being dragged (their active latches); the toggles
     // have no such latch, so we remember the value we last sent and only accept
     // a server toggle that differs from it - that keeps our own click from being
     // flipped back before the server's echo of it arrives.
-    bool  optSentWalls = opt.wallsEnabled;
-    bool  optSentPhys  = opt.rocketsObeyPhysics;
-    bool  optSentFf    = opt.friendlyFire;
-    bool  optSentCoast = opt.coastMode;
 
     // Networked client connects once, on launch: the title screen then acts as a
     // live lobby (the server owns the world and only starts it on request). Local
@@ -485,11 +461,11 @@ int main(int argc, char** argv) {
     }
 
     // Our own display name for the roster/scoreboard. Once the user types a name
-    // it wins; until then (namePristine) fall back to the slot-numbered default
+    // it wins; until then (shell.namePristine) fall back to the slot-numbered default
     // "PLAYER {slot+1}" so two un-named humans don't both read "PLAYER". Networked
     // uses our server slot (myIndex); local mode is always slot 0 ("PLAYER 1").
     auto myDisplayName = [&]() -> std::string {
-        if (!namePristine && !playerName.empty()) return playerName;
+        if (!shell.namePristine && !shell.playerName.empty()) return shell.playerName;
         int slot = networked ? (myIndex >= 0 ? myIndex : 0) : 0;
         return "PLAYER " + std::to_string(slot + 1);
     };
@@ -520,7 +496,7 @@ int main(int argc, char** argv) {
             ps[i].color_fill    = BOT_FILL_COLOR;
             // This slot's shuffled name pick — same order the title-screen lobby
             // previews, so the roster shown before START matches the one in-game.
-            ps[i].name = BOT_NAME_STRINGS[botNameOrder[(i - 1) % BOT_NAME_COUNT]];
+            ps[i].name = BOT_NAME_STRINGS[shell.botNameOrder[(i - 1) % BOT_NAME_COUNT]];
         }
         // Size per-slot bot state and seed personalities (deterministic from each
         // slot's id, so the same map replays the same bots).
@@ -545,7 +521,7 @@ int main(int argc, char** argv) {
         // (covers leftovers from the tail end of the previous match).
         audioQueue.clearAll();
         messageQueue.clearAll();
-        showControls = false; showOptions = false; showScores = false; // close any open lobby modal so it can't hold the freed cursor
+        shell.showControls = false; shell.showOptions = false; shell.showScores = false; // close any open lobby modal so it can't hold the freed cursor
         DisableCursor();
         consumeLookFrames = 2;   // swallow the cursor-lock delta (see the declaration)
         consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
@@ -581,7 +557,7 @@ int main(int argc, char** argv) {
     // VersionMismatch; the PLAYING loop only knew Welcome and State and dropped
     // the rest on the floor.
     //
-    // That lost the leaderboard every single match. The server credits scores on
+    // That lost the shell.leaderboard every single match. The server credits scores on
     // the PLAYING -> GAMEOVER edge and broadcasts the new table immediately, at
     // which point the client is still on the PLAYING screen - so the one message
     // that mattered arrived at the one drain that ignored it. It only ever looked
@@ -592,7 +568,7 @@ int main(int argc, char** argv) {
     auto applyNonStateMessage = [&](ServerMessage& m) -> bool {
         if (m.type == ServerMessage::Type::Welcome) {
             myIndex = m.playerId;
-            serverFull = false;
+            shell.serverFull = false;
             // Now that we know our real slot, assert our name: send our display
             // name (custom, or the correct "PLAYER {slot+1}" default). The server
             // slot may carry a leftover lobby bot name, and pre-welcome
@@ -604,14 +580,14 @@ int main(int argc, char** argv) {
         if (m.type == ServerMessage::Type::Leaderboard) {
             // Server-owned all-time table, already ranked. Replace wholesale -
             // each message is the complete top-N, not a delta.
-            leaderboard = std::move(m.leaderboard);
+            shell.leaderboard = std::move(m.leaderboard);
             return true;
         }
         if (m.type == ServerMessage::Type::Full) {
             // Every slot is claimed (mid-match, no bot filler). The hello resend
             // loop keeps retrying; this just drives the lobby message so it reads
             // "match in progress" instead of "connecting".
-            serverFull = true;
+            shell.serverFull = true;
             return true;
         }
         if (m.type == ServerMessage::Type::VersionMismatch) {
@@ -632,7 +608,7 @@ int main(int argc, char** argv) {
             lastStateTime = GetTime(); // any server frame = the connection is alive
             ServerMessage m = applyMessage(frame, gameSpace);
             if (applyNonStateMessage(m)) {
-                // handled above - welcome / leaderboard / full / version mismatch
+                // handled above - welcome / shell.leaderboard / full / version mismatch
             }
             else if (m.type == ServerMessage::Type::State) {
                 phase = m.phase; netCountdown = m.countdown; netEpoch = m.epoch;
@@ -644,16 +620,16 @@ int main(int argc, char** argv) {
                 if (m.hasOptions) {
                     // Update our OPTIONS modal, per-slider guarded by its drag
                     // latch so a control we're actively dragging isn't stomped.
-                    if (!sliderPlayersActive) { opt.numPlayers = m.opt.numPlayers; optNumPlayersF = (float)opt.numPlayers; }
-                    if (!sliderDiffActive)    opt.botDifficulty      = m.opt.botDifficulty;
-                    if (!sliderWElastActive)  opt.wallElasticity     = m.opt.wallElasticity;
-                    if (!sliderPElastActive)  opt.platformElasticity = m.opt.platformElasticity;
-                    if (!sliderBoostActive)   opt.speedBoost         = m.opt.speedBoost;
-                    if (!sliderRSpeedActive)  opt.rocketSpeedScale   = m.opt.rocketSpeedScale;
-                    if (!sliderXRadiusActive) opt.explosionRadiusScale = m.opt.explosionRadiusScale;
-                    if (!sliderJThrustActive) opt.jetpackThrust      = m.opt.jetpackThrust;
-                    if (!sliderFBurnActive)  { opt.fuelConsumption = m.opt.fuelConsumption; optFuelBurnF  = (float)opt.fuelConsumption; }
-                    if (!sliderFRegenActive) { opt.fuelRegenPct    = m.opt.fuelRegenPct;    optFuelRegenF = (float)opt.fuelRegenPct; }
+                    if (!shell.sliderPlayersActive) { opt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)opt.numPlayers; }
+                    if (!shell.sliderDiffActive)    opt.botDifficulty      = m.opt.botDifficulty;
+                    if (!shell.sliderWElastActive)  opt.wallElasticity     = m.opt.wallElasticity;
+                    if (!shell.sliderPElastActive)  opt.platformElasticity = m.opt.platformElasticity;
+                    if (!shell.sliderBoostActive)   opt.speedBoost         = m.opt.speedBoost;
+                    if (!shell.sliderRSpeedActive)  opt.rocketSpeedScale   = m.opt.rocketSpeedScale;
+                    if (!shell.sliderXRadiusActive) opt.explosionRadiusScale = m.opt.explosionRadiusScale;
+                    if (!shell.sliderJThrustActive) opt.jetpackThrust      = m.opt.jetpackThrust;
+                    if (!shell.sliderFBurnActive)  { opt.fuelConsumption = m.opt.fuelConsumption; shell.optFuelBurnF  = (float)opt.fuelConsumption; }
+                    if (!shell.sliderFRegenActive) { opt.fuelRegenPct    = m.opt.fuelRegenPct;    shell.optFuelRegenF = (float)opt.fuelRegenPct; }
 
                     // Mirror the server's full options bundle onto our gameSpace
                     // regardless of drag state (locally startGame does this) -
@@ -662,10 +638,10 @@ int main(int argc, char** argv) {
                     // mid-drag on an unrelated slider.
                     gameSpace.applyOptions(m.opt);
 
-                    if (m.opt.wallsEnabled       != optSentWalls) { opt.wallsEnabled = m.opt.wallsEnabled; optSentWalls = m.opt.wallsEnabled; }
-                    if (m.opt.rocketsObeyPhysics != optSentPhys)  { opt.rocketsObeyPhysics = m.opt.rocketsObeyPhysics; optSentPhys = m.opt.rocketsObeyPhysics; }
-                    if (m.opt.friendlyFire       != optSentFf)    { opt.friendlyFire = m.opt.friendlyFire; optSentFf = m.opt.friendlyFire; }
-                    if (m.opt.coastMode          != optSentCoast) { opt.coastMode = m.opt.coastMode; optSentCoast = m.opt.coastMode; }
+                    if (m.opt.wallsEnabled       != shell.optSentWalls) { opt.wallsEnabled = m.opt.wallsEnabled; shell.optSentWalls = m.opt.wallsEnabled; }
+                    if (m.opt.rocketsObeyPhysics != shell.optSentPhys)  { opt.rocketsObeyPhysics = m.opt.rocketsObeyPhysics; shell.optSentPhys = m.opt.rocketsObeyPhysics; }
+                    if (m.opt.friendlyFire       != shell.optSentFf)    { opt.friendlyFire = m.opt.friendlyFire; shell.optSentFf = m.opt.friendlyFire; }
+                    if (m.opt.coastMode          != shell.optSentCoast) { opt.coastMode = m.opt.coastMode; shell.optSentCoast = m.opt.coastMode; }
                 }
             }
         }
@@ -695,10 +671,10 @@ int main(int argc, char** argv) {
         // pre-seed frame transmit it and drag the server off our spawn facing.
         // Clearing predInit forces a re-seed from the new spawn orientation.
         predYaw = 0.0f; predPitch = 0.0f; predInit = false; predSeededFor = -1;
-        botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
+        shell.botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
         EnableCursor(); // free the cursor for the title menu
-        showControls = false; showOptions = false; showScores = false; // no stale modal flag leaking back onto the lobby
-        nameFocused = true; // re-focus the name field so the player can type without a click
+        shell.showControls = false; shell.showOptions = false; shell.showScores = false; // no stale modal flag leaking back onto the lobby
+        shell.nameFocused = true; // re-focus the name field so the player can type without a click
         screen = GameScreen::TITLE;
     };
 
@@ -733,7 +709,7 @@ int main(int argc, char** argv) {
     // exact production startGame path; interactive - you fly, the PERF lines
     // are the record.
     if (benchMode) {
-        opt.numPlayers = benchPlayers; optNumPlayersF = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
+        opt.numPlayers = benchPlayers; shell.optNumPlayersF = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
         perfOverlay = true;
         SetTargetFPS(0); // uncap so frame times reflect true throughput, not vsync pacing
         startGame(benchHalf, benchPlat, benchRoid);
@@ -804,7 +780,7 @@ int main(int argc, char** argv) {
                 // would send the slot-0 default "PLAYER 1" for EVERY client and
                 // clobber the server's correct per-slot default ("PLAYER 2", ...);
                 // an empty name leaves the server's default in place.
-                net.send(serializeHello(namePristine ? std::string() : playerName, joinKey));
+                net.send(serializeHello(shell.namePristine ? std::string() : shell.playerName, joinKey));
                 lastHelloTime = nowT;
             }
             // UDP keepalive: the client only streams input during PLAYING, so on
@@ -823,7 +799,7 @@ int main(int argc, char** argv) {
         // Web only: keep shell.html's pointer-lock handler in sync with whether a
         // title-screen modal is open (no-op on native). Modals live only on the
         // title screen, so force it false everywhere else.
-        PlatformzSetModalOpen(screen == GameScreen::TITLE && (showControls || showOptions || showScores));
+        PlatformzSetModalOpen(screen == GameScreen::TITLE && (shell.showControls || shell.showOptions || shell.showScores));
 
         // MARK: AUDIO VOLUME
         // game volume adjustment, in MASTER_VOLUME_STEP_DB (3 dB) steps so every
@@ -836,11 +812,11 @@ int main(int argc, char** argv) {
         // Suppressed while the NAME field has the keyboard: '-' and '=' (and the
         // numpad pair) are typable characters, and the field is focused by
         // default, so typing a name would otherwise ride the volume with it.
-        // Gated on the screen as well as the flag - nameFocused is only cleared
+        // Gated on the screen as well as the flag - shell.nameFocused is only cleared
         // by a click elsewhere, so a networked client the host pulled into a
         // match without it ever clicking would carry a stale `true` into PLAYING
         // and lose the keys for the whole match.
-        const bool typingName = (screen == GameScreen::TITLE && nameFocused);
+        const bool typingName = (screen == GameScreen::TITLE && shell.nameFocused);
         if (!typingName) {
             float currentDb = MasterVolumeAmpToDb(GetMasterVolume());
             if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
@@ -869,16 +845,16 @@ int main(int argc, char** argv) {
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
             // Esc closes an open popup (no cursor toggle on the menu).
-            if (showControls && IsKeyPressed(KEY_ESCAPE)) showControls = false;
-            if (showOptions  && IsKeyPressed(KEY_ESCAPE)) showOptions  = false;
-            if (showScores   && IsKeyPressed(KEY_ESCAPE)) showScores   = false;
+            if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
+            if (shell.showOptions  && IsKeyPressed(KEY_ESCAPE)) shell.showOptions  = false;
+            if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
             // Snapshot each popup state at frame start: CLOSE is only handled if the
             // popup was ALREADY open, so the click that opens it can't also close
             // it on the same frame (the open button and CLOSE overlap on screen).
-            const bool controlsWasOpen = showControls;
-            const bool optionsWasOpen  = showOptions;
-            const bool scoresWasOpen   = showScores;
-            const bool uiEnabled = !showControls && !showOptions && !showScores; // any popup is modal
+            const bool controlsWasOpen = shell.showControls;
+            const bool optionsWasOpen  = shell.showOptions;
+            const bool scoresWasOpen   = shell.showScores;
+            const bool uiEnabled = !shell.showControls && !shell.showOptions && !shell.showScores; // any popup is modal
 
             BeginDrawing();
                 ClearBackground(BLACK);
@@ -896,10 +872,10 @@ int main(int argc, char** argv) {
                 int nameBudget = (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * 20 / 18;
                 // Push every edit to the server so the latest typed name wins
                 // (the welcome already sent a baseline before this field changed).
-                if (UiTextField(nameBox, playerName, nameFocused, PLAYER_NAME_MAX_CHARS, 20,
-                                &namePristine, nameBudget) &&
+                if (UiTextField(nameBox, shell.playerName, shell.nameFocused, PLAYER_NAME_MAX_CHARS, 20,
+                                &shell.namePristine, nameBudget) &&
                     networked && net.isOpen())
-                    net.send(serializeName(playerName));
+                    net.send(serializeName(shell.playerName));
 
                 // Players panel. Local: GAMESPACE_NUMBER_OF_PLAYERS slots - slot 1
                 // is the human, the rest bot-filled (local play spawns 1 human +
@@ -919,7 +895,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < (int)titlePlayers.size(); ++i)
                     if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) { hostSlot = i; break; }
                 bool amHost = !networked || (myIndex >= 0 && myIndex == hostSlot);
-                if (!amHost) showOptions = false; // never leave the OPTIONS modal open on a non-host (e.g. after a host handoff)
+                if (!amHost) shell.showOptions = false; // never leave the OPTIONS modal open on a non-host (e.g. after a host handoff)
 
                 // Networked: preview the roster the match will build - the
                 // connected humans plus bot-fillers up to the chosen NUMBER OF
@@ -971,7 +947,7 @@ int main(int argc, char** argv) {
                             DrawText(TextFormat("1. %s (YOU)", myDisplayName().c_str()),
                                      (int)playersBox.x + 10, ry, 18, RAYWHITE);
                         else
-                            DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[botNameOrder[(i - 1) % BOT_NAME_COUNT]]),
+                            DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[shell.botNameOrder[(i - 1) % BOT_NAME_COUNT]]),
                                      (int)playersBox.x + 10, ry, 18, ui::OUTLINE);
                     }
                 }
@@ -993,7 +969,7 @@ int main(int argc, char** argv) {
                     if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
                     if (uiEnabled && UiButton(bxl, "XL")) startGame(mapSizePresets["XL"].halfSize, mapSizePresets["XL"].numPlatforms, mapSizePresets["XL"].numAsteroids);
                 } else if (!ready) {
-                    const char* waitMsg = serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
+                    const char* waitMsg = shell.serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
                                         : myIndex >= 0 ? "JOINING..." : "CONNECTING...";
                     UiTextCentered(waitMsg, screenWidth, (int)startY + 14, 20, GRAY);
                 } else {
@@ -1023,13 +999,13 @@ int main(int argc, char** argv) {
                     return uiEnabled && UiButton(r, label);
                 };
 
-                if (lobbyButton("CONTROLS")) { showControls = true; if (IsCursorHidden()) EnableCursor(); }
+                if (lobbyButton("CONTROLS")) { shell.showControls = true; if (IsCursorHidden()) EnableCursor(); }
                 // OPTIONS is host-only (it reconfigures the whole match); non-hosts
                 // don't get the button, matching the START gating above.
-                if (amHost && lobbyButton("OPTIONS")) { showOptions = true; if (IsCursorHidden()) EnableCursor(); }
+                if (amHost && lobbyButton("OPTIONS")) { shell.showOptions = true; if (IsCursorHidden()) EnableCursor(); }
                 // LEADERBOARD is networked-only: the table is owned and persisted by
                 // the server, so in local play there is nothing behind it.
-                if (networked && lobbyButton("LEADERBOARD")) { showScores = true; if (IsCursorHidden()) EnableCursor(); }
+                if (networked && lobbyButton("LEADERBOARD")) { shell.showScores = true; if (IsCursorHidden()) EnableCursor(); }
 
                 // Master volume, pinned bottom-right. The slider rides the dB
                 // scale (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left),
@@ -1047,12 +1023,12 @@ int main(int argc, char** argv) {
                          (int)volTrack.y - 26, 18, ui::OUTLINE);
                 // No feedback blip here (unlike the +/- keys): the slider shows
                 // the level on screen, and a drag would machine-gun the sound.
-                if (uiEnabled && UiSlider(volTrack, volDb, MASTER_VOLUME_MIN_DB, 0.0f, sliderVolumeActive))
+                if (uiEnabled && UiSlider(volTrack, volDb, MASTER_VOLUME_MIN_DB, 0.0f, shell.sliderVolumeActive))
                     SetMasterVolume(MasterVolumeDbToAmp(volDb));
 
                 // Controls popup, drawn last so it sits on top. Opaque panel
                 // (UiModalPanel) so the dimmed title UI doesn't bleed through.
-                if (showControls) {
+                if (shell.showControls) {
                     Rectangle m = {250, 140, 500, 420};
                     UiModalChrome(m, "CONTROLS");
                     const char* lines[] = {
@@ -1067,35 +1043,35 @@ int main(int argc, char** argv) {
                     };
                     int ly = (int)m.y + 60;
                     for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
-                    if (UiModalClose(m, controlsWasOpen)) showControls = false;
+                    if (UiModalClose(m, controlsWasOpen)) shell.showControls = false;
                 }
 
                 // Leaderboard popup, same style as CONTROLS. Read-only: the server
                 // owns the table and pushes it on join and after every credited
                 // match, so there is nothing to refresh from here.
-                if (showScores) {
+                if (shell.showScores) {
                     Rectangle m = {250, 140, 500, 420};
                     UiModalChrome(m, "LEADERBOARD");
-                    if (leaderboard.empty()) {
+                    if (shell.leaderboard.empty()) {
                         // Distinguish "nothing recorded yet" from a broken panel -
                         // a fresh server with no score file lands here.
                         UiTextCentered("No scores recorded yet.", screenWidth,
                                        (int)m.y + 120, 20, GRAY);
                     } else {
                         int ly = (int)m.y + 60;
-                        for (size_t i = 0; i < leaderboard.size(); ++i) {
+                        for (size_t i = 0; i < shell.leaderboard.size(); ++i) {
                             // Rank and name left, score right-aligned inside the panel
                             // so the numbers line up regardless of name length.
                             const char* rank = TextFormat("%d. %s", (int)i + 1,
-                                                          leaderboard[i].name.c_str());
-                            const char* val  = TextFormat("%d", leaderboard[i].score);
+                                                          shell.leaderboard[i].name.c_str());
+                            const char* val  = TextFormat("%d", shell.leaderboard[i].score);
                             DrawText(rank, (int)m.x + 40, ly, 18, RAYWHITE);
                             DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)),
                                      ly, 18, ui::OUTLINE);
                             ly += 30;
                         }
                     }
-                    if (UiModalClose(m, scoresWasOpen)) showScores = false;
+                    if (UiModalClose(m, scoresWasOpen)) shell.showScores = false;
                 }
 
                 // Options popup, same opaque modal style. Two columns of five
@@ -1104,7 +1080,7 @@ int main(int argc, char** argv) {
                 // gameplay toggles; they drive local play directly and ride the
                 // start request to the server for networked play. Wide + raised
                 // so both columns and the toggle row fit the 700px window.
-                if (showOptions) {
+                if (shell.showOptions) {
                     Rectangle m = {110, 10, 780, 680}; // two 5-slider columns + toggle row + CLOSE
                     UiModalChrome(m, "OPTIONS");
 
@@ -1127,64 +1103,64 @@ int main(int argc, char** argv) {
                     // --- Left column ---
                     // NUMBER OF PLAYERS (integer, 1..GAMESPACE_NUMBER_OF_PLAYERS).
                     DrawText("NUMBER OF PLAYERS", (int)lxL, y1, 18, RAYWHITE);
-                    valueAt(TextFormat("%d", (int)optNumPlayersF), lxL, y1);
-                    if (UiSlider({lxL, (float)(y1 + 26), colW, 22}, optNumPlayersF,
+                    valueAt(TextFormat("%d", (int)shell.optNumPlayersF), lxL, y1);
+                    if (UiSlider({lxL, (float)(y1 + 26), colW, 22}, shell.optNumPlayersF,
                              1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
-                             sliderPlayersActive, 1.0f)) {
-                        opt.numPlayers = (int)optNumPlayersF; optChanged = true;
+                             shell.sliderPlayersActive, 1.0f)) {
+                        opt.numPlayers = (int)shell.optNumPlayersF; optChanged = true;
                     }
 
                     // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
                     DrawText("BOT DIFFICULTY", (int)lxL, y2, 18, RAYWHITE);
                     valueAt(TextFormat("%.2f", opt.botDifficulty), lxL, y2);
                     if (UiSlider({lxL, (float)(y2 + 26), colW, 22}, opt.botDifficulty,
-                             0.0f, BOT_DIFFICULTY, sliderDiffActive)) optChanged = true;
+                             0.0f, BOT_DIFFICULTY, shell.sliderDiffActive)) optChanged = true;
 
                     // WALL ELASTICITY (players only; asteroids keep their constant).
                     DrawText("WALL ELASTICITY", (int)lxL, y3, 18, RAYWHITE);
                     valueAt(TextFormat("%.2f", opt.wallElasticity), lxL, y3);
                     if (UiSlider({lxL, (float)(y3 + 26), colW, 22}, opt.wallElasticity,
-                             0.0f, 1.0f, sliderWElastActive)) optChanged = true;
+                             0.0f, 1.0f, shell.sliderWElastActive)) optChanged = true;
 
                     // PLATFORM ELASTICITY (players only; asteroids keep their constant).
                     DrawText("PLATFORM ELASTICITY", (int)lxL, y4, 18, RAYWHITE);
                     valueAt(TextFormat("%.2f", opt.platformElasticity), lxL, y4);
                     if (UiSlider({lxL, (float)(y4 + 26), colW, 22}, opt.platformElasticity,
-                             0.0f, 1.0f, sliderPElastActive)) optChanged = true;
+                             0.0f, 1.0f, shell.sliderPElastActive)) optChanged = true;
 
                     // SPEED BOOST (walk + jetpack speed/accel, and rocket speed).
                     DrawText("SPEED BOOST", (int)lxL, y5, 18, RAYWHITE);
                     valueAt(TextFormat("%.1fx", opt.speedBoost), lxL, y5);
                     if (UiSlider({lxL, (float)(y5 + 26), colW, 22}, opt.speedBoost,
-                             1.0f, 2.0f, sliderBoostActive)) optChanged = true;
+                             1.0f, 2.0f, shell.sliderBoostActive)) optChanged = true;
 
                     // --- Right column ---
                     // ROCKET VELOCITY (on top of SPEED BOOST).
                     DrawText("ROCKET VELOCITY", (int)lxR, y1, 18, RAYWHITE);
                     valueAt(TextFormat("%.1fx", opt.rocketSpeedScale), lxR, y1);
                     if (UiSlider({lxR, (float)(y1 + 26), colW, 22}, opt.rocketSpeedScale,
-                             1.0f, 2.0f, sliderRSpeedActive)) optChanged = true;
+                             1.0f, 2.0f, shell.sliderRSpeedActive)) optChanged = true;
 
                     // JETPACK THRUST (on top of SPEED BOOST; jetpack only).
                     DrawText("JETPACK THRUST", (int)lxR, y2, 18, RAYWHITE);
                     valueAt(TextFormat("%.1fx", opt.jetpackThrust), lxR, y2);
                     if (UiSlider({lxR, (float)(y2 + 26), colW, 22}, opt.jetpackThrust,
-                             1.0f, 2.0f, sliderJThrustActive)) optChanged = true;
+                             1.0f, 2.0f, shell.sliderJThrustActive)) optChanged = true;
 
                     // FUEL CONSUMPTION (direct units/sec out of the 100-unit tank).
                     DrawText("FUEL CONSUMPTION (%)", (int)lxR, y3, 18, RAYWHITE);
-                    valueAt(TextFormat("%d/sec", (int)optFuelBurnF), lxR, y3);
-                    if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, optFuelBurnF,
-                             0.0f, 100.0f, sliderFBurnActive, 1.0f)) {
-                        opt.fuelConsumption = (int)optFuelBurnF; optChanged = true;
+                    valueAt(TextFormat("%d/sec", (int)shell.optFuelBurnF), lxR, y3);
+                    if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, shell.optFuelBurnF,
+                             0.0f, 100.0f, shell.sliderFBurnActive, 1.0f)) {
+                        opt.fuelConsumption = (int)shell.optFuelBurnF; optChanged = true;
                     }
 
                     // FUEL REGEN (percentage of the consumption rate; 100% = keeps pace).
                     DrawText("FUEL REGEN (% of consmpt.)", (int)lxR, y4, 18, RAYWHITE);
-                    valueAt(TextFormat("%d/sec", (int)optFuelRegenF), lxR, y4);
-                    if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, optFuelRegenF,
-                             0.0f, 100.0f, sliderFRegenActive, 1.0f)) {
-                        opt.fuelRegenPct = (int)optFuelRegenF; optChanged = true;
+                    valueAt(TextFormat("%d/sec", (int)shell.optFuelRegenF), lxR, y4);
+                    if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, shell.optFuelRegenF,
+                             0.0f, 100.0f, shell.sliderFRegenActive, 1.0f)) {
+                        opt.fuelRegenPct = (int)shell.optFuelRegenF; optChanged = true;
                     }
 
                     // EXPLOSION RADIUS (damage radius + blast visual; last in the
@@ -1192,7 +1168,7 @@ int main(int argc, char** argv) {
                     DrawText("EXPLOSION RADIUS", (int)lxR, y5, 18, RAYWHITE);
                     valueAt(TextFormat("%.1fx", opt.explosionRadiusScale), lxR, y5);
                     if (UiSlider({lxR, (float)(y5 + 26), colW, 22}, opt.explosionRadiusScale,
-                             1.0f, 4.0f, sliderXRadiusActive)) optChanged = true;
+                             1.0f, 4.0f, shell.sliderXRadiusActive)) optChanged = true;
 
                     // Toggles: three across, label on its own line, a compact ON/OFF
                     // control below (labels are long, so keep them off the control's
@@ -1212,29 +1188,29 @@ int main(int argc, char** argv) {
 
                     DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
                     if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
-                        optChanged = true; optSentWalls = opt.wallsEnabled;
+                        optChanged = true; shell.optSentWalls = opt.wallsEnabled;
                     }
 
                     DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
                     if (UiToggle({txFriendly, (float)(y6 + 26), 100, 24}, opt.friendlyFire)) {
-                        optChanged = true; optSentFf = opt.friendlyFire;
+                        optChanged = true; shell.optSentFf = opt.friendlyFire;
                     }
 
                     DrawText("COAST MODE", (int)txCoast, y6, 18, RAYWHITE);
                     if (UiToggle({txCoast, (float)(y6 + 26), 100, 24}, opt.coastMode)) {
-                        optChanged = true; optSentCoast = opt.coastMode;
+                        optChanged = true; shell.optSentCoast = opt.coastMode;
                     }
 
                     DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
                     if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
-                        optChanged = true; optSentPhys = opt.rocketsObeyPhysics;
+                        optChanged = true; shell.optSentPhys = opt.rocketsObeyPhysics;
                     }
 
                     // Push the change to the server (it re-broadcasts to all clients).
                     if (optChanged && networked && net.isOpen())
                         net.send(serializeOptions(opt));
 
-                    if (UiModalClose(m, optionsWasOpen)) showOptions = false;
+                    if (UiModalClose(m, optionsWasOpen)) shell.showOptions = false;
                 }
             EndDrawing();
             continue;
@@ -1421,7 +1397,7 @@ int main(int argc, char** argv) {
                 ServerMessage m = applyMessage(frame, gameSpace);
                 // Same non-state handling the menu screens get. This loop used to
                 // have its own shorter version, which is how the end-of-match
-                // leaderboard went missing - see applyNonStateMessage.
+                // shell.leaderboard went missing - see applyNonStateMessage.
                 if (applyNonStateMessage(m)) {
                     // handled
                 } else if (m.type == ServerMessage::Type::State) {
