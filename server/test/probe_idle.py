@@ -5,11 +5,14 @@ The normal probe.py restarts within a second of the match ending, so it never
 reaches the wind-down. This one ends a match and then waits, checking the two
 thresholds in constants.h:
 
-    GAMEOVER_SIM_SECONDS   15s  stop ticking the world (still broadcasting)
-    GAMEOVER_LOBBY_SECONDS 60s  free the world, phase returns to LOBBY
+    GAMEOVER_SIM_SECONDS    7s  stop ticking the world (still broadcasting)
+    GAMEOVER_LOBBY_SECONDS 10s  free the world, phase returns to LOBBY
 
-Takes ~80s. Expected to DIFFER from a pre-A1b server, which simulates an ended
+Takes ~25s. Expected to DIFFER from a pre-A1b server, which simulates an ended
 match forever - that difference is the feature.
+
+The thresholds were 15 s / 60 s until a room in GAMEOVER was found to be sitting
+unjoinable in the match browser for a full minute after every match.
 
     cd server && ./gameserver &
     python3 test/probe_idle.py
@@ -35,7 +38,7 @@ print(f"ended: phase={a.phase}")
 assert a.phase == "gameover", f"expected gameover, got {a.phase}"
 
 t0 = time.time()
-for target in (10, 20, 40, 58, 66, 75):
+for target in (4, 8, 9, 12, 16):
     while time.time() - t0 < target:
         time.sleep(0.2)
     print(f"  +{target:3d}s  phase={a.phase}")
