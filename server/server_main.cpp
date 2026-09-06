@@ -54,6 +54,7 @@
 #include <array>
 #include <deque>
 #include <algorithm> // std::sort (match-start slot compaction)
+#include <climits>   // INT_MAX (host migration picks the lowest remaining slot)
 #include <sstream>
 #include <iomanip>
 
@@ -332,13 +333,41 @@ SlotMask Match::gatherClaimedSlots() {
 // start a match or change OPTIONS; this is the authoritative backstop behind that
 // UI gate. Locks clientMutex itself; returns false for an unknown conn or no
 // clients. Self-contained (never touches gameMutex), so no lock-ordering risk.
+// Who hosts this room right now, migrating if the host on file has left.
+//
+// STICKY, which is the whole point: once a host is set it stays put even when a
+// lower slot opens up beside them. The old rule recomputed "lowest connected
+// slot" every time and so silently handed the room to whoever landed in slot 0.
+//
+// Migration target is the lowest remaining slot - today's rule, but applied ONCE
+// on departure instead of continuously.
+uint64_t Match::ResolveHostLocked() {
+    // An OFFICIAL room has no host at all. Returning 0 here keeps isHostConn and
+    // optionsLocked from disagreeing: nobody hosts it, and nobody may retune or
+    // start it. The two used to be able to contradict each other.
+    if (optionsLocked) { hostConn = 0; return 0; }
+
+    if (hostConn != 0 && clients.count(hostConn)) return hostConn;
+
+    uint64_t best = 0;
+    int bestSlot = INT_MAX;
+    for (const auto& [cid, c] : clients) {
+        if (c.playerId >= 0 && c.playerId < bestSlot) { bestSlot = c.playerId; best = cid; }
+    }
+    hostConn = best;   // 0 when the room is empty; the next arrival takes it
+    return hostConn;
+}
+
+int Match::HostSlotLocked() {
+    const uint64_t h = ResolveHostLocked();
+    if (h == 0) return -1;
+    auto it = clients.find(h);
+    return it == clients.end() ? -1 : it->second.playerId;
+}
+
 bool Match::isHostConn(uint64_t connId) {
     std::lock_guard<std::mutex> lock(clientMutex);
-    auto it = clients.find(connId);
-    if (it == clients.end()) return false;
-    int minSlot = it->second.playerId;
-    for (auto& [cid, c] : clients) minSlot = std::min(minSlot, c.playerId);
-    return it->second.playerId == minSlot;
+    return connId != 0 && ResolveHostLocked() == connId;
 }
 
 //MARK: Auto-start
@@ -631,7 +660,7 @@ static std::string buildFullBinary() {
 // `connectedSlots` are the player indices currently occupied by a client; each
 // player carries an "active" flag so clients can skip rendering empty slots.
 // -------------------------------------------------------------------------
-std::string Match::buildStateBodyJson(SlotMask connectedSlots) {
+std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
     std::string s;
     s.reserve(1024);
     s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
@@ -669,6 +698,10 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots) {
         s += ",\"active\":" + jb(SlotSet(connectedSlots, i) || p.isBot
                                  || gamePhase.load() != Phase::LOBBY);
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
+        // Who runs this room. Server-owned, because the client can no longer work
+        // it out: host is the CREATOR now, not whoever holds the lowest slot, and
+        // an official room has no host at all (so no slot carries this).
+        s += ",\"host\":"   + jb(i == hostSlot);
         s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
         s += "}";
     }
@@ -807,7 +840,7 @@ std::string Match::buildStatePacket(uint32_t tick, uint32_t lastSeq,
 // Same once-per-tick split as buildStateBodyJson: this body excludes the
 // header (tag/tick/lastSeq), which buildStateBinary below prepends per client.
 // -------------------------------------------------------------------------
-std::string Match::buildStateBodyBinary(SlotMask connectedSlots) {
+std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     std::string b;
     b.reserve(768);
     nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
@@ -850,8 +883,11 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots) {
         // their human left (open body awaiting a reconnect).
         bool active = SlotSet(connectedSlots, i) || p.isBot
                       || gamePhase.load() != Phase::LOBBY;
+        // Bit 32 is the host flag. Bits 32/64/128 were free, so this needed no
+        // layout change and no STATE_BIN_VERSION bump - a client built before it
+        // masks the bits it knows and ignores this one.
         nb::putU8(b, (uint8_t)((p.isAlive ? 1 : 0) | (p.isBot ? 2 : 0) | (active ? 4 : 0) | (p.isSpectating ? 8 : 0)
-                              | (p.isOutOfBounds ? 16 : 0)));
+                              | (p.isOutOfBounds ? 16 : 0) | (i == hostSlot ? 32 : 0)));
         // Out-of-bounds countdown. Player::updatePos (which owns this timer)
         // only runs server-side, so without this the client can't show how long
         // is left before elimination - see the HUD block in main.cpp.
@@ -1458,6 +1494,16 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         // it would be a strange thing to offer.
         SendToClient(c, buildCreated(newCode));
         MoveConnToMatch(connId, c, newCode, code);
+        // Host AFTER the move, not before: MoveConnToMatch can still refuse (a
+        // full or vanished room), and stamping first would leave a room hosted by
+        // someone who never got into it. Set explicitly rather than left to
+        // ResolveHostLocked's lowest-slot fallback - in a fresh room the creator
+        // IS the lowest slot, so the two agree today, but the fallback is a
+        // recovery path and this is a statement of intent.
+        if (MatchForConn(connId) == m) {
+            std::lock_guard<std::mutex> lock(m->clientMutex);
+            m->hostConn = connId;
+        }
         return true;
     }
 
@@ -1754,12 +1800,16 @@ void Match::BroadcastState(uint32_t tick) {
         if (client.transport == Transport::UDP) haveUdp = true;
         else haveWs = true;
     }
+    // Resolved here, under the lock this already holds, so a host who left is
+    // replaced on the very next packet rather than whenever someone next presses
+    // something. -1 in an official room: nobody hosts it.
+    const int hostSlot = HostSlotLocked();
 
     // Build each transport's shared body at most once, and only if a client
     // of that transport is actually connected.
     std::string jsonBody, binBody;
-    if (haveWs)  jsonBody = buildStateBodyJson(connectedSlots);
-    if (haveUdp) binBody  = buildStateBodyBinary(connectedSlots);
+    if (haveWs)  jsonBody = buildStateBodyJson(connectedSlots, hostSlot);
+    if (haveUdp) binBody  = buildStateBodyBinary(connectedSlots, hostSlot);
 
     for (auto& [cid, client] : clients) {
         // UDP gets the compact binary state (fits one datagram; MTU-safe over the

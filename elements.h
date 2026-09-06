@@ -129,6 +129,13 @@ public:
 
     bool isBot = false; // Whether the player is a bot or a human player.
 
+    // Runs this room: may open OPTIONS and press START. Server-owned, like
+    // isConnected and isBot - the client cannot derive it, because the host is
+    // the room's CREATOR rather than whoever holds the lowest slot, and an
+    // official room has no host at all. False on every slot in local play, where
+    // the "am I host" question is answered by not being networked.
+    bool isHost = false;
+
     bool isOutOfBounds = false; // Whether the player is currently out of bounds.
     float outOfBoundsTimer = 0.0; // Timer for how long the player has been out of bounds.
     bool outOfBoundsWarned = false; // Whether the player has been warned about being out of bounds.

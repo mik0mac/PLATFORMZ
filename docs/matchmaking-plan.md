@@ -428,6 +428,46 @@ dropping someone into a stranger's public custom room hands their experience to 
 host who picked the rules and may never press START. That room is still one click
 away in the browser.
 
+### A10. The host is the creator, and it sticks — **DONE** (#108)
+*The other half of A9. The split gave custom rooms a host; this decides who that
+is. Host was "the lowest connected non-bot slot", recomputed on every question and
+implemented independently on both sides (`isHostConn` on the server, `amHost` in
+the client).*
+
+**Why that looked fine and wasn't.** In LOBBY, slots compact every tick, so the
+lowest slot *is* the longest-present player and the rule behaves. Compaction stops
+once `generate()` has run — and mid-match the rule comes apart:
+
+```
+host (slot 0) leaves mid-match      -> slot 1 inherits the room
+their body is botified after the grace
+a latecomer joins and claims slot 0 -> and instantly becomes host
+```
+
+*Confirmed against `main` before fixing it: a player who joined seconds earlier
+sent `endmatch` and ended everyone's match.*
+
+**The fix.** `Match::hostConn` holds the host's connId — the creator's, set when
+they are placed in the room they made. `ResolveHostLocked()` returns it, migrating
+to the **lowest remaining slot** only when the holder has actually gone. Sticky
+rather than continuously recomputed, so a lower slot opening up beside the host
+changes nothing.
+
+Resolved **lazily**, on ask, rather than hooked into every departure path — there
+are five of those (detach, disconnect, the UDP idle reaper, room moves, lobby
+compaction) and a lazy resolve cannot forget one. An official room resolves to
+*no* host at all, which is what stops `isHostConn` and `optionsLocked` from
+contradicting each other.
+
+**The client stopped deriving it.** It now reads a server-set flag, because the
+rule is no longer computable client-side: the creator is not identifiable from
+slot order, and an official room has no host to find. Two implementations of one
+rule was the deeper bug — a divergence shows up as a START button the server
+refuses, which reads as the game ignoring you.
+
+**Wire cost: none.** The per-player flags byte had bits 32/64/128 free, so the
+host flag needed no layout change and no `STATE_BIN_VERSION` bump.
+
 **The default room stays CUSTOM.** It is where a client that names no room lands,
 and keeping it host-run means a solo player can still start a game exactly as
 before. Once the client always picks a room explicitly (C3/C4), it has no reason
@@ -897,6 +937,7 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | A7 | #99 | Server: bucket static platforms once per match (found by A4) | server, perf | A4 |
 | A8 | #100 | Protocol: state packets over the MTU budget + unsurvivable chunking (found by A4) | server, protocol | A4 |
 | A9 | #107 | Server: split online matches into OFFICIAL (preset, auto-start) and CUSTOM (host-run) | server, protocol | A2 |
+| A10 | #108 | Server: host is the room's creator and sticks; migrates to the lowest remaining slot | server, client | A9 |
 | B1 | #78 | Protocol: directory messages — `list`/`create`/`join`/`quick`/`leave` + `matchlist`/`joinfail` | protocol | A2 |
 | B2 | #79 | Protocol: welcome carries the match code (`WELCOME_BIN_VERSION` 0x02→0x0A) + server-wide epoch | protocol | B1 |
 | B3 | #80 | Protocol: move map size into `MatchOptions` so the lobby shows it before start | protocol | B2 |
