@@ -80,6 +80,10 @@ b.send({"type": "create", "n": "SECRET", "pre": "DEFAULT", "priv": True, "code":
 wait(1.5)
 secret = b.created[-1] if b.created else ""
 check(bool(secret), f"created an invite-only room: {secret}")
+# The creator has to end up IN it. They send no password, so the server has to
+# use the room's effective one - handing theirs back refused them entry to the
+# room it had just built for them, and CREATE looked like it did nothing.
+check(b.matchCode == secret, f"the creator is in their own room ({b.matchCode})")
 
 n = len(a.joinfails)
 a.send({"type": "join", "m": secret, "code": ""})

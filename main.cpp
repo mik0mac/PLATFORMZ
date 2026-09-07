@@ -257,6 +257,17 @@ int main(int argc, char** argv) {
     // wire, so extract it here and serializeHello carries it instead.
     std::string joinKey = UrlParam(serverUrl, "key");
 
+    // `networked` answers "is the thing I am doing right now networked?", and a
+    // LOCAL MATCH turns it off for the duration even when a server is connected.
+    // `sessionOnline` answers "does this session have a server at all?" - the
+    // connection has to keep being serviced through an offline match, or we lose
+    // the slot we came back to.
+    //
+    // They were one flag, so LOCAL MATCH's START asked the SERVER to start a
+    // match: the player was dropped into a networked game they never chose, which
+    // only became visible when they hit BACK and the shell pumped the socket again.
+    const bool sessionOnline = networked;
+
     // An invite: the room to walk into as soon as we are welcomed, rather than
     // sitting in whatever room the server parked us in. Same string on both
     // platforms - ?match= on a web page's URL or on a native URL argument - so one
@@ -793,6 +804,8 @@ int main(int argc, char** argv) {
         // the server would still be holding our slot.
         if (networked) shell.syncShadows(onlineOpt);
         screen = networked ? GameScreen::LOBBY : GameScreen::TITLE;
+        // An offline match is over; the session is online again if it ever was.
+        networked = sessionOnline;
     };
 
     // What COPY INVITE puts on the clipboard. A browser friend gets a link they
@@ -904,8 +917,14 @@ int main(int argc, char** argv) {
         // (UDP peer reaped, or a drop) forget our slot so the handshake re-runs.
         // Over WebSocket the server auto-welcomes on connect, so the hello is just
         // a harmless re-welcome and TCP keeps the session alive.
-        if (networked) {
+        if (sessionOnline) {
             double nowT = GetTime();
+            // Playing offline on a connected session: keep the keepalive below
+            // running so the server holds our slot, but THROW THE INBOUND FRAMES
+            // AWAY. Letting them queue means a burst of stale state on the way
+            // back - including a PLAYING phase that would yank us into a networked
+            // match we did not start, which is the bug this whole flag exists for.
+            if (!networked) { net.poll(); lastStateTime = GetTime(); }
             // Auto-fallback (baked-in UDP default only): if the UDP handshake never
             // completes (no welcome, myIndex still -1) within the timeout, the path
             // is likely blocking UDP - switch once to WebSocket at the same host and
@@ -937,7 +956,7 @@ int main(int argc, char** argv) {
                 net.send(serializeKeepalive());
                 lastKeepaliveTime = nowT;
             }
-            if (udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
+            if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
                 myIndex = -1; // UDP only: treat as disconnected; resume the hello handshake
         }
 
@@ -993,7 +1012,7 @@ int main(int argc, char** argv) {
             // Still pump the socket: a connected client holds a slot in whatever
             // room the server put it in, and that room can start without us
             // touching anything. Following it beats being simulated in absentia.
-            if (networked) {
+            if (sessionOnline) {
                 ServerMessage::Phase p = pumpNet();
                 if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
@@ -1002,7 +1021,7 @@ int main(int argc, char** argv) {
             // one the server parked us in. Wait for the welcome (myIndex >= 0):
             // before it we have no slot, and a join sent into that gap is answered
             // to a connection the server has not finished setting up.
-            if (networked && !inviteCode.empty() && net.isOpen() && myIndex >= 0) {
+            if (sessionOnline && !inviteCode.empty() && net.isOpen() && myIndex >= 0) {
                 shell.setBrowseStatus("JOINING " + inviteCode + "...", GetTime());
                 shell.joinPending = true;
                 // The code doubles as the password for an invite-only room, which
@@ -1030,11 +1049,11 @@ int main(int argc, char** argv) {
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 bool nameEdited = false;
-                TitleAction act = DrawTitle(shell, screenWidth, screenHeight, networked,
+                TitleAction act = DrawTitle(shell, screenWidth, screenHeight, sessionOnline,
                                             net.isOpen(), uiEnabled, nameEdited);
                 // Push every edit so the latest typed name wins (the welcome already
                 // sent a baseline before this field changed).
-                if (nameEdited && networked && net.isOpen())
+                if (nameEdited && sessionOnline && net.isOpen())
                     net.send(serializeName(shell.playerName));
 
                 switch (act) {
@@ -1111,6 +1130,10 @@ int main(int argc, char** argv) {
                                                localOpt, screenWidth, screenHeight, uiEnabled);
                 switch (r.action) {
                     case LocalAction::Start: {
+                        // OFFLINE, even with a server connected. Without this
+                        // startGame took the networked branch and asked the server
+                        // to start a match instead.
+                        networked = false;
                         const mapSizePreset& m = mapSizePresets[r.mapSize];
                         startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
                         break;
@@ -1994,7 +2017,7 @@ int main(int argc, char** argv) {
     // Tell the server we're leaving on purpose, so it frees our slot right away
     // instead of waiting out the UDP idle timeout (see serializeGoodbye). Best-
     // effort only: a crash or SIGKILL still just falls back to that timeout.
-    if (networked && net.isOpen()) net.send(serializeGoodbye());
+    if (sessionOnline && net.isOpen()) net.send(serializeGoodbye());
     for (audioFX& fx : fxTable) fx.unload();
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();

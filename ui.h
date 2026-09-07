@@ -119,6 +119,36 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
             }
             c = GetCharPressed();
         }
+        // Paste. GetCharPressed never sees one - the OS delivers it as a key
+        // chord, not as typed characters - so without this an invite code copied
+        // from a lobby has to be read off the screen and typed out by hand, which
+        // rather defeats the copy button.
+        //
+        // Cmd+V on macOS, Ctrl+V elsewhere. Under emscripten GLFW has no
+        // clipboard, so GetClipboardText comes back empty and this is a no-op:
+        // harmless, and the web build hands out links that are opened rather than
+        // pasted anyway.
+#if defined(__APPLE__)
+        const bool pasteHeld = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
+#else
+        const bool pasteHeld = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+#endif
+        if (pasteHeld && IsKeyPressed(KEY_V)) {
+            const char* clip = GetClipboardText();
+            if (clip && *clip) {
+                if (pristine && *pristine) { text.clear(); *pristine = false; }
+                for (const char* q = clip; *q; ++q) {
+                    // Same filter the typed path uses, and the same two limits -
+                    // a paste must not be able to overflow a field that typing
+                    // cannot.
+                    if (*q < 32 || *q > 125) continue;
+                    if (text.size() >= maxLen) break;
+                    if (MeasureText((text + *q).c_str(), fontSize) > fitWidth) break;
+                    text.push_back(*q);
+                    changed = true;
+                }
+            }
+        }
         if (IsKeyPressed(KEY_BACKSPACE)) {
             if (pristine && *pristine) { text.clear(); *pristine = false; changed = true; }
             else if (!text.empty()) { text.pop_back(); changed = true; }
