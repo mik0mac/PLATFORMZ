@@ -588,7 +588,8 @@ inline std::string DrawMapSizeRow(float y, bool uiEnabled) {
 // No OPTIONS button, on purpose. Options configure the match you are about to
 // start, which makes no sense on a screen that starts nothing - and the three
 // destinations do not share a rule set anyway.
-enum class TitleAction { None, FindMatch, CustomMatch, LocalMatch, Controls, Leaderboard, Quit };
+enum class TitleAction { None, QuickMatch, FindMatch, CustomMatch, LocalMatch,
+                         Controls, Leaderboard, Quit };
 
 inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
                              bool networked, bool connected, bool uiEnabled,
@@ -608,10 +609,10 @@ inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
     nameEdited = UiTextField(nameBox, s.playerName, s.nameFocused,
                              PLAYER_NAME_MAX_CHARS, 20, &s.namePristine, nameBudget);
 
-    float y = 330.0f;
+    float y = 322.0f;
     auto row = [&](const char* label, bool enabled) {
-        Rectangle r = {350, y, 300, 52};
-        y += 60.0f;
+        Rectangle r = {350, y, 300, 48};
+        y += 56.0f;
         if (!enabled) {
             // DISABLED, not hidden. A button that vanishes reads as a bug; a
             // greyed one reads as "not right now" - the same rule the browser's
@@ -624,7 +625,11 @@ inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
         return uiEnabled && UiButton(r, label, 20);
     };
 
+    // QUICK MATCH first: it is the shortest path from "I want to play" to
+    // playing, and it is what someone with no opinion about rooms wants. Burying
+    // it one screen deep in the browser made the browser mandatory.
     const bool online = networked && connected;
+    if (row("QUICK MATCH", online))   action = TitleAction::QuickMatch;
     if (row("FIND A MATCH", online))  action = TitleAction::FindMatch;
     if (row("CUSTOM MATCH", online))  action = TitleAction::CustomMatch;
     if (row("LOCAL MATCH", true))     action = TitleAction::LocalMatch;
@@ -636,20 +641,24 @@ inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
                        screenWidth, (int)y + 6, 16, GRAY);
     }
 
+    // One bottom row rather than a stacked LEADERBOARD: the fourth destination
+    // (QUICK MATCH) took the vertical space that used to sit in. SCORES is
+    // networked-only - the table is owned and persisted by the server, so offline
+    // there is nothing behind it. It is not a match option, it is a place to look,
+    // so the router is allowed to offer it.
     float by = screenHeight - 100.0f;
 #if defined(__EMSCRIPTEN__)
     // No QUIT in a browser tab: breaking the loop would leave a dead canvas with
     // no way back. Closing the tab is the platform's own quit.
-    if (uiEnabled && UiButton({350, by, 300, 44}, "CONTROLS", 18)) action = TitleAction::Controls;
-#else
-    if (uiEnabled && UiButton({350, by, 140, 44}, "CONTROLS", 18)) action = TitleAction::Controls;
-    if (uiEnabled && UiButton({510, by, 140, 44}, "QUIT", 18))     action = TitleAction::Quit;
-#endif
-    // Networked-only: the table is owned and persisted by the server, so offline
-    // there is nothing behind it. Not a match option - it is a place to look, so
-    // it is allowed on the router.
-    if (online && uiEnabled && UiButton({350, by - 56.0f, 300, 40}, "LEADERBOARD", 18))
+    if (uiEnabled && UiButton({325, by, 160, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
+    if (online && uiEnabled && UiButton({515, by, 160, 44}, "SCORES", 16))
         action = TitleAction::Leaderboard;
+#else
+    if (uiEnabled && UiButton({325, by, 110, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
+    if (online && uiEnabled && UiButton({445, by, 110, 44}, "SCORES", 16))
+        action = TitleAction::Leaderboard;
+    if (uiEnabled && UiButton({565, by, 110, 44}, "QUIT", 16))     action = TitleAction::Quit;
+#endif
 
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
     return action;
@@ -689,10 +698,13 @@ inline LocalResult DrawLocalSetup(ShellState& s, const std::vector<Player>& play
 }
 
 //MARK: CUSTOM
-// Name and visibility for a room you are about to host. The RULES are set in the
-// lobby afterwards, where everyone who joins can see them - setting them here,
-// before anyone has arrived, would hide them from the people they apply to.
-enum class CustomAction { None, Create, Back };
+// Set up a room you are about to host: what it is called, who can find it, and
+// the rules it opens with. The rules stay editable in the lobby afterwards, so
+// they are never hidden from the people they apply to.
+//
+// Its options are the ONLINE set, never the local one. Retuning your offline
+// game must not silently reconfigure a room you host, or the other way round.
+enum class CustomAction { None, Create, Options, Back };
 
 inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHeight,
                                     bool connected, bool uiEnabled) {
@@ -705,16 +717,21 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
     UiTextCentered("MATCH NAME", screenWidth, 250, 18, ui::OUTLINE);
     UiTextField({300, 276, 400, 44}, s.customName, s.customNameFocused, 24, 22);
 
-    UiTextCentered("INVITE ONLY", screenWidth, 356, 18, ui::OUTLINE);
-    if (uiEnabled) UiToggle({470, 382, 100, 26}, s.customPrivate);
+    UiTextCentered("INVITE ONLY", screenWidth, 342, 18, ui::OUTLINE);
+    if (uiEnabled) UiToggle({470, 368, 100, 26}, s.customPrivate);
+    // The toggle is ONLY visibility. A custom room is host-run either way - you
+    // set the rules and you press START - which is exactly what #107 separated.
     UiTextCentered(s.customPrivate
                        ? "Hidden from FIND A MATCH. Share the code to let people in."
                        : "Listed in FIND A MATCH for anyone to join.",
-                   screenWidth, 424, 16, GRAY);
+                   screenWidth, 406, 16, GRAY);
+    UiTextCentered("You host it either way.", screenWidth, 428, 15, GRAY);
 
-    if (uiEnabled && connected && UiButton({350, 480, 300, 52}, "CREATE", 20))
+    if (uiEnabled && UiButton({350, 462, 300, 44}, "MATCH RULES", 18))
+        action = CustomAction::Options;
+    if (uiEnabled && connected && UiButton({350, 522, 300, 52}, "CREATE", 20))
         action = CustomAction::Create;
-    if (uiEnabled && UiButton({350, 546, 300, 44}, "BACK", 18))
+    if (uiEnabled && UiButton({350, 588, 300, 44}, "BACK", 18))
         action = CustomAction::Back;
 
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
