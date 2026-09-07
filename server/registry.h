@@ -46,7 +46,10 @@ struct MatchEntry {
     MatchKind   kind = MatchKind::Custom;
     bool        isPrivate = false;
 
-    std::string joinCode;    // set only when private; gates joining
+    // Gates joining a private room. Defaults to the room's OWN code when the
+    // creator supplies none, which is what makes "share the code" the whole
+    // invite - see Create().
+    std::string joinCode;
     std::string presetName = "DEFAULT";
 
     // Derived from `kind` inside Create(), never passed in. Kept on the entry so
@@ -112,7 +115,14 @@ public:
         e.name          = name.empty() ? e.code : name;
         e.kind          = kind;
         e.isPrivate     = isPrivate;
-        e.joinCode      = joinCode;
+        // A private room with no password of its own is gated by its OWN code.
+        // Without this it was gated by the empty string: typing the code you were
+        // given into JOIN CODE was refused as "badcode", and the only thing that
+        // opened the room was sending no password at all - so the code was not
+        // the invite, and the room was not actually private. The client has no
+        // way to supply a password here anyway; it does not learn the room's code
+        // until after this call returns.
+        e.joinCode      = (isPrivate && joinCode.empty()) ? e.code : joinCode;
         e.presetName    = presetName;
         e.optionsLocked = official;
         e.autoStart     = official;

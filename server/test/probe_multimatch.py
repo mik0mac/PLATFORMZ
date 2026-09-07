@@ -69,13 +69,31 @@ wait(0.8)
 check(len(a.joinfails) > n and a.joinfails[-1] == "notfound",
       f"unknown room -> notfound ({a.joinfails[-1:]})")
 
-b.send({"type": "create", "n": "SECRET", "pre": "DEFAULT", "priv": True, "code": "opensesame"})
-wait()
-n = len(b.joinfails)
-# private rooms are hidden, so find it via the private listing the server keeps
-b.send({"type": "join", "m": "ZZZZ", "code": "wrong"})
+print("an invite-only room is opened by its own code, and nothing else")
+# The creator supplies no password - the client cannot, it does not learn the
+# room's code until after `create` returns - so the server uses the room's OWN
+# code. Without that the room was gated by the EMPTY string: the code you were
+# handed was refused as badcode, and the one thing that DID open the room was
+# sending no password at all.
+b.created.clear()
+b.send({"type": "create", "n": "SECRET", "pre": "DEFAULT", "priv": True, "code": ""})
+wait(1.5)
+secret = b.created[-1] if b.created else ""
+check(bool(secret), f"created an invite-only room: {secret}")
+
+n = len(a.joinfails)
+a.send({"type": "join", "m": secret, "code": ""})
 wait(0.8)
-check(len(b.joinfails) > n, "private room join with a bad code is refused")
+check(len(a.joinfails) > n, f"an empty password is refused ({a.joinfails[-1:]})")
+
+n = len(a.joinfails)
+a.send({"type": "join", "m": secret, "code": "wrong"})
+wait(0.8)
+check(len(a.joinfails) > n, f"a wrong one is refused ({a.joinfails[-1:]})")
+
+a.send({"type": "join", "m": secret, "code": secret})
+wait(1.5)
+check(a.matchCode == secret, f"the code itself opens it (in {a.matchCode})")
 
 for c in (a, b):
     c.alive = False
