@@ -42,7 +42,7 @@ The server prints this on startup:
 
 ```
 PLATFORMZ server | port 9000 (TCP/WebSocket + UDP) | 60 Hz
-Protocol: state tag 0x09, welcome tag 0x02 | qpos +/-2400 | qvel +/-700
+Protocol: state tag 0x09, welcome tag 0x0A | qpos +/-2400 | qvel +/-700
 Join key: none (open server; set PLATFORMZ_KEY to require one)
 [scoreboard] no file at scores - starting empty
 Scoreboard: 0 names from scores

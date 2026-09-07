@@ -40,7 +40,12 @@ namespace nb {
 // are burned by earlier state layouts, and a stale client in the wild still
 // speaks them. Reusing one would make a genuine mismatch decode as valid.
 static const uint8_t STATE_BIN_VERSION   = 0x09; // per-tick state packet (bumped: match-epoch u32 added to the state header)
-static const uint8_t WELCOME_BIN_VERSION = 0x02; // welcome (slot + static world)
+// 0x0A, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09 are taken by
+// the tags below and by STATE. Bumped from 0x02 when the welcome grew the match
+// code and kind - a client that predates that reads the old layout and would
+// mis-slice the static world, so the tag change is what turns silent corruption
+// into an honest SERVER VERSION MISMATCH.
+static const uint8_t WELCOME_BIN_VERSION = 0x0A; // welcome (slot + room identity + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)
 

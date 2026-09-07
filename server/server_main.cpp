@@ -384,18 +384,29 @@ void Match::ServiceAutoStart(Clock::time_point now) {
     if (live < PUBLIC_MIN_PLAYERS) {
         if (autoStartArmed) std::cout << "Auto-start disarmed (players " << live << ")\n";
         autoStartArmed = false;
+        countdownRemaining = 0.0f;   // the room emptied back below the threshold
         return;
     }
     if (!autoStartArmed) {
         autoStartArmed = true;
         autoStartAt = now + std::chrono::duration_cast<Clock::duration>(
                                 std::chrono::duration<double>(PUBLIC_AUTOSTART_SECONDS));
+        countdownRemaining = (float)PUBLIC_AUTOSTART_SECONDS;  // publish it on the arming tick, not one later
         std::cout << "Auto-start armed: " << live << " players, "
                   << (int)PUBLIC_AUTOSTART_SECONDS << "s\n";
         return;
     }
+    // Let the room SEE it coming. countdownRemaining is otherwise only written
+    // for the pre-match COUNTDOWN phase and is 0 throughout LOBBY, and the client
+    // reads it only on its countdown screen - so reusing it here cost no new
+    // state field and, more to the point, no STATE_BIN_VERSION bump. A nonzero
+    // countdown in LOBBY is unambiguous: nothing else sets one.
+    countdownRemaining = (float)std::max(0.0,
+        std::chrono::duration<double>(autoStartAt - now).count());
+
     if (now >= autoStartAt) {
         autoStartArmed = false;
+        countdownRemaining = 0.0f;
         startRequested = true;   // consumed by the normal start path next tick
         std::cout << "Auto-start firing\n";
     }
@@ -584,8 +595,12 @@ void Match::rebuildWelcomeStatic() {
 std::string Match::buildWelcome(int playerId) {
     std::string statik;
     { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStatic; }
+    // "m" and "k": which room this is and how it is run. See buildWelcomeBinary
+    // for why the client cannot work either out for itself.
     return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
          + ",\"tick\":" + std::to_string(serverTick.load())
+         + ",\"m\":" + js(matchCode)
+         + ",\"k\":" + js(matchKindWire(matchKind))
          + "," + statik + "}";
 }
 
@@ -598,6 +613,14 @@ std::string Match::buildWelcomeBinary(int playerId) {
     nb::putU8(b, nb::WELCOME_BIN_VERSION);
     nb::putI32(b, playerId);
     nb::putU32(b, serverTick.load());
+    // Room identity. Neither is derivable client-side: a player may have arrived
+    // by quick match or by connecting with no room named, so the code they think
+    // they asked for is not authoritative - and nothing else on the wire says how
+    // a room they are already inside is governed, which is what decides whether
+    // they get a START button or a countdown. Inserted BEFORE the static world,
+    // so the layout moved and the tag had to move with it.
+    nb::putStr(b, matchCode);
+    nb::putU8(b, matchKind == MatchKind::Official ? 1 : 0);
     b += statik;   // f32 half, u16 platformCount, platforms
     return b;
 }

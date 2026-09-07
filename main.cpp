@@ -569,6 +569,13 @@ int main(int argc, char** argv) {
         if (m.type == ServerMessage::Type::Welcome) {
             myIndex = m.playerId;
             shell.serverFull = false;
+            // A welcome arrives on connect, after a re-slot, and after a move.
+            // Only a move WE asked for should change screens - hence joinPending
+            // rather than "the code differs", which is also true on connect and
+            // on the way back out of a room after LEAVE.
+            if (shell.joinPending) { shell.joinPending = false; shell.roomChanged = true; }
+            shell.inMatchCode = m.matchCode;
+            shell.inMatchKind = m.matchKind;
             // Now that we know our real slot, assert our name: send our display
             // name (custom, or the correct "PLAYER {slot+1}" default). The server
             // slot may carry a leftover lobby bot name, and pre-welcome
@@ -587,6 +594,9 @@ int main(int argc, char** argv) {
             return true;
         }
         if (m.type == ServerMessage::Type::JoinFail) {
+            // The move we were waiting on is not happening; leave the flag set and
+            // the NEXT welcome for any reason would fling us into a lobby.
+            shell.joinPending = false;
             // Render a sentence, never the wire token - joinFailureText owns that
             // mapping so the client and the protocol can drift apart safely.
             shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
@@ -699,7 +709,10 @@ int main(int argc, char** argv) {
         EnableCursor(); // free the cursor for the title menu
         shell.showControls = false; shell.showOptions = false; shell.showScores = false; // no stale modal flag leaking back onto the lobby
         shell.nameFocused = true; // re-focus the name field so the player can type without a click
-        screen = GameScreen::TITLE;
+        // Networked: we are still IN the room whose match just ended, so go back
+        // to its lobby. Dropping to the router would look like being kicked, and
+        // the server would still be holding our slot.
+        screen = networked ? GameScreen::LOBBY : GameScreen::TITLE;
     };
 
     // Centered placeholder text helper (screenWidth is in scope).
@@ -727,6 +740,11 @@ int main(int argc, char** argv) {
             // by accident rather than intent - and the next screen added would
             // silently inherit whatever the fallthrough returns.
             case GameScreen::BROWSE:    return SCREEN_TITLE;
+            // Every setup screen is a menu screen: one track across the whole
+            // shell, so walking between them does not restart the music.
+            case GameScreen::LOCAL:     return SCREEN_TITLE;
+            case GameScreen::CUSTOM:    return SCREEN_TITLE;
+            case GameScreen::LOBBY:     return SCREEN_TITLE;
             case GameScreen::COUNTDOWN: return SCREEN_COUNTDOWN;
             case GameScreen::PLAYING:   return SCREEN_GAMEPLAY;
             case GameScreen::GAME_OVER: return SCREEN_GAMEOVER;
@@ -829,7 +847,11 @@ int main(int argc, char** argv) {
         // Web only: keep shell.html's pointer-lock handler in sync with whether a
         // title-screen modal is open (no-op on native). Modals live only on the
         // title screen, so force it false everywhere else.
-        PlatformzSetModalOpen(screen == GameScreen::TITLE && (shell.showControls || shell.showOptions || shell.showScores));
+        // Any shell screen can hold a modal now, not just the title.
+        const bool inShell = screen == GameScreen::TITLE  || screen == GameScreen::LOCAL
+                          || screen == GameScreen::CUSTOM || screen == GameScreen::LOBBY
+                          || screen == GameScreen::BROWSE;
+        PlatformzSetModalOpen(inShell && (shell.showControls || shell.showOptions || shell.showScores));
 
         // MARK: AUDIO VOLUME
         // game volume adjustment, in MASTER_VOLUME_STEP_DB (3 dB) steps so every
@@ -846,7 +868,11 @@ int main(int argc, char** argv) {
         // by a click elsewhere, so a networked client the host pulled into a
         // match without it ever clicking would carry a stale `true` into PLAYING
         // and lose the keys for the whole match.
-        const bool typingName = (screen == GameScreen::TITLE && shell.nameFocused);
+        // Text entry swallows the volume keys wherever a field has focus - the
+        // title's NAME box, the browser's CODE box, the custom room's name.
+        const bool typingName = (screen == GameScreen::TITLE  && shell.nameFocused)
+                             || (screen == GameScreen::CUSTOM && shell.customNameFocused)
+                             || (screen == GameScreen::BROWSE && shell.joinCodeFocused);
         if (!typingName) {
             float currentDb = MasterVolumeAmpToDb(GetMasterVolume());
             if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
@@ -862,409 +888,193 @@ int main(int argc, char** argv) {
         // MARK: TITLE SCREEN
         // Placeholder front/end screens. Each handles its own input + draw and
         // skips the rest of the loop; PLAYING (below) is the original game body.
+        //MARK: TITLE
+        // The router. Asks one question - what kind of game? - and starts none of
+        // them itself. Every destination below owns its own setup and its own
+        // rules; there are deliberately no match options on this screen.
         if (screen == GameScreen::TITLE) {
-            // Networked: the title screen is the lobby - pump the server so the
-            // player list stays live and we follow the server into a match (we
-            // started it, a peer did, or we joined one already running). The server
-            // opens a match with the shared pre-match countdown; follow it there so
-            // every client counts down together. If we joined mid-match we skip
-            // straight to PLAYING.
+            // Still pump the socket: a connected client holds a slot in whatever
+            // room the server put it in, and that room can start without us
+            // touching anything. Following it beats being simulated in absentia.
             if (networked) {
                 ServerMessage::Phase p = pumpNet();
                 if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
-            // Esc closes an open popup (no cursor toggle on the menu).
+            // The welcome every client gets on connect is not a room WE chose, so
+            // it must not read as one and pull us into a lobby.
+            shell.roomChanged = false;
+
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
-            if (shell.showOptions  && IsKeyPressed(KEY_ESCAPE)) shell.showOptions  = false;
             if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
-            // Snapshot each popup state at frame start: CLOSE is only handled if the
-            // popup was ALREADY open, so the click that opens it can't also close
-            // it on the same frame (the open button and CLOSE overlap on screen).
             const bool controlsWasOpen = shell.showControls;
-            const bool optionsWasOpen  = shell.showOptions;
             const bool scoresWasOpen   = shell.showScores;
-            const bool uiEnabled = !shell.showControls && !shell.showOptions && !shell.showScores; // any popup is modal
+            const bool uiEnabled = !shell.showControls && !shell.showScores;
 
             BeginDrawing();
                 ClearBackground(BLACK);
-                DrawStarfieldBackdrop((float)GetTime()); // slow-drifting stars behind the UI
-                UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE);
-
-                // Name entry (local-only for now).
-                UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
-                Rectangle nameBox = {350, 240, 300, 40};
-                // Let the name fill the space the UI allots but never overflow
-                // it. The tightest renderer is the lobby roster row below:
-                // "%d. NAME (YOU)" at font 18 inside the 300px players panel.
-                // Convert its leftover width to the field's font size (20) and
-                // let UiTextField reject chars past that budget.
-                int nameBudget = (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * 20 / 18;
-                // Push every edit to the server so the latest typed name wins
-                // (the welcome already sent a baseline before this field changed).
-                if (UiTextField(nameBox, shell.playerName, shell.nameFocused, PLAYER_NAME_MAX_CHARS, 20,
-                                &shell.namePristine, nameBudget) &&
-                    networked && net.isOpen())
+                DrawStarfieldBackdrop((float)GetTime());
+                bool nameEdited = false;
+                TitleAction act = DrawTitle(shell, screenWidth, screenHeight, networked,
+                                            net.isOpen(), uiEnabled, nameEdited);
+                // Push every edit so the latest typed name wins (the welcome already
+                // sent a baseline before this field changed).
+                if (nameEdited && networked && net.isOpen())
                     net.send(serializeName(shell.playerName));
 
-                // Players panel. Local: GAMESPACE_NUMBER_OF_PLAYERS slots - slot 1
-                // is the human, the rest bot-filled (local play spawns 1 human +
-                // N-1 bots). Networked: the live lobby - connected slots from the
-                // server (isConnected), yours marked (YOU). Panel height tracks the
-                // row count.
-                std::vector<Player>& titlePlayers = gameSpace.getPlayers();
-
-                // Host identity: the host may adjust OPTIONS and START the match;
-                // everyone else sees a passive lobby with a "waiting for the host"
-                // line. The SERVER decides who that is and flags their slot - we
-                // used to recompute "lowest connected human slot" here, which was
-                // a second implementation of a rule the server also had, and the
-                // two are now impossible to keep in sync: host is the room's
-                // creator, and an official room has no host at all (hostSlot stays
-                // -1, and nobody gets a START button). Local play is always host.
-                int hostSlot = -1;
-                for (int i = 0; i < (int)titlePlayers.size(); ++i)
-                    if (titlePlayers[i].isHost) { hostSlot = i; break; }
-                bool amHost = !networked || (myIndex >= 0 && myIndex == hostSlot);
-                if (!amHost) shell.showOptions = false; // never leave the OPTIONS modal open on a non-host (e.g. after a host handoff)
-
-                // Networked: preview the roster the match will build - the
-                // connected humans plus bot-fillers up to the chosen NUMBER OF
-                // PLAYERS. The server holds a full slot set (unclaimed ones held by
-                // bots, all flagged isConnected) and echoes opt.numPlayers to every
-                // client, so this preview tracks the host's slider live on ALL
-                // clients. Never hide a connected human sitting above the chosen
-                // count (a mid-roster slot can be free while a higher one is taken).
-                int rowsShown;
-                int previewCount = 0; // networked: number of roster rows to draw (slots 0..previewCount-1)
-                if (networked) {
-                    int lastHumanSlot = -1;
-                    for (int i = 0; i < (int)titlePlayers.size(); ++i)
-                        if (titlePlayers[i].isConnected && !titlePlayers[i].isBot) lastHumanSlot = i;
-                    previewCount = std::min(std::max(opt.numPlayers, lastHumanSlot + 1),
-                                            (int)titlePlayers.size());
-                    rowsShown = previewCount > 0 ? previewCount : 1; // >=1 so the "waiting" line has a row
-                } else {
-                    rowsShown = opt.numPlayers; // OPTIONS slider previews the roster
+                switch (act) {
+                    case TitleAction::FindMatch:
+                        screen = GameScreen::BROWSE;
+                        shell.browseStatus.clear();
+                        shell.matches.clear();
+                        shell.awaitingList = true;
+                        shell.lastListAt = GetTime();
+                        if (net.isOpen()) net.send(serializeList(0));
+                        break;
+                    case TitleAction::CustomMatch:
+                        // Seed the name the first time only, so a player who typed
+                        // one and stepped back doesn't lose it.
+                        if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        screen = GameScreen::CUSTOM;
+                        break;
+                    case TitleAction::LocalMatch:
+                        screen = GameScreen::LOCAL;
+                        break;
+                    case TitleAction::Controls:    shell.showControls = true; break;
+                    case TitleAction::Leaderboard: shell.showScores   = true; break;
+                    // Same exit the window's close button takes; the loop
+                    // condition already watches this flag. Native only - the flag
+                    // is signal-handler state that does not exist under Emscripten,
+                    // where DrawTitle draws no QUIT button either.
+#if !defined(__EMSCRIPTEN__)
+                    case TitleAction::Quit:        g_quitRequested = 1;       break;
+#else
+                    case TitleAction::Quit:        break;
+#endif
+                    case TitleAction::None: break;
                 }
-                const float rowH = 24.0f, headerH = 30.0f;
-                Rectangle playersBox = {350, 300, 300, headerH + rowsShown * rowH + 10.0f};
-                UiPanel(playersBox);
-                DrawText("PLAYERS", (int)playersBox.x + 10, (int)playersBox.y + 8, 14, ui::OUTLINE);
-                if (networked) {
-                    if (previewCount == 0) {
-                        DrawText("Waiting for players...", (int)playersBox.x + 10,
-                                 (int)(playersBox.y + headerH), 18, GRAY);
+                if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
+                if (shell.showScores)   DrawLeaderboardModal(shell, screenWidth, scoresWasOpen);
+            EndDrawing();
+#if !defined(__EMSCRIPTEN__)
+            if (g_quitRequested) break;
+#endif
+            continue;
+        }
+
+        //MARK: LOCAL
+        // Offline setup. Its options are its own - a local game and an online room
+        // are different things and are allowed to be configured differently.
+        if (screen == GameScreen::LOCAL) {
+            if (shell.showOptions && IsKeyPressed(KEY_ESCAPE)) shell.showOptions = false;
+            else if (!shell.showOptions && IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
+            const bool optionsWasOpen = shell.showOptions;
+            const bool uiEnabled = !shell.showOptions;
+
+            BeginDrawing();
+                ClearBackground(BLACK);
+                DrawStarfieldBackdrop((float)GetTime());
+                LocalResult r = DrawLocalSetup(shell, gameSpace.getPlayers(), myDisplayName(),
+                                               opt, screenWidth, screenHeight, uiEnabled);
+                switch (r.action) {
+                    case LocalAction::Start: {
+                        const mapSizePreset& m = mapSizePresets[r.mapSize];
+                        startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
+                        break;
                     }
-                    // Slots 0..previewCount-1 are all occupied (human or bot), so
-                    // draw them as contiguous rows.
-                    for (int i = 0; i < previewCount; ++i) {
-                        int ry = (int)(playersBox.y + headerH + i * rowH);
-                        bool you = (i == myIndex);
-                        // Our row shows the live-typed name (or our slot-numbered
-                        // default while untouched); other rows show the server-synced
-                        // name, falling back to a slot label until they've set one.
-                        std::string shown = you
-                            ? myDisplayName()
-                            : (titlePlayers[i].name.empty() ? TextFormat("PLAYER %d", i + 1)
-                                                            : titlePlayers[i].name);
-                        DrawText(TextFormat("%d. %s%s", i + 1, shown.c_str(), you ? " (YOU)" : ""),
-                                 (int)playersBox.x + 10, ry, 18, you ? RAYWHITE : ui::OUTLINE);
-                    }
-                } else {
-                    for (int i = 0; i < rowsShown; ++i) {
-                        int ry = (int)(playersBox.y + headerH + i * rowH);
-                        if (i == 0)
-                            DrawText(TextFormat("1. %s (YOU)", myDisplayName().c_str()),
-                                     (int)playersBox.x + 10, ry, 18, RAYWHITE);
-                        else
-                            DrawText(TextFormat("%d. %s", i + 1, BOT_NAME_STRINGS[shell.botNameOrder[(i - 1) % BOT_NAME_COUNT]]),
-                                     (int)playersBox.x + 10, ry, 18, ui::OUTLINE);
-                    }
+                    case LocalAction::Options: shell.showOptions = true; break;
+                    case LocalAction::Back:    screen = GameScreen::TITLE; break;
+                    case LocalAction::None: break;
                 }
+                // Local play reads `opt` straight out of the sim, so a changed
+                // control needs no further action.
+                if (shell.showOptions) DrawOptionsModal(shell, opt, optionsWasOpen);
+            EndDrawing();
+            continue;
+        }
 
-                // Start buttons (map-size presets) below the variable-height panel.
-                // Same three sizes in both modes: local generates the world; in
-                // networked play the chosen preset rides the start request and the
-                // server builds it (first press wins). Networked gates on being
-                // connected with a slot; local is always ready.
-                float startY = playersBox.y + playersBox.height + 20.0f;
-                bool ready = !networked || (net.isOpen() && myIndex >= 0);
-                if (ready && amHost) {
-                    Rectangle bs  = {110, startY, 180, 50};
-                    Rectangle bm  = {310, startY, 180, 50};
-                    Rectangle bl  = {510, startY, 180, 50};
-                    Rectangle bxl = {710, startY, 180, 50};
-                    if (uiEnabled && UiButton(bs, "SMALL"))  startGame(mapSizePresets["SMALL"].halfSize, mapSizePresets["SMALL"].numPlatforms, mapSizePresets["SMALL"].numAsteroids);
-                    if (uiEnabled && UiButton(bm, "MEDIUM")) startGame(mapSizePresets["MEDIUM"].halfSize, mapSizePresets["MEDIUM"].numPlatforms, mapSizePresets["MEDIUM"].numAsteroids);
-                    if (uiEnabled && UiButton(bl, "LARGE")) startGame(mapSizePresets["LARGE"].halfSize, mapSizePresets["LARGE"].numPlatforms, mapSizePresets["LARGE"].numAsteroids);
-                    if (uiEnabled && UiButton(bxl, "XL")) startGame(mapSizePresets["XL"].halfSize, mapSizePresets["XL"].numPlatforms, mapSizePresets["XL"].numAsteroids);
-                } else if (!ready) {
-                    const char* waitMsg = shell.serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
-                                        : myIndex >= 0 ? "JOINING..." : "CONNECTING...";
-                    UiTextCentered(waitMsg, screenWidth, (int)startY + 14, 20, GRAY);
-                } else {
-                    // Connected but not the host: only "player 1" starts the match.
-                    // Show who we're waiting on (their synced name, or the slot-
-                    // numbered default until they've set one - same fallback as the
-                    // roster rows above).
-                    // No host at all: an official room, which starts itself. Naming
-                    // a player here would be a lie, and with hostSlot -1 it used to
-                    // read "Waiting for PLAYER 0". What it should say instead - the
-                    // player count and the auto-start countdown - is #111; this is
-                    // just the honest placeholder until then.
-                    if (hostSlot < 0) {
-                        UiTextCentered("This match starts automatically.",
-                                       screenWidth, (int)startY + 14, 20, GRAY);
-                    } else {
-                    std::string hostName = !titlePlayers[hostSlot].name.empty()
-                        ? titlePlayers[hostSlot].name
-                        : TextFormat("PLAYER %d", hostSlot + 1);
-                    UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
-                                   screenWidth, (int)startY + 14, 20, GRAY);
-                    }
+        //MARK: CUSTOM
+        // Name and visibility for a room you are about to host. The RULES are set
+        // in the lobby afterwards, where the people they apply to can see them.
+        if (screen == GameScreen::CUSTOM) {
+            ServerMessage::Phase p = pumpNet();
+            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // The room we asked for exists and we are in it.
+            if (shell.roomChanged) { shell.roomChanged = false; screen = GameScreen::LOBBY; continue; }
+            if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
+
+            BeginDrawing();
+                ClearBackground(BLACK);
+                DrawStarfieldBackdrop((float)GetTime());
+                switch (DrawCustomSetup(shell, screenWidth, screenHeight, net.isOpen(), true)) {
+                    case CustomAction::Create:
+                        shell.joinPending = true;
+                        net.send(serializeCreate(shell.customName, "DEFAULT",
+                                                 shell.customPrivate, ""));
+                        break;
+                    case CustomAction::Back: screen = GameScreen::TITLE; break;
+                    case CustomAction::None: break;
                 }
+            EndDrawing();
+            continue;
+        }
 
-                // Opening a modal must leave the cursor free (the popups are
-                // click-driven, especially OPTIONS). The title screen is already a
-                // free-cursor state, but guard explicitly so this holds if a modal
-                // is ever opened from a captured (in-game) context.
-                // Buttons stack from a running offset rather than fixed positions:
-                // OPTIONS and LEADERBOARD are each conditional, so hardcoded rows
-                // would leave a hole wherever one is hidden (a non-host used to get
-                // a gap between CONTROLS and nothing).
-                float btnY = startY + 64.0f;
-                auto lobbyButton = [&](const char* label) {
-                    Rectangle r = {400, btnY, 200, 44};
-                    btnY += 52.0f;
-                    return uiEnabled && UiButton(r, label);
-                };
+        //MARK: LOBBY
+        // A room we are standing in. What it offers depends on how that room is
+        // governed - the screen reads the kind off the welcome and the host off
+        // the server's per-slot flag, and never decides either for itself.
+        if (screen == GameScreen::LOBBY) {
+            ServerMessage::Phase p = pumpNet();
+            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            shell.roomChanged = false;   // already here; nothing to act on
 
-                // Networked-only: the browser lists rooms on a server, so there is
-                // nothing behind it in local play. C3 restructures this screen
-                // properly; for now it is one more button in the same column.
-                if (networked && lobbyButton("FIND A MATCH")) {
-                    screen = GameScreen::BROWSE;
-                    shell.browseStatus.clear();
-                    shell.matches.clear();
-                    shell.awaitingList = true;
-                    shell.lastListAt = GetTime();
-                    if (net.isOpen()) net.send(serializeList(0));
-                    if (IsCursorHidden()) EnableCursor();
+            if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
+            if (shell.showOptions  && IsKeyPressed(KEY_ESCAPE)) shell.showOptions  = false;
+            if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
+            const bool controlsWasOpen = shell.showControls;
+            const bool optionsWasOpen  = shell.showOptions;
+            const bool scoresWasOpen   = shell.showScores;
+            const bool uiEnabled = !shell.showControls && !shell.showOptions && !shell.showScores;
+
+            BeginDrawing();
+                ClearBackground(BLACK);
+                DrawStarfieldBackdrop((float)GetTime());
+                const bool ready = net.isOpen() && myIndex >= 0;
+                LobbyResult r = DrawLobby(shell, gameSpace.getPlayers(), myIndex,
+                                          myDisplayName(), opt, screenWidth, screenHeight,
+                                          ready, netCountdown, uiEnabled);
+                switch (r.action) {
+                    case LobbyAction::Start: {
+                        const mapSizePreset& m = mapSizePresets[r.mapSize];
+                        startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
+                        break;
+                    }
+                    case LobbyAction::Options:     shell.showOptions  = true; break;
+                    case LobbyAction::Controls:    shell.showControls = true; break;
+                    case LobbyAction::Leaderboard: shell.showScores   = true; break;
+                    case LobbyAction::Leave:
+                        // The server puts us back in its default room and welcomes
+                        // us there; joinPending stays false so that welcome cannot
+                        // bounce us into the room we just walked out of.
+                        if (net.isOpen()) net.send(serializeLeave());
+                        shell.browseStatus.clear();
+                        shell.matches.clear();
+                        shell.awaitingList = true;
+                        shell.lastListAt = GetTime();
+                        if (net.isOpen()) net.send(serializeList(0));
+                        screen = GameScreen::BROWSE;
+                        break;
+                    case LobbyAction::None: break;
                 }
-                if (lobbyButton("CONTROLS")) { shell.showControls = true; if (IsCursorHidden()) EnableCursor(); }
-                // OPTIONS is host-only (it reconfigures the whole match); non-hosts
-                // don't get the button, matching the START gating above.
-                if (amHost && lobbyButton("OPTIONS")) { shell.showOptions = true; if (IsCursorHidden()) EnableCursor(); }
-                // LEADERBOARD is networked-only: the table is owned and persisted by
-                // the server, so in local play there is nothing behind it.
-                if (networked && lobbyButton("LEADERBOARD")) { shell.showScores = true; if (IsCursorHidden()) EnableCursor(); }
-
-                // Master volume, pinned bottom-right. The slider rides the dB
-                // scale (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left),
-                // so track travel matches perceived loudness instead of bunching
-                // everything audible into the top of the range. It reads and
-                // writes raylib's master volume directly (no shadow copy), so it
-                // and the +/- keys can never disagree about the level.
-                const float volW = 200.0f;
-                Rectangle volTrack = {screenWidth - volW - 30.0f, screenHeight - 44.0f, volW, 22.0f};
-                float volDb = MasterVolumeAmpToDb(GetMasterVolume());
-                DrawText("VOLUME", (int)volTrack.x, (int)volTrack.y - 26, 18, RAYWHITE);
-                const char* volVal = volDb <= MASTER_VOLUME_MIN_DB ? "MUTE"
-                                   : TextFormat("%d dB", (int)roundf(volDb));
-                DrawText(volVal, (int)(volTrack.x + volW - MeasureText(volVal, 18)),
-                         (int)volTrack.y - 26, 18, ui::OUTLINE);
-                // No feedback blip here (unlike the +/- keys): the slider shows
-                // the level on screen, and a drag would machine-gun the sound.
-                if (uiEnabled && UiSlider(volTrack, volDb, MASTER_VOLUME_MIN_DB, 0.0f, shell.sliderVolumeActive))
-                    SetMasterVolume(MasterVolumeDbToAmp(volDb));
-
-                // Controls popup, drawn last so it sits on top. Opaque panel
-                // (UiModalPanel) so the dimmed title UI doesn't bleed through.
-                if (shell.showControls) {
-                    Rectangle m = {250, 140, 500, 420};
-                    UiModalChrome(m, "CONTROLS");
-                    const char* lines[] = {
-                        "WASD          move",
-                        "Mouse         look",
-                        "Left click    fire rocket",
-                        "Space         jetpack (up)",
-                        "Left Shift    earth gravity enable",
-                        "M             end match (host only)",
-                        "Esc           toggle cursor capture",
-                        "+ / -         volume up/down",
-                    };
-                    int ly = (int)m.y + 60;
-                    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
-                    if (UiModalClose(m, controlsWasOpen)) shell.showControls = false;
-                }
-
-                // Leaderboard popup, same style as CONTROLS. Read-only: the server
-                // owns the table and pushes it on join and after every credited
-                // match, so there is nothing to refresh from here.
-                if (shell.showScores) {
-                    Rectangle m = {250, 140, 500, 420};
-                    UiModalChrome(m, "LEADERBOARD");
-                    if (shell.leaderboard.empty()) {
-                        // Distinguish "nothing recorded yet" from a broken panel -
-                        // a fresh server with no score file lands here.
-                        UiTextCentered("No scores recorded yet.", screenWidth,
-                                       (int)m.y + 120, 20, GRAY);
-                    } else {
-                        int ly = (int)m.y + 60;
-                        for (size_t i = 0; i < shell.leaderboard.size(); ++i) {
-                            // Rank and name left, score right-aligned inside the panel
-                            // so the numbers line up regardless of name length.
-                            const char* rank = TextFormat("%d. %s", (int)i + 1,
-                                                          shell.leaderboard[i].name.c_str());
-                            const char* val  = TextFormat("%d", shell.leaderboard[i].score);
-                            DrawText(rank, (int)m.x + 40, ly, 18, RAYWHITE);
-                            DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)),
-                                     ly, 18, ui::OUTLINE);
-                            ly += 30;
-                        }
-                    }
-                    if (UiModalClose(m, scoresWasOpen)) shell.showScores = false;
-                }
-
-                // Options popup, same opaque modal style. Two columns of five
-                // sliders (match size/difficulty, elasticities, speed/rocket/
-                // jetpack/explosion multipliers, fuel rates) plus a row of three
-                // gameplay toggles; they drive local play directly and ride the
-                // start request to the server for networked play. Wide + raised
-                // so both columns and the toggle row fit the 700px window.
-                if (shell.showOptions) {
-                    Rectangle m = {110, 10, 780, 680}; // two 5-slider columns + toggle row + CLOSE
-                    UiModalChrome(m, "OPTIONS");
-
-                    const float colW = 330.0f, gutter = 40.0f;
-                    float lxL = m.x + 40, lxR = lxL + colW + gutter;
-                    // Right-aligned value readout next to each label, within
-                    // the given column's right edge.
-                    auto valueAt = [&](const char* v, float colX, int y) {
-                        int vw = MeasureText(v, 18);
-                        DrawText(v, (int)(colX + colW - vw), y, 18, ui::OUTLINE);
-                    };
-
-                    // Each control returns true the frame it changes; in networked
-                    // play we push the new option set to the server so every client's
-                    // modal updates live (mirrors the name-field sync above).
-                    bool optChanged = false;
-
-                    int y1 = (int)m.y + 80, y2 = y1 + 85, y3 = y2 + 85, y4 = y3 + 85, y5 = y4 + 85;
-
-                    // --- Left column ---
-                    // NUMBER OF PLAYERS (integer, 1..GAMESPACE_NUMBER_OF_PLAYERS).
-                    DrawText("NUMBER OF PLAYERS", (int)lxL, y1, 18, RAYWHITE);
-                    valueAt(TextFormat("%d", (int)shell.optNumPlayersF), lxL, y1);
-                    if (UiSlider({lxL, (float)(y1 + 26), colW, 22}, shell.optNumPlayersF,
-                             1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
-                             shell.sliderPlayersActive, 1.0f)) {
-                        opt.numPlayers = (int)shell.optNumPlayersF; optChanged = true;
-                    }
-
-                    // BOT DIFFICULTY (continuous, 0.0..BOT_DIFFICULTY).
-                    DrawText("BOT DIFFICULTY", (int)lxL, y2, 18, RAYWHITE);
-                    valueAt(TextFormat("%.2f", opt.botDifficulty), lxL, y2);
-                    if (UiSlider({lxL, (float)(y2 + 26), colW, 22}, opt.botDifficulty,
-                             0.0f, BOT_DIFFICULTY, shell.sliderDiffActive)) optChanged = true;
-
-                    // WALL ELASTICITY (players only; asteroids keep their constant).
-                    DrawText("WALL ELASTICITY", (int)lxL, y3, 18, RAYWHITE);
-                    valueAt(TextFormat("%.2f", opt.wallElasticity), lxL, y3);
-                    if (UiSlider({lxL, (float)(y3 + 26), colW, 22}, opt.wallElasticity,
-                             0.0f, 1.0f, shell.sliderWElastActive)) optChanged = true;
-
-                    // PLATFORM ELASTICITY (players only; asteroids keep their constant).
-                    DrawText("PLATFORM ELASTICITY", (int)lxL, y4, 18, RAYWHITE);
-                    valueAt(TextFormat("%.2f", opt.platformElasticity), lxL, y4);
-                    if (UiSlider({lxL, (float)(y4 + 26), colW, 22}, opt.platformElasticity,
-                             0.0f, 1.0f, shell.sliderPElastActive)) optChanged = true;
-
-                    // SPEED BOOST (walk + jetpack speed/accel, and rocket speed).
-                    DrawText("SPEED BOOST", (int)lxL, y5, 18, RAYWHITE);
-                    valueAt(TextFormat("%.1fx", opt.speedBoost), lxL, y5);
-                    if (UiSlider({lxL, (float)(y5 + 26), colW, 22}, opt.speedBoost,
-                             1.0f, 2.0f, shell.sliderBoostActive)) optChanged = true;
-
-                    // --- Right column ---
-                    // ROCKET VELOCITY (on top of SPEED BOOST).
-                    DrawText("ROCKET VELOCITY", (int)lxR, y1, 18, RAYWHITE);
-                    valueAt(TextFormat("%.1fx", opt.rocketSpeedScale), lxR, y1);
-                    if (UiSlider({lxR, (float)(y1 + 26), colW, 22}, opt.rocketSpeedScale,
-                             1.0f, 2.0f, shell.sliderRSpeedActive)) optChanged = true;
-
-                    // JETPACK THRUST (on top of SPEED BOOST; jetpack only).
-                    DrawText("JETPACK THRUST", (int)lxR, y2, 18, RAYWHITE);
-                    valueAt(TextFormat("%.1fx", opt.jetpackThrust), lxR, y2);
-                    if (UiSlider({lxR, (float)(y2 + 26), colW, 22}, opt.jetpackThrust,
-                             1.0f, 2.0f, shell.sliderJThrustActive)) optChanged = true;
-
-                    // FUEL CONSUMPTION (direct units/sec out of the 100-unit tank).
-                    DrawText("FUEL CONSUMPTION (%)", (int)lxR, y3, 18, RAYWHITE);
-                    valueAt(TextFormat("%d/sec", (int)shell.optFuelBurnF), lxR, y3);
-                    if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, shell.optFuelBurnF,
-                             0.0f, 100.0f, shell.sliderFBurnActive, 1.0f)) {
-                        opt.fuelConsumption = (int)shell.optFuelBurnF; optChanged = true;
-                    }
-
-                    // FUEL REGEN (percentage of the consumption rate; 100% = keeps pace).
-                    DrawText("FUEL REGEN (% of consmpt.)", (int)lxR, y4, 18, RAYWHITE);
-                    valueAt(TextFormat("%d/sec", (int)shell.optFuelRegenF), lxR, y4);
-                    if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, shell.optFuelRegenF,
-                             0.0f, 100.0f, shell.sliderFRegenActive, 1.0f)) {
-                        opt.fuelRegenPct = (int)shell.optFuelRegenF; optChanged = true;
-                    }
-
-                    // EXPLOSION RADIUS (damage radius + blast visual; last in the
-                    // modal per its own domain, grouped away from the speed trio).
-                    DrawText("EXPLOSION RADIUS", (int)lxR, y5, 18, RAYWHITE);
-                    valueAt(TextFormat("%.1fx", opt.explosionRadiusScale), lxR, y5);
-                    if (UiSlider({lxR, (float)(y5 + 26), colW, 22}, opt.explosionRadiusScale,
-                             1.0f, 4.0f, shell.sliderXRadiusActive)) optChanged = true;
-
-                    // Toggles: three across, label on its own line, a compact ON/OFF
-                    // control below (labels are long, so keep them off the control's
-                    // line). Each defaults to its constants.h value; applied at match
-                    // start. Sliders use an 85px rhythm; this row sits just below them.
-                    // Four explicit x positions (not the slider columns), spaced by
-                    // measured label width at font 18 - 157 / 134 / 115 / 220 px
-                    // left to right - so no label runs into its neighbor. The
-                    // widest, ROCKETS OBEY PHYSICS, goes last, where it has the
-                    // panel's right edge (m.x + m.width = 890) to grow into: it
-                    // ends at 870. Each toggle sits under its label's left edge.
-                    int y6 = y5 + 85;
-                    float txBoundary = lxL;          // 150
-                    float txFriendly = lxL + 190.0f; // 340
-                    float txCoast    = lxL + 350.0f; // 500
-                    float txPhysics  = lxL + 500.0f; // 650
-
-                    DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
-                    if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
-                        optChanged = true; shell.optSentWalls = opt.wallsEnabled;
-                    }
-
-                    DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
-                    if (UiToggle({txFriendly, (float)(y6 + 26), 100, 24}, opt.friendlyFire)) {
-                        optChanged = true; shell.optSentFf = opt.friendlyFire;
-                    }
-
-                    DrawText("COAST MODE", (int)txCoast, y6, 18, RAYWHITE);
-                    if (UiToggle({txCoast, (float)(y6 + 26), 100, 24}, opt.coastMode)) {
-                        optChanged = true; shell.optSentCoast = opt.coastMode;
-                    }
-
-                    DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
-                    if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
-                        optChanged = true; shell.optSentPhys = opt.rocketsObeyPhysics;
-                    }
-
-                    // Push the change to the server (it re-broadcasts to all clients).
-                    if (optChanged && networked && net.isOpen())
-                        net.send(serializeOptions(opt));
-
-                    if (UiModalClose(m, optionsWasOpen)) shell.showOptions = false;
-                }
+                // A host's option change goes to the server, which re-broadcasts it
+                // so every client's panel updates live.
+                if (shell.showOptions && DrawOptionsModal(shell, opt, optionsWasOpen)
+                    && net.isOpen())
+                    net.send(serializeOptions(opt));
+                if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
+                if (shell.showScores)   DrawLeaderboardModal(shell, screenWidth, scoresWasOpen);
             EndDrawing();
             continue;
         }
@@ -1283,6 +1093,8 @@ int main(int argc, char** argv) {
             // browser while a match we belong to begins without us.
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // The join/quick we asked for landed - go stand in the room.
+            if (shell.roomChanged) { shell.roomChanged = false; screen = GameScreen::LOBBY; continue; }
 
             // Poll the list while the screen is open. Rooms fill and empty
             // constantly, and a stale list offers joins that bounce.
@@ -1316,17 +1128,18 @@ int main(int argc, char** argv) {
                         break;
                     case BrowseAction::Quick:
                         shell.setBrowseStatus("FINDING A MATCH...", nowT);
+                        shell.joinPending = true;
                         net.send(serializeQuick());
                         break;
                     case BrowseAction::Create:
-                        // No create dialog yet (C4); make a public room named after
-                        // the player so the flow is exercisable end to end.
-                        net.send(serializeCreate(myDisplayName() + "'S MATCH",
-                                                 "DEFAULT", /*isPrivate*/ false, ""));
-                        shell.awaitingList = true;
+                        // Naming and visibility belong on their own screen now, so
+                        // this hands off rather than minting a room blind.
+                        if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        screen = GameScreen::CUSTOM;
                         break;
                     case BrowseAction::Join:
                         shell.setBrowseStatus("JOINING " + r.code + "...", nowT);
+                        shell.joinPending = true;
                         net.send(serializeJoin(r.code, r.joinCode));
                         break;
                     case BrowseAction::None:

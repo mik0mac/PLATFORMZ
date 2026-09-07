@@ -34,7 +34,10 @@ def set_target(host, port=None):
     global HOST, PORT
     HOST = host
     if port: PORT = int(port)
-STATE, WELCOME, CHUNK, FULL = 0x09, 0x02, 0x03, 0x06
+# Tags per netbin.h. WELCOME is 0x0A since the welcome grew the room's code
+# and kind - values are never recycled there, so it went past the high-water
+# mark rather than taking 0x03.
+STATE, WELCOME, CHUNK, FULL = 0x09, 0x0A, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
 def enc(o): return json.dumps(o, separators=(",", ":")).encode()
 
@@ -42,6 +45,10 @@ class C:
     def __init__(self, name):
         self.name, self.slot, self.seq, self.epoch = name, None, 0, 0
         self.phase, self.nplayers, self.alive = "(none)", 0, True
+        # Which room the server put us in, and how it is run - straight off the
+        # welcome, not the code we asked for.
+        self.matchCode, self.matchKind = "", ""
+        self.countdown = 0.0
         # Leaderboard arrivals, and the phase we believed we were in at the time.
         # The server sends the table BEFORE the state packet announcing GAMEOVER,
         # so a correct client must handle it while still in "playing".
@@ -78,12 +85,23 @@ class C:
                 d = b"".join(self.parts[gen][i] for i in range(cnt))
                 self.parts.clear(); tag = d[0]
             if tag == WELCOME:
+                # u8 tag, i32 slot, u32 tick, u8 codeLen + code, u8 kind, then
+                # the static world.
                 self.slot = struct.unpack_from("<i", d, 1)[0]
+                try:
+                    clen = d[9]
+                    self.matchCode = d[10:10 + clen].decode("utf-8", "replace")
+                    self.matchKind = "official" if d[10 + clen] else "custom"
+                except IndexError:
+                    pass
             elif tag == STATE:
                 # header: u8 tag, u32 tick, u32 lastSeq  -> body starts at 9
                 # body: u8 phase, f32 countdown, u32 epoch, u8 nplayers-opt,
                 #       7*f32, u8 fburn, u8 fregen, u8 flags, u8 rosterCount
                 self.phase = PHASES.get(d[9], "?")
+                # f32 at 10: the pre-match countdown, and in LOBBY the official
+                # room's auto-start timer (0 unless armed).
+                self.countdown = struct.unpack_from("<f", d, 10)[0]
                 self.epoch = struct.unpack_from("<I", d, 14)[0]
                 self.nplayers = d[50]
                 # Decode the roster so tests can assert on a player's actual

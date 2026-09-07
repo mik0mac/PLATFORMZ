@@ -35,6 +35,12 @@ time.sleep(1.0)
 h.send({"type": "create", "n": "OPEN HOUSE", "pre": "DEFAULT", "priv": False, "code": ""})
 time.sleep(1.2)
 check(len(h.created) == 1, f"created a public room: {h.created}")
+# The welcome names the room and how it is run. Neither is inferable: quick match
+# picks the room for you, and connecting with no room named lands you in one you
+# never chose - so the code you think you asked for proves nothing.
+check(h.matchCode == (h.created[-1] if h.created else None),
+      f"welcome names the room we are in: {h.matchCode!r}")
+check(h.matchKind == "custom", f"...and calls it custom: {h.matchKind!r}")
 check(h.phase == "lobby", f"and it waits in the lobby (phase={h.phase})")
 h.send({"type": "start", **OPTS})
 time.sleep(7.0)   # START -> COUNTDOWN -> PLAYING; long enough to clear the countdown
@@ -53,6 +59,9 @@ a.send({"type": "quick"})            # quick goes to official rooms only
 time.sleep(1.2)
 check(a.slot is not None, f"quick match put us in a room (slot={a.slot})")
 check(a.phase == "lobby", f"which is in its lobby (phase={a.phase})")
+check(a.matchKind == "official", f"welcome calls it official: {a.matchKind!r}")
+check(bool(a.matchCode), f"and names it: {a.matchCode!r}")
+check(a.countdown == 0.0, f"alone, no auto-start countdown yet ({a.countdown})")
 a.send({"type": "start", **OPTS})
 time.sleep(7.0)   # the same wait that had the custom room PLAYING by now
 # Not "nothing happened" - the SAME message started the custom room above, and
@@ -70,7 +79,17 @@ b.send({"type": "quick"})            # fullest joinable official room = the one 
 time.sleep(1.2)
 check(b.slot is not None and b.slot != a.slot,
       f"second player joined the same room (slots {a.slot}, {b.slot})")
+check(b.matchCode == a.matchCode, f"into the SAME room ({a.matchCode} / {b.matchCode})")
 check(a.phase == "lobby", "the countdown has not fired early")
+
+# The room must be able to SAY it is about to start. Without this there was a
+# silent window where it had committed and nobody in it could tell.
+first = a.countdown
+check(0.0 < first <= PUBLIC_AUTOSTART_SECONDS + 0.5,
+      f"the auto-start countdown is published to the room ({first:.1f}s)")
+time.sleep(3.0)
+check(a.countdown < first, f"and it counts DOWN ({first:.1f}s -> {a.countdown:.1f}s)")
+check(b.countdown > 0.0, f"both players see it (B={b.countdown:.1f}s)")
 
 # Armed on arrival, so wait out the countdown with slack for the tick.
 deadline = time.time() + PUBLIC_AUTOSTART_SECONDS + 8.0
