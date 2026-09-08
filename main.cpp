@@ -437,7 +437,14 @@ int main(int argc, char** argv) {
     // sim (locally applied via GameSpace::applyOptions, remotely threaded
     // through serializeStart/serializeOptions). Drag latches guard the sliders
     // from server echoes while the mouse is on them.
-    MatchOptions opt;
+    // TWO option sets, deliberately not one. A local game and an online room are
+    // different things: changing your offline setup must not silently retune a
+    // room you host, and a host's change must not follow you into single player.
+    // They share the widget code (DrawOptionsModal takes a reference) but never
+    // the values.
+    MatchOptions localOpt;    // LOCAL screen; applied straight to the local sim
+    MatchOptions onlineOpt;   // CUSTOM + LOBBY; rides `start`/`options` to the server
+                              // and is overwritten by the server's echo
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
@@ -477,12 +484,12 @@ int main(int argc, char** argv) {
         if (networked) {
             // Send the chosen map preset + the full OPTIONS bundle; the server
             // applies them before generating the world (first press wins).
-            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids, opt));
+            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids, onlineOpt));
             return;
         }
         gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
-        gameSpace.applyOptions(opt); // OPTIONS: elasticities, speed/rocket/jetpack/explosion scales, fuel rates, gameplay toggles
-        gameSpace.setPlayerCount(opt.numPlayers); // OPTIONS: 1 human + (N-1) bots
+        gameSpace.applyOptions(localOpt); // OPTIONS: elasticities, speed/rocket/jetpack/explosion scales, fuel rates, gameplay toggles
+        gameSpace.setPlayerCount(localOpt.numPlayers); // OPTIONS: 1 human + (N-1) bots
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
@@ -500,7 +507,7 @@ int main(int argc, char** argv) {
         }
         // Size per-slot bot state and seed personalities (deterministic from each
         // slot's id, so the same map replays the same bots).
-        botController.init(ps, opt.botDifficulty);
+        botController.init(ps, localOpt.botDifficulty);
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
         // World is built but stays frozen: enter the pre-match countdown instead of
         // PLAYING. The COUNTDOWN block below ticks the timer and flips to PLAYING at
@@ -654,16 +661,16 @@ int main(int argc, char** argv) {
                 if (m.hasOptions) {
                     // Update our OPTIONS modal, per-slider guarded by its drag
                     // latch so a control we're actively dragging isn't stomped.
-                    if (!shell.sliderPlayersActive) { opt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)opt.numPlayers; }
-                    if (!shell.sliderDiffActive)    opt.botDifficulty      = m.opt.botDifficulty;
-                    if (!shell.sliderWElastActive)  opt.wallElasticity     = m.opt.wallElasticity;
-                    if (!shell.sliderPElastActive)  opt.platformElasticity = m.opt.platformElasticity;
-                    if (!shell.sliderBoostActive)   opt.speedBoost         = m.opt.speedBoost;
-                    if (!shell.sliderRSpeedActive)  opt.rocketSpeedScale   = m.opt.rocketSpeedScale;
-                    if (!shell.sliderXRadiusActive) opt.explosionRadiusScale = m.opt.explosionRadiusScale;
-                    if (!shell.sliderJThrustActive) opt.jetpackThrust      = m.opt.jetpackThrust;
-                    if (!shell.sliderFBurnActive)  { opt.fuelConsumption = m.opt.fuelConsumption; shell.optFuelBurnF  = (float)opt.fuelConsumption; }
-                    if (!shell.sliderFRegenActive) { opt.fuelRegenPct    = m.opt.fuelRegenPct;    shell.optFuelRegenF = (float)opt.fuelRegenPct; }
+                    if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
+                    if (!shell.sliderDiffActive)    onlineOpt.botDifficulty      = m.opt.botDifficulty;
+                    if (!shell.sliderWElastActive)  onlineOpt.wallElasticity     = m.opt.wallElasticity;
+                    if (!shell.sliderPElastActive)  onlineOpt.platformElasticity = m.opt.platformElasticity;
+                    if (!shell.sliderBoostActive)   onlineOpt.speedBoost         = m.opt.speedBoost;
+                    if (!shell.sliderRSpeedActive)  onlineOpt.rocketSpeedScale   = m.opt.rocketSpeedScale;
+                    if (!shell.sliderXRadiusActive) onlineOpt.explosionRadiusScale = m.opt.explosionRadiusScale;
+                    if (!shell.sliderJThrustActive) onlineOpt.jetpackThrust      = m.opt.jetpackThrust;
+                    if (!shell.sliderFBurnActive)  { onlineOpt.fuelConsumption = m.opt.fuelConsumption; shell.optFuelBurnF  = (float)onlineOpt.fuelConsumption; }
+                    if (!shell.sliderFRegenActive) { onlineOpt.fuelRegenPct    = m.opt.fuelRegenPct;    shell.optFuelRegenF = (float)onlineOpt.fuelRegenPct; }
 
                     // Mirror the server's full options bundle onto our gameSpace
                     // regardless of drag state (locally startGame does this) -
@@ -672,10 +679,10 @@ int main(int argc, char** argv) {
                     // mid-drag on an unrelated slider.
                     gameSpace.applyOptions(m.opt);
 
-                    if (m.opt.wallsEnabled       != shell.optSentWalls) { opt.wallsEnabled = m.opt.wallsEnabled; shell.optSentWalls = m.opt.wallsEnabled; }
-                    if (m.opt.rocketsObeyPhysics != shell.optSentPhys)  { opt.rocketsObeyPhysics = m.opt.rocketsObeyPhysics; shell.optSentPhys = m.opt.rocketsObeyPhysics; }
-                    if (m.opt.friendlyFire       != shell.optSentFf)    { opt.friendlyFire = m.opt.friendlyFire; shell.optSentFf = m.opt.friendlyFire; }
-                    if (m.opt.coastMode          != shell.optSentCoast) { opt.coastMode = m.opt.coastMode; shell.optSentCoast = m.opt.coastMode; }
+                    if (m.opt.wallsEnabled       != shell.optSentWalls) { onlineOpt.wallsEnabled = m.opt.wallsEnabled; shell.optSentWalls = m.opt.wallsEnabled; }
+                    if (m.opt.rocketsObeyPhysics != shell.optSentPhys)  { onlineOpt.rocketsObeyPhysics = m.opt.rocketsObeyPhysics; shell.optSentPhys = m.opt.rocketsObeyPhysics; }
+                    if (m.opt.friendlyFire       != shell.optSentFf)    { onlineOpt.friendlyFire = m.opt.friendlyFire; shell.optSentFf = m.opt.friendlyFire; }
+                    if (m.opt.coastMode          != shell.optSentCoast) { onlineOpt.coastMode = m.opt.coastMode; shell.optSentCoast = m.opt.coastMode; }
                 }
             }
         }
@@ -712,6 +719,7 @@ int main(int argc, char** argv) {
         // Networked: we are still IN the room whose match just ended, so go back
         // to its lobby. Dropping to the router would look like being kicked, and
         // the server would still be holding our slot.
+        if (networked) shell.syncShadows(onlineOpt);
         screen = networked ? GameScreen::LOBBY : GameScreen::TITLE;
     };
 
@@ -757,7 +765,7 @@ int main(int argc, char** argv) {
     // exact production startGame path; interactive - you fly, the PERF lines
     // are the record.
     if (benchMode) {
-        opt.numPlayers = benchPlayers; shell.optNumPlayersF = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
+        localOpt.numPlayers = benchPlayers; shell.optNumPlayersF = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
         perfOverlay = true;
         SetTargetFPS(0); // uncap so frame times reflect true throughput, not vsync pacing
         startGame(benchHalf, benchPlat, benchRoid);
@@ -923,6 +931,20 @@ int main(int argc, char** argv) {
                     net.send(serializeName(shell.playerName));
 
                 switch (act) {
+                    case TitleAction::QuickMatch:
+                        // The server picks an official room, or makes one. Either
+                        // way we end up standing in it, so wait in the browser
+                        // rather than on the router - the reply is a welcome, and
+                        // BROWSE is what turns that into a lobby.
+                        shell.browseStatus.clear();
+                        shell.matches.clear();
+                        shell.awaitingList = true;
+                        shell.lastListAt = GetTime();
+                        shell.joinPending = true;
+                        if (net.isOpen()) { net.send(serializeQuick()); net.send(serializeList(0)); }
+                        shell.setBrowseStatus("FINDING A MATCH...", GetTime());
+                        screen = GameScreen::BROWSE;
+                        break;
                     case TitleAction::FindMatch:
                         screen = GameScreen::BROWSE;
                         shell.browseStatus.clear();
@@ -935,9 +957,13 @@ int main(int argc, char** argv) {
                         // Seed the name the first time only, so a player who typed
                         // one and stepped back doesn't lose it.
                         if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        // One modal, two option sets: hand it the values it is
+                        // about to edit, or its sliders show the other mode's.
+                        shell.syncShadows(onlineOpt);
                         screen = GameScreen::CUSTOM;
                         break;
                     case TitleAction::LocalMatch:
+                        shell.syncShadows(localOpt);
                         screen = GameScreen::LOCAL;
                         break;
                     case TitleAction::Controls:    shell.showControls = true; break;
@@ -975,7 +1001,7 @@ int main(int argc, char** argv) {
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 LocalResult r = DrawLocalSetup(shell, gameSpace.getPlayers(), myDisplayName(),
-                                               opt, screenWidth, screenHeight, uiEnabled);
+                                               localOpt, screenWidth, screenHeight, uiEnabled);
                 switch (r.action) {
                     case LocalAction::Start: {
                         const mapSizePreset& m = mapSizePresets[r.mapSize];
@@ -986,28 +1012,41 @@ int main(int argc, char** argv) {
                     case LocalAction::Back:    screen = GameScreen::TITLE; break;
                     case LocalAction::None: break;
                 }
-                // Local play reads `opt` straight out of the sim, so a changed
-                // control needs no further action.
-                if (shell.showOptions) DrawOptionsModal(shell, opt, optionsWasOpen);
+                // Local play reads localOpt straight out of the sim at START, so
+                // a changed control needs no further action.
+                if (shell.showOptions) DrawOptionsModal(shell, localOpt, optionsWasOpen);
             EndDrawing();
             continue;
         }
 
         //MARK: CUSTOM
-        // Name and visibility for a room you are about to host. The RULES are set
-        // in the lobby afterwards, where the people they apply to can see them.
+        // Set up a room you are about to host: name, visibility, and the rules it
+        // opens with. They stay editable in the lobby afterwards, so they are never
+        // hidden from the people they apply to.
         if (screen == GameScreen::CUSTOM) {
             ServerMessage::Phase p = pumpNet();
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
-            // The room we asked for exists and we are in it.
-            if (shell.roomChanged) { shell.roomChanged = false; screen = GameScreen::LOBBY; continue; }
-            if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
+            // The room we asked for exists and we are in it. Push the rules we set
+            // up on this screen: `create` carries only the name and visibility, so
+            // without this the room would open on the server's defaults and quietly
+            // discard everything the host just chose.
+            if (shell.roomChanged) {
+                shell.roomChanged = false;
+                if (net.isOpen()) net.send(serializeOptions(onlineOpt));
+                screen = GameScreen::LOBBY;
+                continue;
+            }
+            if (shell.showOptions && IsKeyPressed(KEY_ESCAPE)) shell.showOptions = false;
+            else if (!shell.showOptions && IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
 
             BeginDrawing();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
-                switch (DrawCustomSetup(shell, screenWidth, screenHeight, net.isOpen(), true)) {
+                const bool optionsWasOpen = shell.showOptions;
+                switch (DrawCustomSetup(shell, screenWidth, screenHeight, net.isOpen(),
+                                        !shell.showOptions)) {
+                    case CustomAction::Options: shell.showOptions = true; break;
                     case CustomAction::Create:
                         shell.joinPending = true;
                         net.send(serializeCreate(shell.customName, "DEFAULT",
@@ -1016,6 +1055,9 @@ int main(int argc, char** argv) {
                     case CustomAction::Back: screen = GameScreen::TITLE; break;
                     case CustomAction::None: break;
                 }
+                // Nothing to send yet - the room does not exist. The bundle goes
+                // out the moment it does, above.
+                if (shell.showOptions) DrawOptionsModal(shell, onlineOpt, optionsWasOpen);
             EndDrawing();
             continue;
         }
@@ -1043,7 +1085,7 @@ int main(int argc, char** argv) {
                 DrawStarfieldBackdrop((float)GetTime());
                 const bool ready = net.isOpen() && myIndex >= 0;
                 LobbyResult r = DrawLobby(shell, gameSpace.getPlayers(), myIndex,
-                                          myDisplayName(), opt, screenWidth, screenHeight,
+                                          myDisplayName(), onlineOpt, screenWidth, screenHeight,
                                           ready, netCountdown, uiEnabled);
                 switch (r.action) {
                     case LobbyAction::Start: {
@@ -1070,9 +1112,9 @@ int main(int argc, char** argv) {
                 }
                 // A host's option change goes to the server, which re-broadcasts it
                 // so every client's panel updates live.
-                if (shell.showOptions && DrawOptionsModal(shell, opt, optionsWasOpen)
+                if (shell.showOptions && DrawOptionsModal(shell, onlineOpt, optionsWasOpen)
                     && net.isOpen())
-                    net.send(serializeOptions(opt));
+                    net.send(serializeOptions(onlineOpt));
                 if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
                 if (shell.showScores)   DrawLeaderboardModal(shell, screenWidth, scoresWasOpen);
             EndDrawing();
@@ -1094,7 +1136,12 @@ int main(int argc, char** argv) {
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             // The join/quick we asked for landed - go stand in the room.
-            if (shell.roomChanged) { shell.roomChanged = false; screen = GameScreen::LOBBY; continue; }
+            if (shell.roomChanged) {
+                shell.roomChanged = false;
+                shell.syncShadows(onlineOpt);
+                screen = GameScreen::LOBBY;
+                continue;
+            }
 
             // Poll the list while the screen is open. Rooms fill and empty
             // constantly, and a stale list offers joins that bounce.
