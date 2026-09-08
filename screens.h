@@ -124,6 +124,11 @@ struct ShellState {
 
     std::string joinCode;                   // JOIN CODE field contents
     bool        joinCodeFocused = false;
+    // "COPIED" confirmation under the lobby's code, cleared on a timer - a copy
+    // button with no feedback leaves you unsure whether it fired.
+    std::string copyNotice;
+    double      copyNoticeAt = 0.0;
+
     std::string browseStatus;               // one-line feedback, e.g. a refusal
     double      browseStatusAt = 0.0;       // when it was set, so it can fade
 
@@ -748,7 +753,7 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
 //   official             the head count, then the countdown. No START at all:
 //                        the server rejects options/start/endmatch from every
 //                        connection in an official room.
-enum class LobbyAction { None, Start, Options, Controls, Leaderboard, Leave };
+enum class LobbyAction { None, Start, Options, Controls, Leaderboard, CopyInvite, Leave };
 
 struct LobbyResult {
     LobbyAction action = LobbyAction::None;
@@ -763,11 +768,19 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
     const bool official = (s.inMatchKind == MatchKind::Official);
 
     UiTextCentered(official ? "OFFICIAL MATCH" : "MATCH LOBBY", screenWidth, 100, 44, RAYWHITE);
-    if (!s.inMatchCode.empty())
-        UiTextCentered(TextFormat("CODE  %s", s.inMatchCode.c_str()), screenWidth, 156, 22,
+    if (!s.inMatchCode.empty()) {
+        UiTextCentered(TextFormat("CODE  %s", s.inMatchCode.c_str()), screenWidth, 152, 22,
                        official ? GRAY : ui::OUTLINE);
-    if (!official && !s.inMatchCode.empty())
-        UiTextCentered("SHARE THAT CODE TO INVITE ANYONE", screenWidth, 186, 15, GRAY);
+        // The code is the whole invite for an invite-only room, so it needs to be
+        // gettable, not just readable off the screen.
+        if (uiEnabled && UiButton({620, 148, 130, 30}, "COPY INVITE", 14))
+            out.action = LobbyAction::CopyInvite;
+        if (!official)
+            UiTextCentered(s.copyNotice.empty() ? "SHARE IT TO INVITE ANYONE"
+                                                : s.copyNotice.c_str(),
+                           screenWidth, 184, 15,
+                           s.copyNotice.empty() ? GRAY : ui::OUTLINE);
+    }
 
     // Host is whatever slot the SERVER flagged. We do not recompute it: the host
     // is the room's creator, not the lowest slot, and an official room has none.

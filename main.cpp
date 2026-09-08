@@ -29,6 +29,39 @@
 // Tell shell.html whether a title-screen modal (CONTROLS/OPTIONS) is open, so its
 // mousedown pointer-lock handler can skip grabbing the cursor for menu popups.
 EM_JS(void, PlatformzSetModalOpen, (int open), { if (window.Module) Module.modalOpen = !!open; });
+
+// COPY INVITE, browser edition. Builds this page's URL with ?match=CODE merged in
+// (keeping ?server= and ?key= intact - drop the key and the link stops working on
+// a gated server), puts it on the clipboard, and writes it back for display.
+//
+// The code is passed as a STRING ARGUMENT rather than interpolated into script
+// text. It is four characters from a fixed safe alphabet, so nothing could get
+// through today - but building source out of anything that arrived over the wire
+// is a habit worth not having.
+//
+// raylib's SetClipboardText goes through GLFW, which has no clipboard under
+// emscripten, so the copy happens here. navigator.clipboard needs a secure
+// context, which a plain-http LAN server is not - hence the execCommand fallback.
+EM_JS(void, PlatformzCopyInvite, (const char* code, char* out, int cap), {
+    var u = new URL(location.href);
+    u.searchParams.set('match', UTF8ToString(code));
+    var link = u.toString();
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(link);
+        } else {
+            var t = document.createElement('textarea');
+            t.value = link;
+            t.style.position = 'fixed';
+            t.style.opacity = '0';
+            document.body.appendChild(t);
+            t.select();
+            document.execCommand('copy');
+            document.body.removeChild(t);
+        }
+    } catch (e) { /* clipboard refused: the link is still shown on screen */ }
+    stringToUTF8(link, out, cap);
+});
 #else
 inline void PlatformzSetModalOpen(int) {} // no-op on native builds
 
@@ -42,6 +75,26 @@ inline void PlatformzSetModalOpen(int) {} // no-op on native builds
 static volatile std::sig_atomic_t g_quitRequested = 0;
 static void HandleQuitSignal(int) { g_quitRequested = 1; }
 #endif
+
+// Pull one parameter out of a server URL's query string. The invite travels in
+// the URL however it arrived - a web page's ?match=, a native URL argument, or a
+// pasted link - so both the join key and the room code come out the same way.
+static std::string UrlParam(const std::string& url, const std::string& name) {
+    const auto q = url.find('?');
+    if (q == std::string::npos) return std::string();
+    const std::string query = url.substr(q + 1);
+    const std::string want  = name + "=";
+    size_t k = 0;
+    while (k != std::string::npos) {
+        if (query.compare(k, want.size(), want) == 0) {
+            const size_t from = k + want.size();
+            return query.substr(from, query.find('&', k) - from);
+        }
+        k = query.find('&', k);
+        if (k != std::string::npos) ++k;
+    }
+    return std::string();
+}
 
 // Kill-feed HUD: draw the live messages centered at the bottom of the window,
 // newest lowest, older ones stacked upward; each fades out over its final fadeTime
@@ -97,6 +150,8 @@ int main(int argc, char** argv) {
 #endif
     bool        networked;
     std::string serverUrl;
+    // The room an invite named, consumed once we are connected and welcomed.
+    std::string inviteCode;
     // Auto-fallback (native, baked-in server only): start on UDP and pivot to the
     // ws:// at the same host if the UDP handshake never completes. Left off for the
     // browser and for an explicit URL arg (which honors whatever scheme was given).
@@ -137,22 +192,47 @@ int main(int argc, char** argv) {
             "return s;})()");
         return std::string(s ? s : "");
     }();
+    // The invite half of the link. Kept separate from serverUrl: it is not a
+    // socket parameter, it is where to go once the socket is up.
+    inviteCode = [] {
+        const char* m = emscripten_run_script_string(
+            "(new URLSearchParams(location.search).get('match') || '')");
+        return std::string(m ? m : "");
+    }();
 #else
     // Native launch: a URL arg is an explicit override; the word "local" forces
     // single-player; no arg uses the baked-in server (if any) preferring UDP with a
     // WS pivot, else falls back to local single-player (dev default).
     std::string defaultHost = PLATFORMZ_DEFAULT_SERVER_HOST;
-    if (argc > 1 && std::string(argv[1]) == "local") {
+    // --match CODE anywhere in the arguments: the shorthand for a player who
+    // already has a server baked in and was handed a room code. A ?match= on a
+    // URL argument works too and is picked up further down, so one pasted link
+    // serves a browser friend and a native one alike.
+    //
+    // Lift the flag out FIRST and let everything below read the remainder. The
+    // alternative - scanning for it in place - has to guess which argument is the
+    // positional one, and got `--match ABCD udp://host` wrong by silently dropping
+    // the URL.
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--match" && i + 1 < argc) { inviteCode = argv[++i]; continue; }
+        args.push_back(std::move(a));
+    }
+    auto arg = [&](size_t i) { return i < args.size() ? args[i] : std::string(); };
+    const bool        haveArg = !args.empty();
+    const std::string arg1    = arg(0);
+    if (haveArg && arg1 == "local") {
         networked = false;                             // explicit single-player
-    } else if (argc > 1 && std::string(argv[1]) == "bench") {
+    } else if (haveArg && arg1 == "bench") {
         // Usage: ./platformz bench <halfSize> <platforms> <asteroids> [players]
         networked = false; benchMode = true;
-        if (argc > 2) benchHalf    = std::stof(argv[2]);
-        if (argc > 3) benchPlat    = std::stoi(argv[3]);
-        if (argc > 4) benchRoid    = std::stoi(argv[4]);
-        if (argc > 5) benchPlayers = std::stoi(argv[5]);
-    } else if (argc > 1) {
-        networked = true; serverUrl = argv[1];         // explicit URL: honor scheme, no auto-fallback
+        if (args.size() > 1) benchHalf    = std::stof(arg(1));
+        if (args.size() > 2) benchPlat    = std::stoi(arg(2));
+        if (args.size() > 3) benchRoid    = std::stoi(arg(3));
+        if (args.size() > 4) benchPlayers = std::stoi(arg(4));
+    } else if (haveArg) {
+        networked = true; serverUrl = arg1;            // explicit URL: honor scheme, no auto-fallback
     } else if (!defaultHost.empty()) {                 // baked server: prefer UDP, allow a WS pivot
         networked = true;
         std::string port = PLATFORMZ_DEFAULT_SERVER_PORT;
@@ -175,22 +255,25 @@ int main(int argc, char** argv) {
     // invite link, command-line arg, or baked default. ws/wss servers read it
     // straight from the URL during the HTTP upgrade; UDP has no URL on the
     // wire, so extract it here and serializeHello carries it instead.
-    std::string joinKey;
-    {
-        auto q = serverUrl.find('?');
-        if (q != std::string::npos) {
-            std::string query = serverUrl.substr(q + 1);
-            size_t k = 0;
-            while (k != std::string::npos) {
-                if (query.compare(k, 4, "key=") == 0) {
-                    joinKey = query.substr(k + 4, query.find('&', k) - (k + 4));
-                    break;
-                }
-                k = query.find('&', k);
-                if (k != std::string::npos) ++k;
-            }
-        }
-    }
+    std::string joinKey = UrlParam(serverUrl, "key");
+
+    // `networked` answers "is the thing I am doing right now networked?", and a
+    // LOCAL MATCH turns it off for the duration even when a server is connected.
+    // `sessionOnline` answers "does this session have a server at all?" - the
+    // connection has to keep being serviced through an offline match, or we lose
+    // the slot we came back to.
+    //
+    // They were one flag, so LOCAL MATCH's START asked the SERVER to start a
+    // match: the player was dropped into a networked game they never chose, which
+    // only became visible when they hit BACK and the shell pumped the socket again.
+    const bool sessionOnline = networked;
+
+    // An invite: the room to walk into as soon as we are welcomed, rather than
+    // sitting in whatever room the server parked us in. Same string on both
+    // platforms - ?match= on a web page's URL or on a native URL argument - so one
+    // link works for a browser friend and a native one. --match is the shorthand
+    // for a native player who already has a server baked in.
+    if (inviteCode.empty()) inviteCode = UrlParam(serverUrl, "match");
 //MARK: SETUP
     // --- Setup (runs once) ---
     const int screenWidth = 1000;
@@ -721,6 +804,25 @@ int main(int argc, char** argv) {
         // the server would still be holding our slot.
         if (networked) shell.syncShadows(onlineOpt);
         screen = networked ? GameScreen::LOBBY : GameScreen::TITLE;
+        // An offline match is over; the session is online again if it ever was.
+        networked = sessionOnline;
+    };
+
+    // What COPY INVITE puts on the clipboard. A browser friend gets a link they
+    // click; a native one has no link to click, so they get the code itself - the
+    // thing JOIN CODE and --match both take.
+    auto inviteStringFor = [&](const std::string& code) -> std::string {
+        if (code.empty()) return std::string();
+#if defined(__EMSCRIPTEN__)
+        // PlatformzCopyInvite does the clipboard work too - GLFW has no clipboard
+        // under emscripten, so SetClipboardText below would be a no-op there.
+        char buf[512] = {0};
+        PlatformzCopyInvite(code.c_str(), buf, (int)sizeof(buf));
+        return std::string(buf);
+#else
+        SetClipboardText(code.c_str());
+        return code;
+#endif
     };
 
     // Centered placeholder text helper (screenWidth is in scope).
@@ -815,8 +917,14 @@ int main(int argc, char** argv) {
         // (UDP peer reaped, or a drop) forget our slot so the handshake re-runs.
         // Over WebSocket the server auto-welcomes on connect, so the hello is just
         // a harmless re-welcome and TCP keeps the session alive.
-        if (networked) {
+        if (sessionOnline) {
             double nowT = GetTime();
+            // Playing offline on a connected session: keep the keepalive below
+            // running so the server holds our slot, but THROW THE INBOUND FRAMES
+            // AWAY. Letting them queue means a burst of stale state on the way
+            // back - including a PLAYING phase that would yank us into a networked
+            // match we did not start, which is the bug this whole flag exists for.
+            if (!networked) { net.poll(); lastStateTime = GetTime(); }
             // Auto-fallback (baked-in UDP default only): if the UDP handshake never
             // completes (no welcome, myIndex still -1) within the timeout, the path
             // is likely blocking UDP - switch once to WebSocket at the same host and
@@ -848,7 +956,7 @@ int main(int argc, char** argv) {
                 net.send(serializeKeepalive());
                 lastKeepaliveTime = nowT;
             }
-            if (udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
+            if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
                 myIndex = -1; // UDP only: treat as disconnected; resume the hello handshake
         }
 
@@ -904,14 +1012,32 @@ int main(int argc, char** argv) {
             // Still pump the socket: a connected client holds a slot in whatever
             // room the server put it in, and that room can start without us
             // touching anything. Following it beats being simulated in absentia.
-            if (networked) {
+            if (sessionOnline) {
                 ServerMessage::Phase p = pumpNet();
                 if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
-            // The welcome every client gets on connect is not a room WE chose, so
-            // it must not read as one and pull us into a lobby.
-            shell.roomChanged = false;
+            // An invite names a room to walk into instead of idling in whatever
+            // one the server parked us in. Wait for the welcome (myIndex >= 0):
+            // before it we have no slot, and a join sent into that gap is answered
+            // to a connection the server has not finished setting up.
+            if (sessionOnline && !inviteCode.empty() && net.isOpen() && myIndex >= 0) {
+                shell.setBrowseStatus("JOINING " + inviteCode + "...", GetTime());
+                shell.joinPending = true;
+                // The code doubles as the password for an invite-only room, which
+                // is what makes one string the whole invite.
+                net.send(serializeJoin(inviteCode, inviteCode));
+                inviteCode.clear();
+            }
+            // A completed move lands us in the room's lobby. Only a move WE asked
+            // for sets this (see joinPending), so the welcome every client gets on
+            // connect cannot trigger it.
+            if (shell.roomChanged) {
+                shell.roomChanged = false;
+                shell.syncShadows(onlineOpt);
+                screen = GameScreen::LOBBY;
+                continue;
+            }
 
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
             if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
@@ -923,11 +1049,11 @@ int main(int argc, char** argv) {
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 bool nameEdited = false;
-                TitleAction act = DrawTitle(shell, screenWidth, screenHeight, networked,
+                TitleAction act = DrawTitle(shell, screenWidth, screenHeight, sessionOnline,
                                             net.isOpen(), uiEnabled, nameEdited);
                 // Push every edit so the latest typed name wins (the welcome already
                 // sent a baseline before this field changed).
-                if (nameEdited && networked && net.isOpen())
+                if (nameEdited && sessionOnline && net.isOpen())
                     net.send(serializeName(shell.playerName));
 
                 switch (act) {
@@ -1004,6 +1130,10 @@ int main(int argc, char** argv) {
                                                localOpt, screenWidth, screenHeight, uiEnabled);
                 switch (r.action) {
                     case LocalAction::Start: {
+                        // OFFLINE, even with a server connected. Without this
+                        // startGame took the networked branch and asked the server
+                        // to start a match instead.
+                        networked = false;
                         const mapSizePreset& m = mapSizePresets[r.mapSize];
                         startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
                         break;
@@ -1075,6 +1205,9 @@ int main(int argc, char** argv) {
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
             if (shell.showOptions  && IsKeyPressed(KEY_ESCAPE)) shell.showOptions  = false;
             if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
+            // Let the COPIED confirmation fade rather than sitting there forever.
+            if (!shell.copyNotice.empty() && GetTime() - shell.copyNoticeAt > 4.0)
+                shell.copyNotice.clear();
             const bool controlsWasOpen = shell.showControls;
             const bool optionsWasOpen  = shell.showOptions;
             const bool scoresWasOpen   = shell.showScores;
@@ -1091,6 +1224,18 @@ int main(int argc, char** argv) {
                     case LobbyAction::Start: {
                         const mapSizePreset& m = mapSizePresets[r.mapSize];
                         startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
+                        break;
+                    }
+                    case LobbyAction::CopyInvite: {
+                        // What a friend can actually act on. In a browser that is
+                        // the page URL with match= merged in, so they click once;
+                        // natively there is no link to hand out, so it is the code
+                        // they type into JOIN CODE (or pass as --match).
+                        // inviteStringFor does the copying: the browser needs its
+                        // own clipboard path, so the two cannot be separated.
+                        const std::string invite = inviteStringFor(shell.inMatchCode);
+                        shell.copyNotice   = "COPIED: " + invite;
+                        shell.copyNoticeAt = GetTime();
                         break;
                     }
                     case LobbyAction::Options:     shell.showOptions  = true; break;
@@ -1872,7 +2017,7 @@ int main(int argc, char** argv) {
     // Tell the server we're leaving on purpose, so it frees our slot right away
     // instead of waiting out the UDP idle timeout (see serializeGoodbye). Best-
     // effort only: a crash or SIGKILL still just falls back to that timeout.
-    if (networked && net.isOpen()) net.send(serializeGoodbye());
+    if (sessionOnline && net.isOpen()) net.send(serializeGoodbye());
     for (audioFX& fx : fxTable) fx.unload();
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();

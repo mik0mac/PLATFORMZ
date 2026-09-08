@@ -1516,7 +1516,12 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         // Tell them the code, then put them in it - making a room and not being in
         // it would be a strange thing to offer.
         SendToClient(c, buildCreated(newCode));
-        MoveConnToMatch(connId, c, newCode, code);
+        // Join with the room's EFFECTIVE password, not the (empty) one they sent.
+        // A private room with no password of its own is gated by its own code, so
+        // passing theirs back had the server refuse the creator entry to the room
+        // it had just built for them - CREATE looked like it did nothing at all.
+        MoveConnToMatch(connId, c, newCode,
+                        (isPriv && code.empty()) ? newCode : code);
         // Host AFTER the move, not before: MoveConnToMatch can still refuse (a
         // full or vanished room), and stamping first would leave a room hosted by
         // someone who never got into it. Set explicitly rather than left to

@@ -179,6 +179,24 @@ Keep the key URL-safe (letters, digits, dashes). To rotate it: change the
 file, restart the service, send fresh links. This is a friends-and-family
 gate, not real security — anyone holding an invite can share it.
 
+### Inviting someone to a specific room
+
+The key gets people onto the **server**. `?match=CODE` gets them into a
+particular **room** on it, which is what an invite-only room needs — it is hidden
+from FIND A MATCH, so its 4-character code is the only way in.
+
+The lobby shows the code and has a **COPY INVITE** button. In a browser that
+copies the whole link, key and all; natively it copies the code, since there is
+no link to hand out.
+
+- **Browser:** `https://yourdomain.com/platformz.html?key=KEY&match=CODE`
+- **Native, baked-in server:** `./platformz --match CODE`
+- **Native, explicit server:** `./platformz "udp://yourdomain.com:9000?key=KEY&match=CODE"`
+
+All three join on connect instead of idling in whatever room the server parked
+you in. A code that has been reaped (rooms are destroyed 30 s after emptying)
+comes back as a refusal on the browser screen, not a hang.
+
 ## 7. Serve the web client over HTTP
 
 The `web/` files are already built (`make web` output). Point nginx's default site
