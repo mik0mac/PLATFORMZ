@@ -64,7 +64,19 @@ $(IX_LIB): $(IX_OBJS)
 $(TARGET): $(SRCS) $(HDRS) $(IX_LIB)
 	$(CXX) $(CXXFLAGS) $(SRCS) $(IX_LIB) -o $(TARGET) $(LDFLAGS)
 
+# The packaged handout build runs a process called `platformz` too, so a stale
+# one left over from `make app` is easy to mistake for this build - same window,
+# same name in the Dock and in Cmd+Tab, but whatever code it was built from. One
+# sat running for a month, invisible on another Space, and got screenshotted
+# instead of the dev build. Warn, don't kill: it might be running on purpose.
 run: $(TARGET)
+	@pgrep -f 'PLATFORMZ\.app/Contents/MacOS/platformz' >/dev/null 2>&1 && { \
+	  echo ""; \
+	  echo "  !! dist/PLATFORMZ.app is already running (pid $$(pgrep -f 'PLATFORMZ\.app/Contents/MacOS/platformz' | tr '\n' ' '))."; \
+	  echo "     It is a different build with an identical window and process name."; \
+	  echo "     Quit it (Cmd-Option-Esc) before testing, or you may be looking at it."; \
+	  echo ""; \
+	} || true
 	./$(TARGET)
 
 clean:
