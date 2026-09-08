@@ -128,11 +128,14 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
         // clipboard, so GetClipboardText comes back empty and this is a no-op:
         // harmless, and the web build hands out links that are opened rather than
         // pasted anyway.
-#if defined(__APPLE__)
-        const bool pasteHeld = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
-#else
-        const bool pasteHeld = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
-#endif
+        // EITHER modifier, on every platform. Cmd is the Mac chord and Ctrl the
+        // one everywhere else, but accepting both costs nothing and leaves a
+        // working fallback if one of them never arrives - which is not
+        // hypothetical: macOS routes Cmd+key to the menu bar as a key
+        // equivalent first, and GLFW does not always deliver the keypress that
+        // follows.
+        const bool pasteHeld = IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER)
+                            || IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
         if (pasteHeld && IsKeyPressed(KEY_V)) {
             const char* clip = GetClipboardText();
             if (clip && *clip) {
