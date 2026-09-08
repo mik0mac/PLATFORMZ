@@ -70,6 +70,7 @@ struct MatchEntry {
 // without holding any lock at all.
 struct MatchListing {
     std::string code, name, presetName;
+    std::string mapSize;        // which arena, so the browser can advertise it
     MatchKind kind = MatchKind::Custom;
     Phase phase = Phase::LOBBY;
     int   players = 0;
@@ -171,6 +172,9 @@ public:
             r.name       = e.name;
             r.presetName = e.presetName;
             r.kind       = e.kind;
+            // Another atomic read, like phase and the counts below - listing a
+            // room must never wait on its simulation.
+            r.mapSize    = MapSizeName(e.match->pendingMap.load());
             r.isPrivate  = e.isPrivate;
             // Live fields via atomics only - never the match's own mutexes.
             r.phase      = e.match->gamePhase.load();

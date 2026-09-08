@@ -58,7 +58,10 @@ int main() {
         auto m = make(r, c);
         const MatchPreset& p = MatchPresetByName("DEFAULT");
         check(m->pendingPlayers.load() == p.options.numPlayers, "options copied from preset");
-        check(m->pendingHalf.load() == mapSizePresets.at(p.mapSize).halfSize, "map size copied from preset");
+        // The map is inside `options` now, and the match holds it as an index
+        // into mapSizeOrder rather than as three loose numbers.
+        check(m->pendingMap.load() == MapSizeIndex(p.options.mapSize), "map copied from preset");
+        check(MapSizeName(m->pendingMap.load()) == p.options.mapSize, "...and round-trips by name");
         check(MatchPresetByName("NOPE").options.numPlayers == p.options.numPlayers,
               "unknown preset falls back to DEFAULT");
     }

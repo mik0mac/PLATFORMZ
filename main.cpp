@@ -560,17 +560,20 @@ int main(int argc, char** argv) {
         return "PLAYER " + std::to_string(slot + 1);
     };
 
-    // START from the title. Local: stand up a fresh run with the chosen map preset
-    // (small/medium/large). Networked: ask the server to start/restart a match -
-    // the screen flips to PLAYING when the server's phase says so (see the loop).
-    auto startGame = [&](float halfSize, int platforms, int asteroids) {
-        if (networked) {
-            // Send the chosen map preset + the full OPTIONS bundle; the server
-            // applies them before generating the world (first press wins).
-            if (net.isOpen()) net.send(serializeStart(halfSize, platforms, asteroids, onlineOpt));
-            return;
-        }
-        gameSpace.configureMap(halfSize, platforms, asteroids); // apply the chosen map preset
+    // START. Local: stand up a fresh run. Networked: ask the server to start or
+    // restart a match - the screen flips to PLAYING when the server's phase says
+    // so (see the loop).
+    //
+    // The map is no longer a parameter. It lives in the options bundle, so both
+    // paths read the same field the lobby has already been showing everyone -
+    // rather than it being whichever of four START buttons got pressed.
+    // Build and enter a local world of exactly these dimensions. Separate from
+    // startGame() below because BENCH mode picks its own numbers off the command
+    // line - arbitrary ones, well outside any preset, which is the entire point
+    // of benching. Normal local play goes through startGame(), which reads the
+    // map out of localOpt.
+    auto startLocalWorld = [&](float halfSize, int platforms, int asteroids) {
+        gameSpace.configureMap(halfSize, platforms, asteroids);
         gameSpace.applyOptions(localOpt); // OPTIONS: elasticities, speed/rocket/jetpack/explosion scales, fuel rates, gameplay toggles
         gameSpace.setPlayerCount(localOpt.numPlayers); // OPTIONS: 1 human + (N-1) bots
         gameSpace.generate(); // platforms, asteroids, and player slots
@@ -597,6 +600,24 @@ int main(int argc, char** argv) {
         // zero (capturing the cursor then). Cursor stays free during the count.
         countdownRemaining = COUNTDOWN_SECONDS;
         screen = GameScreen::COUNTDOWN;
+    };
+
+    // START. Local: stand up a fresh run with the chosen map. Networked: ask the
+    // server to start or restart a match - the screen flips to PLAYING when the
+    // server's phase says so (see the loop).
+    //
+    // The map is no longer a parameter. It lives in the options bundle, so both
+    // paths read the same field the lobby has already been showing everyone,
+    // rather than it being whichever of four START buttons got pressed.
+    auto startGame = [&]() {
+        if (networked) {
+            // The full OPTIONS bundle, map included; the server applies it before
+            // generating the world (first press wins).
+            if (net.isOpen()) net.send(serializeStart(onlineOpt));
+            return;
+        }
+        const mapSizePreset& m = mapSizePresets.at(localOpt.mapSize);
+        startLocalWorld(m.halfSize, m.numPlatforms, m.numAsteroids);
     };
 
     // Networked: the server's phase just went PLAYING (we started, a peer started,
@@ -870,7 +891,7 @@ int main(int argc, char** argv) {
         localOpt.numPlayers = benchPlayers; shell.optNumPlayersF = (float)benchPlayers; // 1 human + (N-1) bots: realistic sim/rocket/spark load
         perfOverlay = true;
         SetTargetFPS(0); // uncap so frame times reflect true throughput, not vsync pacing
-        startGame(benchHalf, benchPlat, benchRoid);
+        startLocalWorld(benchHalf, benchPlat, benchRoid);
         countdownRemaining = 1.0f; // shorten the pre-match freeze
     }
 
@@ -1129,15 +1150,13 @@ int main(int argc, char** argv) {
                 LocalResult r = DrawLocalSetup(shell, gameSpace.getPlayers(), myDisplayName(),
                                                localOpt, screenWidth, screenHeight, uiEnabled);
                 switch (r.action) {
-                    case LocalAction::Start: {
+                    case LocalAction::Start:
                         // OFFLINE, even with a server connected. Without this
                         // startGame took the networked branch and asked the server
                         // to start a match instead.
                         networked = false;
-                        const mapSizePreset& m = mapSizePresets[r.mapSize];
-                        startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
+                        startGame();
                         break;
-                    }
                     case LocalAction::Options: shell.showOptions = true; break;
                     case LocalAction::Back:    screen = GameScreen::TITLE; break;
                     case LocalAction::None: break;
@@ -1221,11 +1240,9 @@ int main(int argc, char** argv) {
                                           myDisplayName(), onlineOpt, screenWidth, screenHeight,
                                           ready, netCountdown, uiEnabled);
                 switch (r.action) {
-                    case LobbyAction::Start: {
-                        const mapSizePreset& m = mapSizePresets[r.mapSize];
-                        startGame(m.halfSize, m.numPlatforms, m.numAsteroids);
+                    case LobbyAction::Start:
+                        startGame();
                         break;
-                    }
                     case LobbyAction::CopyInvite: {
                         // What a friend can actually act on. In a browser that is
                         // the page URL with match= merged in, so they click once;

@@ -68,6 +68,7 @@ struct MatchSummary {
     std::string code;        // 4 chars, also the invite code
     std::string name;        // display name
     std::string preset;      // rule set it was created from
+    std::string map;         // which arena - visible before you commit to joining
     std::string phase;       // lobby | countdown | playing | gameover
     int  players    = 0;
     int  maxPlayers = 0;
@@ -272,6 +273,7 @@ inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
     j["phys"]     = o.rocketsObeyPhysics;   // OPTIONS: rockets obey gravity + inherit shooter velocity
     j["ff"]       = o.friendlyFire;         // OPTIONS: a player's own blast can self-damage
     j["coast"]    = o.coastMode;            // OPTIONS: frictionless movement (no slow-down on release / cap drop)
+    j["map"]      = o.mapSize;              // OPTIONS: which arena (name; see mapSizeOrder)
 }
 
 inline std::string serializeOptions(const MatchOptions& o) {
@@ -280,14 +282,12 @@ inline std::string serializeOptions(const MatchOptions& o) {
     return j.dump();
 }
 
-inline std::string serializeStart(float half, int platforms, int asteroids,
-                                  const MatchOptions& o) {
-    nlohmann::json j = {
-        {"type", "start"},
-        {"half", half},
-        {"plat", platforms},
-        {"roid", asteroids}
-    };
+// The map used to be three loose numbers on this message, chosen by WHICH start
+// button was pressed - so it existed only at the instant of starting and nobody
+// in the lobby could see it. It is part of the options bundle now, which means a
+// start carries nothing the lobby was not already showing everyone.
+inline std::string serializeStart(const MatchOptions& o) {
+    nlohmann::json j = { {"type", "start"} };
     writeOptionKeys(j, o);
     return j.dump();
 }
@@ -465,6 +465,10 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     msg.opt.rocketsObeyPhysics = (optFlags & 2) != 0;
     msg.opt.friendlyFire       = (optFlags & 4) != 0;
     msg.opt.coastMode          = (optFlags & 8) != 0;
+    // Bits 16 and 32 are the map index. Four toggles left the top nibble free,
+    // so the arena reached every client in the lobby without growing the packet
+    // or spending a STATE_BIN_VERSION bump.
+    msg.opt.mapSize            = MapSizeName((optFlags >> 4) & 0x3);
 
     // Players - fixed slots, never erased; hide slots the server stopped sending.
     {
@@ -699,6 +703,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 r.code       = jo.value("c",   std::string());
                 r.name       = jo.value("n",   std::string());
                 r.preset     = jo.value("pre", std::string());
+                r.map        = jo.value("map", std::string());
                 r.phase      = jo.value("ph",  std::string("lobby"));
                 r.players    = jo.value("p",   0);
                 r.maxPlayers = jo.value("max", 0);
@@ -767,6 +772,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.opt.rocketsObeyPhysics   = o.value("phys",     d.rocketsObeyPhysics);
         msg.opt.friendlyFire         = o.value("ff",       d.friendlyFire);
         msg.opt.coastMode            = o.value("coast",    d.coastMode);
+        msg.opt.mapSize              = o.value("map",      d.mapSize);
     }
 
     // Players - a fixed, persistent set of slots; never erased (also Player
