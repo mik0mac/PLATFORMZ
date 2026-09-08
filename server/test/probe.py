@@ -39,6 +39,8 @@ def set_target(host, port=None):
 # mark rather than taking 0x03.
 STATE, WELCOME, CHUNK, FULL = 0x09, 0x0A, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
+# Wire order of mapSizeOrder (constants.h). Append only, same as there.
+MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]
 def enc(o): return json.dumps(o, separators=(",", ":")).encode()
 
 class C:
@@ -49,6 +51,12 @@ class C:
         # welcome, not the code we asked for.
         self.matchCode, self.matchKind = "", ""
         self.countdown = 0.0
+        # The arena the LOBBY is advertising (from the state packet's option
+        # flags) and the one actually generated (from the welcome's halfSize).
+        # They are different questions: the first is the pending choice everyone
+        # can see before start, the second is what got built.
+        self.mapSize = ""
+        self.half = 0.0
         # Leaderboard arrivals, and the phase we believed we were in at the time.
         # The server sends the table BEFORE the state packet announcing GAMEOVER,
         # so a correct client must handle it while still in "playing".
@@ -92,7 +100,8 @@ class C:
                     clen = d[9]
                     self.matchCode = d[10:10 + clen].decode("utf-8", "replace")
                     self.matchKind = "official" if d[10 + clen] else "custom"
-                except IndexError:
+                    self.half = struct.unpack_from("<f", d, 11 + clen)[0]
+                except (IndexError, struct.error):
                     pass
             elif tag == STATE:
                 # header: u8 tag, u32 tick, u32 lastSeq  -> body starts at 9
@@ -103,6 +112,9 @@ class C:
                 # room's auto-start timer (0 unless armed).
                 self.countdown = struct.unpack_from("<f", d, 10)[0]
                 self.epoch = struct.unpack_from("<I", d, 14)[0]
+                # Option flags at 49; bits 16/32 are the map index (see
+                # mapSizeOrder in constants.h). Roster count follows at 50.
+                self.mapSize = MAP_SIZES[(d[49] >> 4) & 0x3]
                 self.nplayers = d[50]
                 # Decode the roster so tests can assert on a player's actual
                 # state. Layout per buildStateBodyBinary: u32 id, 3x qpos(i16),

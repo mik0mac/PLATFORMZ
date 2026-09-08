@@ -161,9 +161,12 @@ struct Match {
     // Written by the io thread when a "start"/"options" arrives, read by the sim
     // thread when it consumes startRequested (the flag is the synchronization
     // point).
-    std::atomic<float> pendingHalf{GAMESPACE_HALF_SIZE};
-    std::atomic<int>   pendingPlat{GAMESPACE_NUMBER_OF_PLATFORMS};
-    std::atomic<int>   pendingRoid{GAMESPACE_NUMBER_OF_ASTEROIDS};
+    // The chosen arena, as an index into mapSizeOrder (constants.h). One value
+    // instead of the three loose numbers it used to be: half-size, platform count
+    // and asteroid count are all derivable from it at start, and keeping them
+    // separate meant they could disagree with each other and with what the lobby
+    // was showing.
+    std::atomic<int>   pendingMap{MapSizeIndex(MatchOptions{}.mapSize)};
     std::atomic<int>   pendingPlayers{GAMESPACE_DEFAULT_PLAYERS};
     std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
     std::atomic<float> pendingWallElast{WALL_ELASTICITY_PLAYER};     // OPTIONS WALL ELASTICITY (players only)
@@ -343,12 +346,7 @@ struct Match {
         pendingFriendlyFire   = o.friendlyFire;
         pendingCoastMode      = o.coastMode;
 
-        auto it = mapSizePresets.find(preset.mapSize);
-        const mapSizePreset& m = it != mapSizePresets.end() ? it->second
-                                                            : mapSizePresets.at("MEDIUM");
-        pendingHalf = m.halfSize;
-        pendingPlat = m.numPlatforms;
-        pendingRoid = m.numAsteroids;
+        pendingMap = MapSizeIndex(o.mapSize);
     }
     void BroadcastState(uint32_t tick);
     // Dispatch one inbound text frame from a client already in this match's

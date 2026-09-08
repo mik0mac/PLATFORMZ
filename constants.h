@@ -122,6 +122,30 @@ inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
     // netbin.h) so a full tick fits one unfragmented datagram.
     {"XL",     {360.0f, 576, 36}}
 };
+
+// WIRE ORDER for the presets above. mapSizePresets is an unordered_map and so
+// has no stable iteration order, but a map choice crosses the wire as an INDEX
+// into this list - two bits inside the options flags byte, which is why adding
+// it cost no protocol version bump.
+//
+// APPEND ONLY. Reordering silently reinterprets every connected client's choice,
+// and a fifth entry needs a third bit (the flags byte has 64 and 128 free).
+inline const char* const mapSizeOrder[] = { "SMALL", "MEDIUM", "LARGE", "XL" };
+inline constexpr int MAP_SIZE_COUNT = 4;
+inline constexpr int MAP_SIZE_BITS  = 2;   // enough for MAP_SIZE_COUNT
+static_assert(MAP_SIZE_COUNT <= (1 << MAP_SIZE_BITS),
+              "the map index no longer fits the bits reserved in the options flags byte");
+
+// Unknown names fall back to MEDIUM rather than failing: a bad map should give a
+// playable match, never a refused start.
+inline int MapSizeIndex(const std::string& name) {
+    for (int i = 0; i < MAP_SIZE_COUNT; ++i)
+        if (name == mapSizeOrder[i]) return i;
+    return 1; // MEDIUM
+}
+inline const char* MapSizeName(int index) {
+    return (index >= 0 && index < MAP_SIZE_COUNT) ? mapSizeOrder[index] : mapSizeOrder[1];
+}
 // After a match ends the server keeps simulating so networked play matches local,
 // where the sim runs every frame of the client's death-FX countdown. That only
 // needs to outlast GAME_OVER_TIMER; past these thresholds nobody is watching, and

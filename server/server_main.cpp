@@ -832,6 +832,7 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
     s += ",\"phys\":"     + jb(pendingRocketsPhysics.load());
     s += ",\"ff\":"       + jb(pendingFriendlyFire.load());
     s += ",\"coast\":"    + jb(pendingCoastMode.load());
+    s += ",\"map\":"      + js(MapSizeName(pendingMap.load())); // which arena, visible in the lobby before start
     s += "}";
 
     s += "}";
@@ -882,10 +883,14 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     nb::putF32(b, pendingJThrust.load());
     nb::putU8(b, (uint8_t)pendingFuelBurn.load());
     nb::putU8(b, (uint8_t)pendingFuelRegen.load());
+    // Bits 16/32 carry the map index. Four toggles left the top nibble free, so
+    // the arena reaches every client in the lobby without growing the packet or
+    // spending a STATE_BIN_VERSION bump.
     nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0)
                           | (pendingRocketsPhysics.load() ? 2 : 0)
                           | (pendingFriendlyFire.load() ? 4 : 0)
-                          | (pendingCoastMode.load() ? 8 : 0)));
+                          | (pendingCoastMode.load() ? 8 : 0)
+                          | ((pendingMap.load() & 0x3) << 4)));
 
     // Players (fixed roster; u8 count is plenty).
     auto& players = gameSpace.getPlayers();
@@ -1438,6 +1443,7 @@ static std::string buildMatchList(int cursor) {
                         + ",\"n\":"   + js(r.name)
                         + ",\"pre\":" + js(r.presetName)
                         + ",\"k\":"   + js(matchKindWire(r.kind))
+                        + ",\"map\":" + js(r.mapSize)
                         + ",\"ph\":"  + js(phaseString(r.phase))
                         + ",\"p\":"   + ji(r.players)
                         + ",\"max\":" + ji(r.maxPlayers)
@@ -1516,7 +1522,12 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         // Tell them the code, then put them in it - making a room and not being in
         // it would be a strange thing to offer.
         SendToClient(c, buildCreated(newCode));
-        MoveConnToMatch(connId, c, newCode, code);
+        // Join with the room's EFFECTIVE password, not the (empty) one they sent.
+        // A private room with no password of its own is gated by its own code, so
+        // passing theirs back had the server refuse the creator entry to the room
+        // it had just built for them - CREATE looked like it did nothing at all.
+        MoveConnToMatch(connId, c, newCode,
+                        (isPriv && code.empty()) ? newCode : code);
         // Host AFTER the move, not before: MoveConnToMatch can still refuse (a
         // full or vanished room), and stamping first would leave a room hosted by
         // someone who never got into it. Set explicitly rather than left to
@@ -1653,10 +1664,9 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         // via ServiceAutoStart. Reject from everyone, not just non-hosts.
         if (optionsLocked) return;
         if (!isHostConn(connId)) return; // host-only; non-host clients have no START button, this is the backstop
-        // Map preset chosen by the requesting client (first press wins).
-        pendingHalf = parseFloat(msg, "half", GAMESPACE_HALF_SIZE);
-        pendingPlat = (int)parseUInt(msg, "plat", GAMESPACE_NUMBER_OF_PLATFORMS);
-        pendingRoid = (int)parseUInt(msg, "roid", GAMESPACE_NUMBER_OF_ASTEROIDS);
+        // Map is part of the options bundle now, so a start no longer carries
+        // three loose numbers the lobby had never seen.
+        pendingMap = MapSizeIndex(clampName(parseString(msg, "map")));
         pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_DEFAULT_PLAYERS);
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
         pendingWallElast = parseFloat(msg, "welast", WALL_ELASTICITY_PLAYER);
@@ -1711,6 +1721,12 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
         pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
         pendingCoastMode = parseBool(msg, "coast", pendingCoastMode.load());
+        // Live-editable like every other rule, so the lobby's map row updates on
+        // everyone's screen the moment the host picks a different arena.
+        {
+            const std::string m = clampName(parseString(msg, "map"));
+            if (!m.empty()) pendingMap = MapSizeIndex(m);
+        }
         return;
     }
 
@@ -1980,11 +1996,12 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // Clamp the preset's asteroid count to the UDP state-packet
             // budget for this roster, so a full tick fits one unfragmented
             // datagram (oversized ticks chunk lossily - see netbin.h).
-            int roids = std::min(pendingRoid.load(), nb::MaxAsteroidsForRoster(want));
-            if (roids < pendingRoid.load())
-                std::cout << "Asteroids clamped " << pendingRoid.load() << " -> " << roids
+            const mapSizePreset& mp = mapSizePresets.at(MapSizeName(pendingMap.load()));
+            int roids = std::min(mp.numAsteroids, nb::MaxAsteroidsForRoster(want));
+            if (roids < mp.numAsteroids)
+                std::cout << "Asteroids clamped " << mp.numAsteroids << " -> " << roids
                           << " (UDP packet budget, " << want << " player slots)\n";
-            gameSpace.configureMap(pendingHalf.load(), pendingPlat.load(), roids);
+            gameSpace.configureMap(mp.halfSize, mp.numPlatforms, roids);
             gameSpace.setPlayerCount(want);
             rosterSize.store(want);   // the directory's joinable test reads this
             // OPTIONS: apply the requesting client's full options bundle to the
@@ -2005,6 +2022,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 o.rocketsObeyPhysics  = pendingRocketsPhysics.load();
                 o.friendlyFire        = pendingFriendlyFire.load();
                 o.coastMode           = pendingCoastMode.load();
+                o.mapSize             = MapSizeName(pendingMap.load());
                 gameSpace.applyOptions(o);
             }
             // Issue #5 order: platforms -> players (spread) -> asteroids

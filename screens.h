@@ -124,6 +124,11 @@ struct ShellState {
 
     std::string joinCode;                   // JOIN CODE field contents
     bool        joinCodeFocused = false;
+    // "COPIED" confirmation under the lobby's code, cleared on a timer - a copy
+    // button with no feedback leaves you unsure whether it fired.
+    std::string copyNotice;
+    double      copyNoticeAt = 0.0;
+
     std::string browseStatus;               // one-line feedback, e.g. a refusal
     double      browseStatusAt = 0.0;       // when it was set, so it can fade
 
@@ -393,6 +398,10 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18, RAYWHITE);
             DrawText(TextFormat("%d/%d", m.players, m.maxPlayers),
                      (int)listX + 300, (int)ry + 10, 18, ui::OUTLINE);
+            // The arena, which the browser could not show at all until the map
+            // moved into MatchOptions - before that it did not exist until
+            // somebody pressed a START button.
+            DrawText(m.map.c_str(), (int)listX + 360, (int)ry + 10, 16, GRAY);
             // Kind, not preset. "DEFAULT" in every row tells a player nothing,
             // where OFFICIAL vs CUSTOM tells them whether the rules are fixed and
             // the room starts itself, or whether somebody is running it and
@@ -400,8 +409,8 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             // can join and expect a game from without knowing anyone.
             const bool official = (m.kind == MatchKind::Official);
             DrawText(official ? "OFFICIAL" : "CUSTOM",
-                     (int)listX + 380, (int)ry + 10, 16, official ? ui::OUTLINE : GRAY);
-            DrawText(m.phase.c_str(),  (int)listX + 500, (int)ry + 10, 16,
+                     (int)listX + 460, (int)ry + 10, 16, official ? ui::OUTLINE : GRAY);
+            DrawText(m.phase.c_str(),  (int)listX + 570, (int)ry + 10, 16,
                      m.phase == "playing" ? ui::OUTLINE : GRAY);
 
             Rectangle joinBtn = {listX + listW - 100.0f, ry + 4.0f, 86.0f, 30.0f};
@@ -570,15 +579,28 @@ inline float DrawRosterPanel(ShellState& s, const std::vector<Player>& players,
     return box.y + box.height;
 }
 
-// The four map-size presets, as a row of START buttons. Shared by LOCAL and by a
-// custom room's host. Returns the preset name that was pressed, or "".
-inline std::string DrawMapSizeRow(float y, bool uiEnabled) {
-    const char* names[] = {"SMALL", "MEDIUM", "LARGE", "XL"};
-    for (int i = 0; i < 4; ++i) {
-        Rectangle r = {110.0f + i * 200.0f, y, 180.0f, 50.0f};
-        if (uiEnabled && UiButton(r, names[i])) return names[i];
+// The map SELECTOR plus one START, shared by LOCAL and by a custom room's host.
+//
+// These used to be four START buttons - the map was whichever one you pressed,
+// so it existed only at the instant of starting and nobody else in the lobby
+// could see it. Selecting and starting are separate acts now: the choice goes
+// into MatchOptions, rides the options bundle to everyone, and START is START.
+//
+// Writes the picked map into `opt` and returns true when START was pressed.
+inline bool DrawMapSelector(MatchOptions& opt, float y, bool uiEnabled, bool canStart) {
+    DrawText("MAP", 110, (int)y - 22, 16, ui::OUTLINE);
+    for (int i = 0; i < MAP_SIZE_COUNT; ++i) {
+        Rectangle r = {110.0f + i * 145.0f, y, 130.0f, 42.0f};
+        const bool chosen = (opt.mapSize == mapSizeOrder[i]);
+        // The current pick reads as pressed rather than merely available - with
+        // four look-alike buttons and no START among them, nothing else says
+        // which arena you are about to play.
+        if (chosen) UiPanel(r, ui::OUTLINE, ui::FILL_HI);
+        if (uiEnabled && UiButton(r, mapSizeOrder[i], 18) && !chosen)
+            opt.mapSize = mapSizeOrder[i];
     }
-    return std::string();
+    if (!canStart) return false;
+    return uiEnabled && UiButton({700.0f, y, 190.0f, 42.0f}, "START", 20);
 }
 
 //MARK: TITLE
@@ -671,11 +693,10 @@ enum class LocalAction { None, Start, Options, Back };
 
 struct LocalResult {
     LocalAction action = LocalAction::None;
-    std::string mapSize;   // Start: which preset
 };
 
 inline LocalResult DrawLocalSetup(ShellState& s, const std::vector<Player>& players,
-                                  const std::string& myName, const MatchOptions& opt,
+                                  const std::string& myName, MatchOptions& opt,
                                   int screenWidth, int screenHeight, bool uiEnabled) {
     LocalResult out;
     UiTextCentered("LOCAL MATCH", screenWidth, 110, 48, RAYWHITE);
@@ -686,8 +707,8 @@ inline LocalResult DrawLocalSetup(ShellState& s, const std::vector<Player>& play
                                          /*top*/ 240.0f);
 
     const float startY = bottom + 26.0f;
-    std::string picked = DrawMapSizeRow(startY, uiEnabled);
-    if (!picked.empty()) { out.action = LocalAction::Start; out.mapSize = picked; }
+    if (DrawMapSelector(opt, startY, uiEnabled, /*canStart*/ true))
+        out.action = LocalAction::Start;
 
     const float by = startY + 70.0f;
     if (uiEnabled && UiButton({300, by, 180, 44}, "OPTIONS")) out.action = LocalAction::Options;
@@ -748,26 +769,33 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
 //   official             the head count, then the countdown. No START at all:
 //                        the server rejects options/start/endmatch from every
 //                        connection in an official room.
-enum class LobbyAction { None, Start, Options, Controls, Leaderboard, Leave };
+enum class LobbyAction { None, Start, Options, Controls, Leaderboard, CopyInvite, Leave };
 
 struct LobbyResult {
     LobbyAction action = LobbyAction::None;
-    std::string mapSize;   // Start: which preset
 };
 
 inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
                              int myIndex, const std::string& myName,
-                             const MatchOptions& opt, int screenWidth, int screenHeight,
+                             MatchOptions& opt, int screenWidth, int screenHeight,
                              bool ready, float autoStartIn, bool uiEnabled) {
     LobbyResult out;
     const bool official = (s.inMatchKind == MatchKind::Official);
 
     UiTextCentered(official ? "OFFICIAL MATCH" : "MATCH LOBBY", screenWidth, 100, 44, RAYWHITE);
-    if (!s.inMatchCode.empty())
-        UiTextCentered(TextFormat("CODE  %s", s.inMatchCode.c_str()), screenWidth, 156, 22,
+    if (!s.inMatchCode.empty()) {
+        UiTextCentered(TextFormat("CODE  %s", s.inMatchCode.c_str()), screenWidth, 152, 22,
                        official ? GRAY : ui::OUTLINE);
-    if (!official && !s.inMatchCode.empty())
-        UiTextCentered("SHARE THAT CODE TO INVITE ANYONE", screenWidth, 186, 15, GRAY);
+        // The code is the whole invite for an invite-only room, so it needs to be
+        // gettable, not just readable off the screen.
+        if (uiEnabled && UiButton({620, 148, 130, 30}, "COPY INVITE", 14))
+            out.action = LobbyAction::CopyInvite;
+        if (!official)
+            UiTextCentered(s.copyNotice.empty() ? "SHARE IT TO INVITE ANYONE"
+                                                : s.copyNotice.c_str(),
+                           screenWidth, 184, 15,
+                           s.copyNotice.empty() ? GRAY : ui::OUTLINE);
+    }
 
     // Host is whatever slot the SERVER flagged. We do not recompute it: the host
     // is the room's creator, not the lowest slot, and an official room has none.
@@ -804,13 +832,15 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
             UiTextCentered("STARTING...", screenWidth, (int)startY + 14, 20, GRAY);
         }
     } else if (amHost) {
-        std::string picked = DrawMapSizeRow(startY, uiEnabled);
-        if (!picked.empty()) { out.action = LobbyAction::Start; out.mapSize = picked; }
+        if (DrawMapSelector(opt, startY, uiEnabled, /*canStart*/ true))
+            out.action = LobbyAction::Start;
     } else if (hostSlot >= 0) {
         std::string hostName = !players[hostSlot].name.empty()
             ? players[hostSlot].name : TextFormat("PLAYER %d", hostSlot + 1);
         UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
                        screenWidth, (int)startY + 14, 20, GRAY);
+        UiTextCentered(TextFormat("MAP  %s", opt.mapSize.c_str()),
+                       screenWidth, (int)startY + 40, 16, ui::OUTLINE);
     } else {
         // Custom room with nobody hosting it: only possible in the gap between a
         // host leaving and the next state packet.

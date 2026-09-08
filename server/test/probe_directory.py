@@ -29,8 +29,10 @@ check(len(a.matchlists) >= 1, "a match list came back")
 lst = a.matchlists[-1] if a.matchlists else {}
 rows = lst.get("m", [])
 check(lst.get("total", 0) >= 1, f"at least the default room is listed (total={lst.get('total')})")
-check(all(k in rows[0] for k in ("c", "n", "ph", "p", "max", "j", "k")) if rows else False,
-      "rows carry code/name/phase/players/max/joinable/kind")
+check(all(k in rows[0] for k in ("c", "n", "ph", "p", "max", "j", "k", "map")) if rows else False,
+      "rows carry code/name/phase/players/max/joinable/kind/map")
+check(rows[0].get("map") in ("SMALL", "MEDIUM", "LARGE", "XL") if rows else False,
+      f"...and the map is a real preset name: {rows[0].get('map') if rows else None}")
 check(lst.get("next", -1) == -1, "the boot rooms fit one page (next=-1)")
 
 print("official rooms are resident")

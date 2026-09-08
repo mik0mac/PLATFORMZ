@@ -597,7 +597,7 @@ unambiguous, since nothing else sets one.*
 
 ---
 
-### B3. Move map size into `MatchOptions`
+### B3. Move map size into `MatchOptions` — **DONE** (#80)
 **Why:** map size is currently chosen by *which* of four START buttons you press
 (`wire.h:150`, `main.cpp:944–953`) — so it exists only at the instant of starting.
 A lobby everyone can see needs the selected map to be visible *before* start, and
@@ -609,8 +609,21 @@ The server's `pendingHalf/Plat/Roid` fold into the same pending-options bundle
 from A1. Keep the server-side clamp to `nb::MaxAsteroidsForRoster` at start.
 
 **Files:** `options.h`, `wire.h`, `main.cpp`, `server/server_main.cpp`.
-**Note:** this is a protocol shape change — land it with B2's version bump, not
-separately.
+
+*The plan said to land this with B2's version bump. **It needed no bump at all.**
+The options flags byte in the state packet used four of its eight bits, so the map
+index rides bits 16/32 — the same spare-bits trick the host flag used in A10. B2
+shipped separately and this cost nothing extra.*
+
+*`pendingHalf/Plat/Roid` did not fold into the options bundle so much as collapse:
+they are now a single `pendingMap` index, and half-size, platform count and
+asteroid count are derived from it at start. Three values that could disagree with
+each other — and with what the lobby was showing — became one that cannot.*
+
+*Bench mode kept its explicit dimensions. `./platformz bench 120 128 18` picks
+numbers well outside any preset, which is the point of benching, so the local
+world builder is now a separate `startLocalWorld(half, plat, roid)` that normal
+play reaches through the chosen preset.*
 
 ---
 

@@ -13,6 +13,12 @@
 #include <unordered_map>
 
 struct MatchOptions {
+    // Which arena. Lives HERE rather than being implied by whichever of four
+    // START buttons got pressed, because a lobby everyone can see has to show
+    // the map BEFORE the match starts - and the browser wants to advertise it.
+    // Crosses the wire as an index into mapSizeOrder (constants.h).
+    std::string mapSize = "MEDIUM";
+
     int   numPlayers    = GAMESPACE_DEFAULT_PLAYERS; // 1 human + (N-1) bots
     float botDifficulty = BOT_DIFFICULTY_DEFAULT;    // 0.0..BOT_DIFFICULTY
 
@@ -82,10 +88,9 @@ inline MatchKind matchKindFromWire(const std::string& s) {
 // One entry for now. Adding CHAOS / LOW-GRAV / etc. is a data change here and
 // nothing else.
 struct MatchPreset {
+    // The map used to sit beside this as its own field; it is inside `options`
+    // now, so a preset is exactly one bundle of rules.
     MatchOptions options;
-    // Key into mapSizePresets (constants.h). Separate only until B3 folds map
-    // size into MatchOptions, at which point this collapses into `options`.
-    std::string  mapSize;
     // What the browser calls the official room built from this preset. The key
     // ("DEFAULT") names a rule set; this names a place to play, and those want
     // different words in a list a player is reading.
@@ -95,7 +100,7 @@ struct MatchPreset {
 // MatchOptions{} is exactly the compile-time tuning in constants.h, so DEFAULT
 // plays identically to an untouched OPTIONS modal.
 inline std::unordered_map<std::string, MatchPreset> matchOptionPresets = {
-    {"DEFAULT", { MatchOptions{}, "MEDIUM", "OFFICIAL MATCH" }},
+    {"DEFAULT", { MatchOptions{}, "OFFICIAL MATCH" }},   // MatchOptions{}.mapSize == MEDIUM
 };
 
 // Look up a preset by name, falling back to DEFAULT for an unknown one - a bad
