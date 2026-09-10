@@ -238,6 +238,13 @@ const int PLAYER_DAMAGE = 10; // Damage dealt to other players or asteroids when
 // width, so this is the backstop for very narrow glyphs.
 const size_t PLAYER_NAME_MAX_CHARS = 32;
 
+// Same idea for the name of a ROOM. Shorter than a player name because it shares
+// a browser row with the player count, map and phase, and a long one would push
+// those off the line. Named rather than inlined so the entry field (screens.h)
+// and the profile that remembers what was typed (profile.h) cannot disagree
+// about what fits - the server clamps incoming names with clampName either way.
+const size_t MATCH_NAME_MAX_CHARS = 24;
+
 //MARK: Reticle Constants
 // The reticle is a purely visual in-world object (no collision): the player's
 // aiming device and, to others, an indicator of where they are looking. It is

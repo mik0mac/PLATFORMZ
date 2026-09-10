@@ -74,6 +74,39 @@ On a 2940px-wide capture with a 1470pt desktop and a 1200px view, the factor is
 <left>` on the **native** png (offsets are in capture pixels, so scale up by
 `PX/VIEW`).
 
+## 2b. Better: derive coordinates from the source, not the screenshot
+
+Measuring a screenshot by eye is the main source of wasted turns - a click that
+lands 20px off is indistinguishable from a widget that ignores clicks, and you
+will blame the widget. The window's content area is **1000x700 unscaled points**,
+which is exactly the game's own coordinate space, so game coords map to screen
+points 1:1 once you know the origin:
+
+```bash
+POS=$(osascript -e 'tell application "System Events" to tell process "platformz" to get position of window 1')
+OX=$(echo $POS | cut -d, -f1); OY=$(echo $POS | cut -d, -f2 | tr -d ' ')
+# content origin = (OX, OY + 28)   <- 28pt title bar
+```
+
+Then read the widget's rect straight out of `screens.h` / `ui.h` and add:
+
+```
+screen_x = OX + rect.x + rect.width/2
+screen_y = OY + 28 + rect.y + rect.height/2
+```
+
+e.g. the CUSTOM screen's INVITE ONLY toggle is `{470, 368, 100, 26}`, so with an
+origin of (235, 113) it is at (755, 494). Use screenshots to confirm the result,
+not to find the target.
+
+**All three widget kinds respond to `uidriver click`** - `UiButton`, `UiToggle`
+and `UiSlider`. They share the same `hovered && IsMouseButtonPressed` hit test,
+and the 90ms the driver holds the button down is ~5 frames, enough for
+`UiSlider`'s press-and-hold. If a control appears not to respond, suspect the
+coordinates first and the game's own state second (a slider on a screen whose
+values the server echoes back will snap straight back - that is the game, not the
+driver).
+
 ## 3. Click and type
 
 ```bash

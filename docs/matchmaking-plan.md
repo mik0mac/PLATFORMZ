@@ -702,7 +702,13 @@ The LOBBY screen shows the code and a COPY INVITE action.
 
 # Epic D — Identity
 
-### D1. `profile.h` — persistent local profile
+### D1. `profile.h` — persistent local profile — **DONE**
+*Landed on `d1-local-profile`. Verified three ways: `test/run.sh` (26 native
+checks — round trip, corrupt file, hand-edited hostile values, partial file,
+UUID shape and uniqueness), a node harness that runs **emcc's own emitted EM_JS**
+against a localStorage shim, and two real launches of the built client proving
+the `clientId` survives a relaunch and the file lands 0600.*
+
 **Why:** name, volume and options reset on every launch today; there is no
 persistence layer anywhere in the project.
 
@@ -720,6 +726,58 @@ format is much easier to get right before the first build ships than after.
 `Contents/MacOS/` is code (see the cwd-anchoring note in `CLAUDE.md`).
 
 **Files:** new `profile.h`, `main.cpp`.
+
+#### What shipped, and the two decisions worth knowing
+**Storage on the web is `localStorage`, not cookies.** A cookie rides along on
+every request the browser makes to the origin — the id would be shipped to the
+web host on every asset fetch for no reason, and the whole domain shares a ~4 KB
+budget. `localStorage` is a per-origin drawer that goes nowhere unless we send
+it. It is best-effort, and the ways it evaporates bound what D4 can key a
+leaderboard on: it is per-origin (github.io and the real domain are two different
+players), per-browser and per-device with no sync, discarded by a private window,
+and **evicted by Safari's tracking prevention after 7 days without a visit**. A
+web `clientId` is "stable across sessions, usually" — the most a browser will
+promise without the account this project has deliberately chosen not to have.
+
+**Two remembered rule sets, not one.** `lastLocalOptions` seeds the LOCAL
+screen; `lastCustomOptions` seeds the CUSTOM one. Same reason `main.cpp` keeps
+`localOpt` and `onlineOpt` apart — a solo practice arena and the room you host
+for friends are different habits, and a change to one must not quietly retune the
+other.
+
+The custom bundle is captured **only from a room that is ours**: the CUSTOM setup
+screen, or a LOBBY whose kind is Custom and whose host slot is ours. The
+exclusions are the point. Joining someone else's room fills `onlineOpt` from
+*their* echo, and an official room's are a locked preset with no host at all —
+neither is this player's setup, so saving either would silently overwrite it.
+`screens.h` grew a shared `HostSlot()` so `main.cpp` and the lobby cannot drift
+on who the host is.
+
+The room's **name and invite-only flag** ride along with those rules. The name is
+stored *empty* while it still matches the derived `"<YOUR NAME>'S MATCH"` — the
+screen re-derives that from the current display name, and storing the derived
+string would freeze it, so renaming yourself to MIKE would leave your rooms
+called PLAYER 1'S MATCH forever. `MATCH_NAME_MAX_CHARS` moved into `constants.h`
+so the entry field and the profile's clamp cannot disagree about what fits.
+
+**Bug found and fixed while testing this.** The state echo applies the server's
+options to `onlineOpt` on every packet — including while the CUSTOM setup screen
+is up, where `onlineOpt` is a *draft* for a room that does not exist yet and the
+connection is still bound to whatever room it auto-joined. So every rule the host
+set before pressing CREATE snapped back a frame after the click, and the room was
+created with the *other* room's rules. Only the map survived, because the map is
+the one field that block does not touch — which is why B3's work looked fine. The
+echo is now skipped while `screen == GameScreen::CUSTOM`; the draft is pushed once
+the room exists, and from then on the echo is the host's own values coming back.
+
+`main.cpp` samples the live values into the profile every frame and lets
+`profile::Autosave` decide whether that is worth a write (at most one every 2 s,
+and only when something differs from what is stored). Sampling rather than a
+`MarkDirty()` at each edit site is deliberate: the name field, the volume slider,
+the `+`/`-` keys and every OPTIONS control would each need one, and the one that
+got forgotten would silently stop persisting. The autosave — not the teardown
+save — is also what makes the web build work at all: closing a tab runs no
+teardown.
 
 ---
 

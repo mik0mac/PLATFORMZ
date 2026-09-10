@@ -18,6 +18,7 @@
 #include "bot_logic.h"   // bot AI decision tree
 #include "bot_controller.h" // shared bot orchestration (tree + per-slot state + drive)
 #include "messages.h"    // transient on-screen message queue (kill-feed HUD)
+#include "profile.h"     // persistent local profile: name, clientId, volume, last LOCAL rules
 
 #include <string>
 #include <unordered_map>
@@ -276,6 +277,11 @@ int main(int argc, char** argv) {
     if (inviteCode.empty()) inviteCode = UrlParam(serverUrl, "match");
 //MARK: SETUP
     // --- Setup (runs once) ---
+    // The player's saved profile. Loaded before the window because nothing in it
+    // needs raylib, and because the restored name has to be in place for the
+    // first title frame - a name that appears a beat late reads as a bug.
+    profile::Load();
+
     const int screenWidth = 1000;
     const int screenHeight = 700;
     const int textHeight = 20;
@@ -305,7 +311,9 @@ int main(int argc, char** argv) {
     // AudioFXId (the shared client/server wire id) to a loaded sound; game
     // events arrive as ids (locally or over the network) and index into it.
     InitAudioDevice();
-    SetMasterVolume(1.0f);
+    // Restore the saved level rather than starting at full scale. Has to wait for
+    // InitAudioDevice - raylib's master volume doesn't exist before the mixer.
+    SetMasterVolume(MasterVolumeDbToAmp(profile::Get().masterVolumeDb));
 
     // Per-FX voice pools live inside audioFX. Columns:
     //   volume, localOnly, spacial, poolSize, pitchJitter
@@ -493,6 +501,18 @@ int main(int argc, char** argv) {
     // GameScreen and the menu state now live in screens.h; `shell` owns
     // everything the title/countdown/game-over screens keep between frames.
     ShellState shell;
+    // A saved name is a REAL name, not the untouched default - so clear
+    // namePristine, which is what makes the first keystroke wipe the field and
+    // what myDisplayName() checks before falling back to "PLAYER {slot+1}".
+    if (!profile::Get().name.empty() && profile::Get().name != "PLAYER") {
+        shell.playerName   = profile::Get().name;
+        shell.namePristine = false;
+    }
+    // The CUSTOM setup form, as the player last left it. An empty name is not a
+    // missing one - it means they never renamed the room, so the "<YOUR NAME>'S
+    // MATCH" default below re-derives it from whatever they are called today.
+    shell.customName    = profile::Get().lastCustomName;
+    shell.customPrivate = profile::Get().lastCustomPrivate;
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
@@ -525,9 +545,14 @@ int main(int argc, char** argv) {
     // room you host, and a host's change must not follow you into single player.
     // They share the widget code (DrawOptionsModal takes a reference) but never
     // the values.
-    MatchOptions localOpt;    // LOCAL screen; applied straight to the local sim
+    // localOpt starts from the saved profile: your offline setup is yours and
+    // should still be there next launch. onlineOpt deliberately does NOT - a room
+    // gets its rules from its preset or its host, never from whatever the player
+    // last did in single player.
+    MatchOptions localOpt = profile::Get().lastLocalOptions;
     MatchOptions onlineOpt;   // CUSTOM + LOBBY; rides `start`/`options` to the server
                               // and is overwritten by the server's echo
+    shell.syncShadows(localOpt);  // the three int sliders read their float shadows
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
@@ -762,7 +787,19 @@ int main(int argc, char** argv) {
                 // slider while it's being dragged, and for the toggles only take
                 // a server value that differs from the one we last sent (so our
                 // own click isn't flipped back before its echo returns).
-                if (m.hasOptions) {
+                // ...but NOT while the CUSTOM screen is up. There, onlineOpt is a
+                // DRAFT for a room that does not exist yet, not a mirror of a live
+                // one - and the connection is still bound to whatever room it
+                // auto-joined, so this echo is some other room's rules. Applying
+                // it reverted every setting the host chose the moment they let go
+                // of the control, which made MATCH RULES look broken: the value
+                // snapped back a frame after the click. Everything except the map
+                // survived only because the map is not in this block.
+                //
+                // The draft is pushed once the room exists (see the roomChanged
+                // handler on the CUSTOM screen), and from then on we are in the
+                // LOBBY and the echo is our own values coming back.
+                if (m.hasOptions && screen != GameScreen::CUSTOM) {
                     // Update our OPTIONS modal, per-slider guarded by its drag
                     // latch so a control we're actively dragging isn't stomped.
                     if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
@@ -908,6 +945,54 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        //MARK: PROFILE AUTOSAVE
+        // Sample the live values into the profile every frame, then let it decide
+        // whether that is worth a write (at most one every AUTOSAVE_INTERVAL, and
+        // only when something actually differs from what is already stored).
+        //
+        // Sampling rather than a MarkDirty() at each edit site is deliberate: the
+        // name field, the volume slider, the +/- keys and every OPTIONS control
+        // would each need one, and the one that got forgotten would silently stop
+        // persisting. Comparing what we hold against what we wrote cannot forget.
+        //
+        // The autosave, not the teardown save, is what makes the web build work:
+        // closing a browser tab runs no teardown at all.
+        {
+            profile::Profile& prof = profile::Get();
+            prof.name              = shell.namePristine ? std::string("PLAYER") : shell.playerName;
+            prof.masterVolumeDb    = MasterVolumeAmpToDb(GetMasterVolume());
+            prof.lastLocalOptions  = localOpt;
+            if (sessionOnline) {
+                prof.lastServer = serverUrl;
+                if (!shell.inMatchCode.empty()) prof.lastMatch = shell.inMatchCode;
+            }
+            // The rules of a custom room that is OURS. Two cases, and the
+            // exclusions matter more than the inclusions:
+            //   CUSTOM screen - the setup we are about to create a room from.
+            //   LOBBY, ours   - the room exists and the server flagged us host,
+            //                   so the options echoed back to us are our own.
+            // Everything else is deliberately skipped. Joining someone else's
+            // room fills onlineOpt from THEIR echo, and an official room's are a
+            // locked preset with no host at all - neither is this player's
+            // setup, and saving either would quietly overwrite it.
+            if (screen == GameScreen::CUSTOM
+                || (screen == GameScreen::LOBBY
+                    && shell.inMatchKind == MatchKind::Custom
+                    && myIndex >= 0 && myIndex == HostSlot(gameSpace.getPlayers()))) {
+                prof.lastCustomOptions = onlineOpt;
+                // Store the room name only if it is actually THEIRS. While it
+                // still matches the derived default, keep it empty so a later
+                // rename of the player renames their rooms too - freezing
+                // "PLAYER 1'S MATCH" into the file would outlive the name it
+                // came from.
+                const std::string derivedName = myDisplayName() + "'S MATCH";
+                prof.lastCustomName    = (shell.customName == derivedName)
+                                       ? std::string() : shell.customName;
+                prof.lastCustomPrivate = shell.customPrivate;
+            }
+            profile::Autosave(GetTime());
+        }
 
         // Perf ring: record every frame (cheap) so the F3 overlay has history
         // the moment it's toggled on. F3 types no character, so the title
@@ -1104,6 +1189,11 @@ int main(int argc, char** argv) {
                         // Seed the name the first time only, so a player who typed
                         // one and stepped back doesn't lose it.
                         if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        // Start from the rules this player last hosted with.
+                        // onlineOpt is otherwise whatever the last room we were in
+                        // echoed at us - possibly a stranger's - which is a
+                        // strange thing to hand someone building their own room.
+                        onlineOpt = profile::Get().lastCustomOptions;
                         // One modal, two option sets: hand it the values it is
                         // about to edit, or its sliders show the other mode's.
                         shell.syncShadows(onlineOpt);
@@ -1344,6 +1434,12 @@ int main(int argc, char** argv) {
                         // Naming and visibility belong on their own screen now, so
                         // this hands off rather than minting a room blind.
                         if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        // Same entry, same seeding as the title's CUSTOM MATCH -
+                        // and the syncShadows this path was missing, without which
+                        // the OPTIONS modal's three int sliders open on stale
+                        // values.
+                        onlineOpt = profile::Get().lastCustomOptions;
+                        shell.syncShadows(onlineOpt);
                         screen = GameScreen::CUSTOM;
                         break;
                     case BrowseAction::Join:
@@ -2035,6 +2131,11 @@ int main(int argc, char** argv) {
     // instead of waiting out the UDP idle timeout (see serializeGoodbye). Best-
     // effort only: a crash or SIGKILL still just falls back to that timeout.
     if (sessionOnline && net.isOpen()) net.send(serializeGoodbye());
+    // The autosave runs at most every AUTOSAVE_INTERVAL, so a name typed just
+    // before quitting could still be unwritten. Flush it. (Native only in
+    // practice - a closed browser tab never reaches here, which is why the
+    // autosave above exists.)
+    profile::Save();
     for (audioFX& fx : fxTable) fx.unload();
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();
