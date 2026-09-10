@@ -132,9 +132,12 @@ it merges cleanly today.
    `gameMutex -> clientMutex -> scoreboardMutex`), and `save()` likely wants
    debouncing rather than a synchronous rewrite per match end.
 
-**Knock-on for the deploy story:** the server is no longer stateless once this
-lands. `docs/deploy-vultr.md` asserts "reads no files, writes no files" **twice**,
-and there is now a `scores` file to back up. E4 must fix that.
+**Knock-on for the deploy story — DONE.** The server is no longer stateless, and
+has not been since the scoreboard landed. `docs/deploy-vultr.md` no longer claims
+"reads no files, writes no files"; it now carries a **"What the server keeps on
+disk"** section naming the `scores` file and `/etc/platformz.env`, what happens if
+each is lost, and how to back them up. E1's and D3's shared secret joins that
+list when it lands.
 
 Still deliberately absent: any notion of an *account*. D3 gives pseudonymous
 continuity, which is the right strength for this board — see the honesty note in
@@ -788,7 +791,9 @@ persistent. A server-signed token makes "same player as last time" verifiable, a
 it is far cheaper to design in now than to retrofit around a shipped profile
 format and a shipped hello.
 
-**Scope — stateless, no database:**
+**Scope — no per-user rows, no database.** (Not "the server stores nothing": it
+already keeps a `scores` file, and the secret below is itself persistent config.
+What D3 avoids is a *table of users* — it verifies its own signature instead.)
 - Server holds a secret in `PLATFORMZ_IDENTITY_SECRET`, alongside `PLATFORMZ_KEY`
   in `/etc/platformz.env`.
 - `hello` with **no** token → mint `token = base64(uuid ‖ HMAC(secret, uuid))`,
@@ -796,8 +801,10 @@ format and a shipped hello.
 - `hello` **with** a token → verify the HMAC. Valid ⇒ identity trusted. Invalid or
   from an old secret ⇒ treat as no token and mint fresh (never hard-fail a join
   over it).
-- The server stores **nothing** — it just verifies its own signature. Same trick
-  as E1's cookie, and the two should share the secret-loading code.
+- The server stores **no record of the player** — it just re-computes the tag and
+  compares. Same primitive as E1's cookie, sharing one secret and one pair of
+  sign/verify helpers; see E1 for the HMAC-not-prefix-hash and constant-time
+  compare notes, which apply here too.
 
 **Be honest about what this does and doesn't buy.** It proves *continuity* — the
 same client as before — not that a human is who they claim. Someone can still copy
@@ -925,16 +932,34 @@ in baked handout builds (`PLATFORMZ_DEFAULT_SERVER_KEY`). Adding a directory tha
 answers unauthenticated packets makes the server a genuinely useful reflector.
 
 **Scope — layered:**
-1. **Stateless return-routability challenge.** A `hello` from an unknown endpoint
-   gets back only `{"type":"challenge","c":"<24 hex>"}` (~48 B) — smaller than the
-   hello, so the amplification factor is **below 1**. The token is
-   `truncate(hash(secret ‖ src_ip ‖ src_port ‖ time_bucket))` over 30 s buckets
-   (previous bucket also accepted). **Stateless** — a flood of spoofed hellos
-   costs one hash and one small send each and stores *nothing*, so it can't be
-   turned into memory exhaustion either. The client echoes `c` in its next hello
-   and the server verifies it against the address it actually observes; a spoofer
+1. **Return-routability challenge that keeps no per-client state.** A `hello`
+   from an unknown endpoint gets back only `{"type":"challenge","c":"<24 hex>"}`
+   (~48 B) — smaller than the hello, so the amplification factor is **below 1**.
+   The cookie is
+   `truncate(HMAC(secret, src_ip ‖ src_port ‖ time_bucket))` over 30 s buckets
+   (previous bucket also accepted). The client echoes `c` in its next hello and
+   the server verifies it against the address it actually observes; a spoofer
    never receives the challenge, so it never registers. Standard QUIC/DTLS retry.
    **Preserve silence-on-bad-key:** a wrong `key` gets no challenge either.
+
+   **Use HMAC, not `hash(secret ‖ data)`.** An earlier draft of this plan wrote
+   the latter. Gluing a secret onto the front of a Merkle–Damgård hash (SHA-256
+   included) is the classic prefix-MAC mistake: given one valid tag you can
+   sometimes extend the message and produce another valid tag *without knowing
+   the secret*. The fixed-shape input here makes that hard to exploit in
+   practice, but HMAC is the construction built to close exactly this hole, it
+   is no harder to call, and it is the same primitive D3 needs anyway.
+
+   **Compare tags in constant time.** A plain `==` on the returned cookie bails
+   out at the first wrong byte; the timing difference leaks the correct value one
+   byte at a time. Use a constant-time compare for this and for D3's token.
+
+   **"Stateless" here means this mechanism stores nothing per client** — a flood
+   of spoofed hellos costs one HMAC and one small send each and allocates
+   nothing, so it cannot be turned into memory exhaustion. It does *not* mean the
+   process writes nothing to disk; the scoreboard already does, and the secret
+   below has to outlive a restart. See "What the server keeps on disk" in
+   `docs/deploy-vultr.md`.
 2. **Nothing large to an unregistered endpoint** — `list`/`join`/`create`/`quick`
    are honoured only for an endpoint already in `udpIndex`.
 3. **Token-bucket the list** even for registered connections: one reply per second
@@ -946,6 +971,19 @@ answers unauthenticated packets makes the server a genuinely useful reflector.
 Client cost is one extra RTT: stash the challenge and re-send `hello` immediately
 rather than waiting out the 0.5 s retry (`main.cpp:761`). **WS needs none of this**
 — the TCP handshake already proves the address — only the rate limit.
+
+**The secret, and why it is shared with D3.** Both this cookie and D3's identity
+token are "stamp something with a key only the server has, then check the stamp
+later without having written anything down". One secret in
+`PLATFORMZ_IDENTITY_SECRET` (beside `PLATFORMZ_KEY` in `/etc/platformz.env`), one
+pair of sign/verify helpers, loaded once at boot. Build it here; D3 inherits it —
+which is why E1 comes first in the milestone order.
+
+It **must persist across restarts.** Generate it at boot instead and every issued
+token silently becomes invalid on every deploy, which for D3 means every player
+looks like a new person after each release. It is root-owned config, not game
+state, so it belongs in the env file rather than `/var/lib/platformz` — but it is
+part of the backup surface either way.
 
 **Files:** `server/server_main.cpp`, `net_client.h`/`main.cpp` (echo the cookie).
 **Depends on:** B1. **Must land before the server is publicly advertised.**
@@ -984,10 +1022,12 @@ matches, assert state packets flow and the protocol tags match.
 **Scope:** `docs/deploy-vultr.md` (multi-match section, `/status`, capacity
 numbers from A4, the key-vs-code distinction) and `docs/play-web-via-github.md`.
 
-**Correct the "stateless server" claim.** `docs/deploy-vultr.md` asserts "reads
-no files, writes no files" twice. Once `high-score` lands that is false — there is
-a `scores` file to back up, and the redeploy steps must stop implying the box
-holds nothing worth keeping.
+**~~Correct the "stateless server" claim~~ — DONE 2026-09-10.** The doc asserted
+"reads no files, writes no files" twice; the scoreboard made that false. Those
+lines are gone and `docs/deploy-vultr.md` now has a **"What the server keeps on
+disk"** section: the `scores` file and `/etc/platformz.env`, the consequence of
+losing each, and a backup snippet. Anything E1/D3 adds (the shared secret) goes in
+the same list.
 
 **~~Write a fresh `docs/multiplayer-testing.md`~~ — DONE 2026-08-30.** Covers the
 lobby/START flow, both transports and how they differ, the `PLATFORMZ_KEY` gate,

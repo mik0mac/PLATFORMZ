@@ -393,6 +393,53 @@ applies — **not** `curl`, `scp`, or a USB stick:
 
 ---
 
+## What the server keeps on disk
+
+Worth stating plainly, because this doc used to say the opposite. Earlier versions
+asserted the server "reads no files, writes no files" — that was true once, and
+the scoreboard made it false. **Two things on the box are not in git and cannot be
+rebuilt from it.**
+
+| Path | What it is | If you lose it |
+|---|---|---|
+| `/var/lib/platformz/scores` | The all-time scoreboard: one `<score>\t<name>` line per player, rewritten at each match end | Every player's cumulative score is gone. The server starts a fresh board and logs that it loaded nothing; nothing else breaks |
+| `/etc/platformz.env` | `PLATFORMZ_KEY`, the join gate | Existing invite links and baked handout builds stop working, because the key they carry no longer matches. You have to reissue links and rebuild handouts |
+
+Everything else — the binary, the web bundle, the systemd unit, the Caddy config
+— is either in the repo or reproducible from the steps above.
+
+The scoreboard is written atomically (to `scores.tmp`, then renamed), so an
+interrupted save or a crash mid-write cannot leave a half-file; you either get the
+previous board or the new one. That protects against corruption, **not** against
+the disk going away.
+
+### Backing them up
+
+Small, plain text, and rarely changing — so this is a one-liner, not a strategy:
+
+```bash
+# on the box, as root (/etc/platformz.env is root-only by design).
+# -C / keeps the paths relative inside the archive, so tar does not warn about
+# stripping leading slashes and the restore below lands them back where they were.
+tar czf "/root/platformz-state-$(date +%F).tgz" -C / \
+    var/lib/platformz/scores etc/platformz.env
+
+# restore
+tar xzf platformz-state-YYYY-MM-DD.tgz -C /
+systemctl restart platformz
+```
+
+Then copy the archive **off the instance** — a backup that only exists on the box
+is not a backup of the box. Run it before a redeploy that changes the scoreboard
+format, and before destroying or resizing the instance.
+
+> **Coming, and it belongs in this list.** E1's UDP handshake cookie and D3's
+> identity token share one secret, `PLATFORMZ_IDENTITY_SECRET`, which will live in
+> `/etc/platformz.env`. It **must survive restarts**: regenerate it and every
+> identity token already in players' profiles becomes invalid, so after each
+> deploy every returning player looks like somebody new. See
+> [`matchmaking-plan.md`](matchmaking-plan.md) E1/D3.
+
 ## Redeploying after code changes
 
 - **Server:** commit + push, then on the box: `cd /opt/PLATFORMZ && git pull` →
@@ -404,6 +451,10 @@ applies — **not** `curl`, `scp`, or a USB stick:
 - **Web:** rebuild on your Mac (`make web RAYLIB_WEB_DIR=$HOME/raylib`), commit +
   push the regenerated `web/platformz.*` (they're tracked), then on the box:
   `git pull` and `cp /opt/PLATFORMZ/web/platformz.* /var/www/html/`.
+- **The box holds state a `git pull` will not restore** — see "What the server
+  keeps on disk" above. `git clean` inside `/opt/PLATFORMZ` is safe today only
+  because the scoreboard lives in `/var/lib/platformz`, which is exactly why the
+  systemd unit puts it there.
 
 ## Caveats while on plain IP/HTTP
 
