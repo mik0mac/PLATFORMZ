@@ -88,11 +88,21 @@ class C:
         if self.wantMatch: m["match"] = self.wantMatch
         self.send(m)
 
-    def drop(self):
-        """Go dark the way a real client does: stop pinging, close the socket.
+    def drop(self, goodbye=False):
+        """Leave.
 
-        No goodbye - that is the point. The server has to notice on its own, and
-        the body has to sit there until it does."""
+        goodbye=False goes dark the way a crash or a lost network does: stop
+        pinging, close the socket, say nothing. The server only notices after
+        UDP_CLIENT_TIMEOUT (10 s mid-match).
+
+        goodbye=True is a player quitting deliberately, which is what the real
+        client sends on teardown. The slot is freed immediately - so a test that
+        needs a vacated slot gets one in a beat instead of leaving the body
+        unattended in a live firefight for ten seconds first."""
+        if goodbye:
+            try: self.send({"type": "goodbye"})
+            except OSError: pass
+            time.sleep(0.3)          # let it arrive before the socket goes
         self.alive = False
         try: self.s.close()
         except OSError: pass

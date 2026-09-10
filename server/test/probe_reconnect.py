@@ -14,6 +14,9 @@ What this checks, in order of how easy each is to get wrong:
      empty slotOwner of an untouched slot
   4. once that body is gone - the grace expired, or it was shot while nobody was
      flying it - the same id gets a fresh body rather than resuming a corpse
+  5. the same thing works for a client that never said goodbye at all, which is
+     the case D2 is really for: a laptop that slept and came back on a new UDP
+     endpoint, with its old one still nominally holding the slot
 
     cd server && ./gameserver &
     python3 test/probe_reconnect.py
@@ -47,11 +50,16 @@ def check(ok, what):
     print(f"  {'PASS' if ok else 'FAIL'} {what}")
     if not ok: fails += 1
 
-# The server frees a quiet UDP slot after UDP_CLIENT_TIMEOUT (10 s mid-match) and
-# then holds the body for MID_MATCH_LEAVE_GRACE_SEC (15 s). So a reconnect has to
-# land in that second window: after the reap, before the eviction.
-REAP_SEC  = 10.0
+# A deliberate quit frees the slot at once, so the grace arms almost immediately
+# and the body only has to survive the seconds we actually need it for.
+#
+# Going silent instead would mean waiting out UDP_CLIENT_TIMEOUT (10 s mid-match)
+# with the body unattended in a live firefight first - which is how the first
+# version of this probe failed intermittently: the subject was shot dead before
+# the checks ran, and every assertion downstream then reported a server bug.
+# The silent path is still exercised, once, where it is the actual subject.
 GRACE_SEC = 15.0
+REAP_SEC  = 10.0
 
 CID_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 CID_B = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
@@ -102,9 +110,9 @@ check(before_hp is not None, f"host body visible to others (hp={before_hp})")
 # 12 s window, the match ended part-way through the run, and at GAMEOVER a vacant
 # slot gets botified and RENAMED - so the roster lookup stopped finding "HOST"
 # and the failure looked like a reconnect bug rather than a stale scenario.
-print("\nhost drops mid-match; the body is held open")
-host.drop()
-time.sleep(REAP_SEC + 2.0)      # past the UDP reap, well inside the 15 s grace
+print("\nhost quits mid-match; the body is held open")
+host.drop(goodbye=True)
+time.sleep(1.5)                 # slot freed at once; grace arms on the next tick
 
 check(buddy.phase == "playing", f"match still running (phase={buddy.phase})")
 held = body(buddy, host_slot)
@@ -148,7 +156,7 @@ check(not (before_hp < 100 and after.get("hp") == 100),
 
 # ---------------------------------------------------------------------------
 print("\nonce the body is gone, there is nothing left to resume")
-back.drop()
+back.drop(goodbye=True)
 # Wait for the body to go, rather than sleeping a computed interval. Two things
 # can end it and the contract is the same for both - HeldSlotFor requires the
 # body to be BOTH inside its grace AND alive:
@@ -175,11 +183,38 @@ check(late.slot is not None, "late returner was still seated")
 # expired grace has to go through TakeOverSlot, which revives it at full health
 # with a zeroed score, rather than resuming a corpse.
 fresh = body(buddy, late.slot)
-check(fresh.get("alive") is True,  "...revived, not seated into the corpse")
-check(fresh.get("hp") == 100,      f"...with a fresh body (hp={fresh.get('hp')}, not resumed)")
-check(fresh.get("score") == 0,     f"...and a zeroed score ({fresh.get('score')})")
+# `alive` is the whole discriminator, and the only stable one. The body we left
+# was asserted dead just above, and TakeOverSlot is the only thing that revives
+# one - so a live body here proves the seat went through the reset path.
+#
+# Do NOT assert hp == PLAYER_STARTING_HEALTH. It is only true for an instant:
+# the sim keeps running, and by the time this reads the roster the new body has
+# usually been shot at. An earlier version checked it and failed roughly one run
+# in three for that reason alone.
+check(fresh.get("alive") is True, "...revived, not seated into the corpse")
+check(fresh.get("hp", 0) > 0,     f"...on a working body, not the 0-hp corpse (hp={fresh.get('hp')})")
+check(fresh.get("score") == 0,    f"...and a zeroed score ({fresh.get('score')})")
 
-for c in (host, buddy, stranger, anon, back, late):
+# ---------------------------------------------------------------------------
+# The case D2 actually exists for. No goodbye, and the reconnect arrives BEFORE
+# the 10 s reap - so the old connection is still sitting on the slot, exactly
+# like a laptop that woke with a new NAT mapping. SupersedeStaleTwin is what has
+# to notice that the twin has gone quiet and let go of it.
+print("\na silent drop, reconnecting before the server has even noticed")
+survivor = C("SURVIVOR", cid=CID_A, match=room)
+survivor.hello()
+time.sleep(2.0)
+sslot = survivor.slot
+check(sslot is not None, f"seated (slot {sslot})")
+survivor.drop()                       # no goodbye: the server still thinks it is there
+time.sleep(4.0)                       # well inside UDP_CLIENT_TIMEOUT (10 s)
+again = C("SURVIVOR", cid=CID_A, match=room)
+again.hello()
+time.sleep(2.0)
+check(again.slot == sslot,
+      f"same id reclaimed its slot from its own stale connection ({again.slot} == {sslot})")
+
+for c in (host, buddy, stranger, anon, back, late, survivor, again):
     try: c.drop()
     except Exception: pass
 
