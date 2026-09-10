@@ -18,6 +18,7 @@
 #include "bot_logic.h"   // bot AI decision tree
 #include "bot_controller.h" // shared bot orchestration (tree + per-slot state + drive)
 #include "messages.h"    // transient on-screen message queue (kill-feed HUD)
+#include "profile.h"     // persistent local profile: name, clientId, volume, last LOCAL rules
 
 #include <string>
 #include <unordered_map>
@@ -276,6 +277,11 @@ int main(int argc, char** argv) {
     if (inviteCode.empty()) inviteCode = UrlParam(serverUrl, "match");
 //MARK: SETUP
     // --- Setup (runs once) ---
+    // The player's saved profile. Loaded before the window because nothing in it
+    // needs raylib, and because the restored name has to be in place for the
+    // first title frame - a name that appears a beat late reads as a bug.
+    profile::Load();
+
     const int screenWidth = 1000;
     const int screenHeight = 700;
     const int textHeight = 20;
@@ -305,7 +311,9 @@ int main(int argc, char** argv) {
     // AudioFXId (the shared client/server wire id) to a loaded sound; game
     // events arrive as ids (locally or over the network) and index into it.
     InitAudioDevice();
-    SetMasterVolume(1.0f);
+    // Restore the saved level rather than starting at full scale. Has to wait for
+    // InitAudioDevice - raylib's master volume doesn't exist before the mixer.
+    SetMasterVolume(MasterVolumeDbToAmp(profile::Get().masterVolumeDb));
 
     // Per-FX voice pools live inside audioFX. Columns:
     //   volume, localOnly, spacial, poolSize, pitchJitter
@@ -493,6 +501,13 @@ int main(int argc, char** argv) {
     // GameScreen and the menu state now live in screens.h; `shell` owns
     // everything the title/countdown/game-over screens keep between frames.
     ShellState shell;
+    // A saved name is a REAL name, not the untouched default - so clear
+    // namePristine, which is what makes the first keystroke wipe the field and
+    // what myDisplayName() checks before falling back to "PLAYER {slot+1}".
+    if (!profile::Get().name.empty() && profile::Get().name != "PLAYER") {
+        shell.playerName   = profile::Get().name;
+        shell.namePristine = false;
+    }
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
@@ -525,9 +540,14 @@ int main(int argc, char** argv) {
     // room you host, and a host's change must not follow you into single player.
     // They share the widget code (DrawOptionsModal takes a reference) but never
     // the values.
-    MatchOptions localOpt;    // LOCAL screen; applied straight to the local sim
+    // localOpt starts from the saved profile: your offline setup is yours and
+    // should still be there next launch. onlineOpt deliberately does NOT - a room
+    // gets its rules from its preset or its host, never from whatever the player
+    // last did in single player.
+    MatchOptions localOpt = profile::Get().lastLocalOptions;
     MatchOptions onlineOpt;   // CUSTOM + LOBBY; rides `start`/`options` to the server
                               // and is overwritten by the server's echo
+    shell.syncShadows(localOpt);  // the three int sliders read their float shadows
     // Random (non-repeating) order in which bot slots draw from BOT_NAME_STRINGS.
     // Seeded now so the first title screen is already randomized; re-rolled on
     // every return to the title screen so each match gets a fresh set of names.
@@ -908,6 +928,30 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+
+        //MARK: PROFILE AUTOSAVE
+        // Sample the live values into the profile every frame, then let it decide
+        // whether that is worth a write (at most one every AUTOSAVE_INTERVAL, and
+        // only when something actually differs from what is already stored).
+        //
+        // Sampling rather than a MarkDirty() at each edit site is deliberate: the
+        // name field, the volume slider, the +/- keys and every OPTIONS control
+        // would each need one, and the one that got forgotten would silently stop
+        // persisting. Comparing what we hold against what we wrote cannot forget.
+        //
+        // The autosave, not the teardown save, is what makes the web build work:
+        // closing a browser tab runs no teardown at all.
+        {
+            profile::Profile& prof = profile::Get();
+            prof.name              = shell.namePristine ? std::string("PLAYER") : shell.playerName;
+            prof.masterVolumeDb    = MasterVolumeAmpToDb(GetMasterVolume());
+            prof.lastLocalOptions  = localOpt;
+            if (sessionOnline) {
+                prof.lastServer = serverUrl;
+                if (!shell.inMatchCode.empty()) prof.lastMatch = shell.inMatchCode;
+            }
+            profile::Autosave(GetTime());
+        }
 
         // Perf ring: record every frame (cheap) so the F3 overlay has history
         // the moment it's toggled on. F3 types no character, so the title
@@ -2035,6 +2079,11 @@ int main(int argc, char** argv) {
     // instead of waiting out the UDP idle timeout (see serializeGoodbye). Best-
     // effort only: a crash or SIGKILL still just falls back to that timeout.
     if (sessionOnline && net.isOpen()) net.send(serializeGoodbye());
+    // The autosave runs at most every AUTOSAVE_INTERVAL, so a name typed just
+    // before quitting could still be unwritten. Flush it. (Native only in
+    // practice - a closed browser tab never reaches here, which is why the
+    // autosave above exists.)
+    profile::Save();
     for (audioFX& fx : fxTable) fx.unload();
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();

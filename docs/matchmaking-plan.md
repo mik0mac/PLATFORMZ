@@ -702,7 +702,13 @@ The LOBBY screen shows the code and a COPY INVITE action.
 
 # Epic D — Identity
 
-### D1. `profile.h` — persistent local profile
+### D1. `profile.h` — persistent local profile — **DONE**
+*Landed on `d1-local-profile`. Verified three ways: `test/run.sh` (26 native
+checks — round trip, corrupt file, hand-edited hostile values, partial file,
+UUID shape and uniqueness), a node harness that runs **emcc's own emitted EM_JS**
+against a localStorage shim, and two real launches of the built client proving
+the `clientId` survives a relaunch and the file lands 0600.*
+
 **Why:** name, volume and options reset on every launch today; there is no
 persistence layer anywhere in the project.
 
@@ -720,6 +726,31 @@ format is much easier to get right before the first build ships than after.
 `Contents/MacOS/` is code (see the cwd-anchoring note in `CLAUDE.md`).
 
 **Files:** new `profile.h`, `main.cpp`.
+
+#### What shipped, and the two decisions worth knowing
+**Storage on the web is `localStorage`, not cookies.** A cookie rides along on
+every request the browser makes to the origin — the id would be shipped to the
+web host on every asset fetch for no reason, and the whole domain shares a ~4 KB
+budget. `localStorage` is a per-origin drawer that goes nowhere unless we send
+it. It is best-effort, and the ways it evaporates bound what D4 can key a
+leaderboard on: it is per-origin (github.io and the real domain are two different
+players), per-browser and per-device with no sync, discarded by a private window,
+and **evicted by Safari's tracking prevention after 7 days without a visit**. A
+web `clientId` is "stable across sessions, usually" — the most a browser will
+promise without the account this project has deliberately chosen not to have.
+
+**`localOpt` is restored; `onlineOpt` is deliberately not.** Your offline setup
+is yours and should still be there next launch. A room gets its rules from its
+preset or its host — never from whatever the player last did in single player.
+
+`main.cpp` samples the live values into the profile every frame and lets
+`profile::Autosave` decide whether that is worth a write (at most one every 2 s,
+and only when something differs from what is stored). Sampling rather than a
+`MarkDirty()` at each edit site is deliberate: the name field, the volume slider,
+the `+`/`-` keys and every OPTIONS control would each need one, and the one that
+got forgotten would silently stop persisting. The autosave — not the teardown
+save — is also what makes the web build work at all: closing a tab runs no
+teardown.
 
 ---
 

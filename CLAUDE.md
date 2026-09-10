@@ -68,6 +68,17 @@ only `main.cpp` and `collisions.cpp` as translation units.
 - `camera.h` — `CameraFromPlayer(player)` builds the first-person `Camera3D`
   from player state each frame (eye at the player-sphere center).
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
+- `profile.h` — the client's **only** persistence: display name, a stable
+  per-install `clientId`, master volume and the last LOCAL match rules, as small
+  JSON. Native writes
+  `~/Library/Application Support/PLATFORMZ/profile.json` (0600, via a
+  write-then-`rename` so a crash can't truncate it); the web build uses
+  `localStorage`. Never writes beside the binary — inside the signed `.app`,
+  `Contents/MacOS/` is code. It never fails a launch: an unreadable, corrupt or
+  hand-edited file lands on defaults and a fresh `clientId`. `main.cpp` samples
+  the live values into it each frame and lets `profile::Autosave` decide whether
+  that is worth a write — the browser never runs teardown, so an on-exit-only
+  save would never happen there. Tests: `test/run.sh`.
 - `WireframeTests/` — **gitignored** scratch dir of prototypes (2D/3D wireframe
   experiments, Godot tests) that much of this code was pulled from. Not built.
 
