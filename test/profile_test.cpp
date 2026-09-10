@@ -73,6 +73,8 @@ int main() {
     profile::Get().lastCustomOptions.mapSize    = "SMALL";
     profile::Get().lastCustomOptions.numPlayers = 3;
     profile::Get().lastCustomOptions.speedBoost = 1.75f;
+    profile::Get().lastCustomName    = "ROCKET PARTY";
+    profile::Get().lastCustomPrivate = true;
     CHECK(profile::Save(), "Save() writes when something changed");
     CHECK(!profile::Save(), "Save() is a no-op when nothing changed");
 
@@ -95,6 +97,8 @@ int main() {
     CHECK(profile::Get().lastLocalOptions.mapSize == "XL"
        && profile::Get().lastCustomOptions.mapSize == "SMALL",
           "local and custom rules stay independent");
+    CHECK(profile::Get().lastCustomName == "ROCKET PARTY", "match name survives a relaunch");
+    CHECK(profile::Get().lastCustomPrivate,                "invite-only survives a relaunch");
 
     // --- garbage on disk ------------------------------------------------
     std::printf("\ncorrupt file\n");
@@ -109,6 +113,7 @@ int main() {
                     "\"clientId\":\"nope\",\"volumeDb\":9999,"
                     "\"options\":{\"players\":400,\"map\":\"MOON\",\"botDiff\":\"hard\","
                     "\"explRadius\":1000,\"fuelBurn\":-5},"
+                    "\"customName\":\"BAD\\u0007NAME WAY TOO LONG TO FIT IN THE FIELD\","
                     "\"customOptions\":{\"players\":-9,\"jetThrust\":50}}");
     profile::Load();
     const profile::Profile& p = profile::Get();
@@ -123,6 +128,9 @@ int main() {
     CHECK(p.lastLocalOptions.fuelConsumption >= 0,  "negative fuel burn is clamped");
     CHECK(p.lastCustomOptions.numPlayers >= 1,      "custom roster is clamped too, not just local");
     CHECK(p.lastCustomOptions.jetpackThrust <= 2.0f,"custom scale is clamped too");
+    CHECK(p.lastCustomName.size() <= MATCH_NAME_MAX_CHARS, "over-long match name is clamped");
+    CHECK(p.lastCustomName.find('\a') == std::string::npos,
+          "control characters are stripped from the match name");
 
     // --- a missing key is not a reset -----------------------------------
     std::printf("\npartial file (a future build's field set, minus keys)\n");
@@ -137,6 +145,11 @@ int main() {
           "a file with no customOptions loads the defaults");
     CHECK(profile::Get().lastCustomOptions.numPlayers == MatchOptions{}.numPlayers,
           "...across every field, not just the first");
+    // Empty is the meaningful value here, not a missing one: it says "the player
+    // never renamed the room", so the screen re-derives the default from their
+    // CURRENT display name instead of freezing an old one.
+    CHECK(profile::Get().lastCustomName.empty(),   "an unnamed room stays unnamed, not defaulted here");
+    CHECK(!profile::Get().lastCustomPrivate,       "invite-only defaults to off");
 
     // --- ids do not repeat ----------------------------------------------
     std::printf("\nuuid uniqueness\n");

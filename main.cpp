@@ -508,6 +508,11 @@ int main(int argc, char** argv) {
         shell.playerName   = profile::Get().name;
         shell.namePristine = false;
     }
+    // The CUSTOM setup form, as the player last left it. An empty name is not a
+    // missing one - it means they never renamed the room, so the "<YOUR NAME>'S
+    // MATCH" default below re-derives it from whatever they are called today.
+    shell.customName    = profile::Get().lastCustomName;
+    shell.customPrivate = profile::Get().lastCustomPrivate;
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
@@ -782,7 +787,19 @@ int main(int argc, char** argv) {
                 // slider while it's being dragged, and for the toggles only take
                 // a server value that differs from the one we last sent (so our
                 // own click isn't flipped back before its echo returns).
-                if (m.hasOptions) {
+                // ...but NOT while the CUSTOM screen is up. There, onlineOpt is a
+                // DRAFT for a room that does not exist yet, not a mirror of a live
+                // one - and the connection is still bound to whatever room it
+                // auto-joined, so this echo is some other room's rules. Applying
+                // it reverted every setting the host chose the moment they let go
+                // of the control, which made MATCH RULES look broken: the value
+                // snapped back a frame after the click. Everything except the map
+                // survived only because the map is not in this block.
+                //
+                // The draft is pushed once the room exists (see the roomChanged
+                // handler on the CUSTOM screen), and from then on we are in the
+                // LOBBY and the echo is our own values coming back.
+                if (m.hasOptions && screen != GameScreen::CUSTOM) {
                     // Update our OPTIONS modal, per-slider guarded by its drag
                     // latch so a control we're actively dragging isn't stomped.
                     if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
@@ -964,6 +981,15 @@ int main(int argc, char** argv) {
                     && shell.inMatchKind == MatchKind::Custom
                     && myIndex >= 0 && myIndex == HostSlot(gameSpace.getPlayers()))) {
                 prof.lastCustomOptions = onlineOpt;
+                // Store the room name only if it is actually THEIRS. While it
+                // still matches the derived default, keep it empty so a later
+                // rename of the player renames their rooms too - freezing
+                // "PLAYER 1'S MATCH" into the file would outlive the name it
+                // came from.
+                const std::string derivedName = myDisplayName() + "'S MATCH";
+                prof.lastCustomName    = (shell.customName == derivedName)
+                                       ? std::string() : shell.customName;
+                prof.lastCustomPrivate = shell.customPrivate;
             }
             profile::Autosave(GetTime());
         }

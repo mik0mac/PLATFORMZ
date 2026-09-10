@@ -750,7 +750,8 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
                    screenWidth, 170, 18, GRAY);
 
     UiTextCentered("MATCH NAME", screenWidth, 250, 18, ui::OUTLINE);
-    UiTextField({300, 276, 400, 44}, s.customName, s.customNameFocused, 24, 22);
+    UiTextField({300, 276, 400, 44}, s.customName, s.customNameFocused,
+                MATCH_NAME_MAX_CHARS, 22);
 
     UiTextCentered("INVITE ONLY", screenWidth, 342, 18, ui::OUTLINE);
     if (uiEnabled) UiToggle({470, 368, 100, 26}, s.customPrivate);

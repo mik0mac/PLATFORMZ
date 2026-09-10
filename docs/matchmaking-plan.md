@@ -753,6 +753,23 @@ neither is this player's setup, so saving either would silently overwrite it.
 `screens.h` grew a shared `HostSlot()` so `main.cpp` and the lobby cannot drift
 on who the host is.
 
+The room's **name and invite-only flag** ride along with those rules. The name is
+stored *empty* while it still matches the derived `"<YOUR NAME>'S MATCH"` — the
+screen re-derives that from the current display name, and storing the derived
+string would freeze it, so renaming yourself to MIKE would leave your rooms
+called PLAYER 1'S MATCH forever. `MATCH_NAME_MAX_CHARS` moved into `constants.h`
+so the entry field and the profile's clamp cannot disagree about what fits.
+
+**Bug found and fixed while testing this.** The state echo applies the server's
+options to `onlineOpt` on every packet — including while the CUSTOM setup screen
+is up, where `onlineOpt` is a *draft* for a room that does not exist yet and the
+connection is still bound to whatever room it auto-joined. So every rule the host
+set before pressing CREATE snapped back a frame after the click, and the room was
+created with the *other* room's rules. Only the map survived, because the map is
+the one field that block does not touch — which is why B3's work looked fine. The
+echo is now skipped while `screen == GameScreen::CUSTOM`; the draft is pushed once
+the room exists, and from then on the echo is the host's own values coming back.
+
 `main.cpp` samples the live values into the profile every frame and lets
 `profile::Autosave` decide whether that is worth a write (at most one every 2 s,
 and only when something differs from what is stored). Sampling rather than a

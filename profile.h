@@ -103,6 +103,16 @@ struct Profile {
     // onlineOpt with THEIR rules from the server's echo, and an official room's
     // are a locked preset - neither is this player's setup, so neither is saved.
     MatchOptions lastCustomOptions;
+    // The rest of that CUSTOM setup form: what the room was called and whether
+    // it was invite-only.
+    //
+    // lastCustomName is EMPTY when the player never renamed the room - the
+    // screen derives "<YOUR NAME>'S MATCH" from the display name, and storing
+    // that derived string would freeze it: rename yourself to MIKE and your
+    // rooms would still be called PLAYER 1'S MATCH forever. Empty means "still
+    // the default", so the default gets re-derived from whoever you are now.
+    std::string lastCustomName;
+    bool        lastCustomPrivate = false;
     std::string lastServer;        // last server URL played on   (recorded; unread today)
     std::string lastMatch;         // last room code joined       (recorded; unread today)
 };
@@ -296,6 +306,8 @@ inline std::string Serialize(const Profile& p) {
         {"volumeDb", p.masterVolumeDb},
         {"lastServer", p.lastServer},
         {"lastMatch",  p.lastMatch},
+        {"customName",    p.lastCustomName},
+        {"customPrivate", p.lastCustomPrivate},
         {"options",       OptionsToJson(p.lastLocalOptions)},
         {"customOptions", OptionsToJson(p.lastCustomOptions)},
     };
@@ -330,7 +342,9 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
     str(j, "token",      p.token);
     str(j, "lastServer", p.lastServer);
     str(j, "lastMatch",  p.lastMatch);
+    str(j, "customName", p.lastCustomName);
     flt(j, "volumeDb",   p.masterVolumeDb);
+    boolean(j, "customPrivate", p.lastCustomPrivate);
 
     auto readOptions = [&](const char* key, MatchOptions& m) {
         auto oi = j.find(key);
@@ -388,6 +402,15 @@ inline void Sanitize(Profile& p) {
     if (p.clientId.size() != 36) p.clientId = MakeUuidV4();
 
     p.masterVolumeDb = Clampf(p.masterVolumeDb, MASTER_VOLUME_MIN_DB, 0.0f);
+
+    // A room name is player-typed and reaches other players' screens, so it gets
+    // the same treatment as a display name: printable ASCII only, length capped.
+    // The server clamps it again on arrival - this is about what we hand back to
+    // our own UI, not about trusting the file.
+    if (p.lastCustomName.size() > MATCH_NAME_MAX_CHARS) p.lastCustomName.resize(MATCH_NAME_MAX_CHARS);
+    std::string cleanRoom;
+    for (char c : p.lastCustomName) if (c >= 32 && c <= 125) cleanRoom += c;
+    p.lastCustomName = cleanRoom;
 
     SanitizeOptions(p.lastLocalOptions);
     SanitizeOptions(p.lastCustomOptions);
