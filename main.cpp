@@ -258,6 +258,20 @@ int main(int argc, char** argv) {
     // wire, so extract it here and serializeHello carries it instead.
     std::string joinKey = UrlParam(serverUrl, "key");
 
+    // The URL we actually dial, as opposed to the one we show and remember.
+    // A WebSocket claims its player slot during the HTTP upgrade - before any
+    // hello could arrive - so the install id has to travel the same road ?key=
+    // does, on the URL itself. (udp:// ignores it: net_client.h strips the query
+    // before parsing host:port, and the UDP hello carries "cid" as JSON instead.)
+    //
+    // Kept apart from serverUrl deliberately: serverUrl is what the profile
+    // records and what gets shown, and neither wants an id glued onto it.
+    auto dialUrl = [&](const std::string& base) {
+        const std::string& cid = profile::Get().clientId;
+        if (cid.empty() || !UrlParam(base, "cid").empty()) return base;
+        return base + (base.find('?') == std::string::npos ? "?" : "&") + "cid=" + cid;
+    };
+
     // `networked` answers "is the thing I am doing right now networked?", and a
     // LOCAL MATCH turns it off for the duration even when a server is connected.
     // `sessionOnline` answers "does this session have a server at all?" - the
@@ -570,7 +584,7 @@ int main(int argc, char** argv) {
     // live lobby (the server owns the world and only starts it on request). Local
     // mode has no server.
     if (networked) {
-        net.connect(serverUrl); // non-blocking; IXWebSocket retries on its own thread
+        net.connect(dialUrl(serverUrl)); // non-blocking; IXWebSocket retries on its own thread
         connectStartTime = GetTime(); // start the UDP->WS fallback clock (InitWindow already ran)
         TraceLog(LOG_INFO, "Networked mode: connecting to %s", serverUrl.c_str());
     }
@@ -1038,7 +1052,7 @@ int main(int argc, char** argv) {
             if (autoFallback && udpTransport && myIndex < 0 && nowT - connectStartTime > 3.0) {
                 TraceLog(LOG_WARNING, "UDP handshake timed out; falling back to WebSocket: %s",
                          fallbackWsUrl.c_str());
-                net.connect(fallbackWsUrl); // swaps UdpTransport -> WsTransport (old socket closed by its dtor)
+                net.connect(dialUrl(fallbackWsUrl)); // swaps UdpTransport -> WsTransport (old socket closed by its dtor)
                 udpTransport = false;       // stop UDP-only keepalive / silence-reset below
                 autoFallback = false;       // one-shot
                 connectStartTime = nowT;
@@ -1050,7 +1064,13 @@ int main(int argc, char** argv) {
                 // would send the slot-0 default "PLAYER 1" for EVERY client and
                 // clobber the server's correct per-slot default ("PLAYER 2", ...);
                 // an empty name leaves the server's default in place.
-                net.send(serializeHello(shell.namePristine ? std::string() : shell.playerName, joinKey));
+                // Carry who we are and where we were. shell.inMatchCode is the
+                // room the server last welcomed us into - naming it here is what
+                // turns the UDP silence-reset below from "start over in the
+                // default room" into "get me back where I was", which is the only
+                // way the slot we are holding can be handed back to us.
+                net.send(serializeHello(shell.namePristine ? std::string() : shell.playerName,
+                                        joinKey, profile::Get().clientId, shell.inMatchCode));
                 lastHelloTime = nowT;
             }
             // UDP keepalive: the client only streams input during PLAYING, so on

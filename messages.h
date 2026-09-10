@@ -207,6 +207,15 @@ class Message {
                 color = SKYBLUE;
                 visibility.set(VIS_ALL);
                 break;
+            case MSG_TYPE_REJOINED_GAME:
+                // Distinct from JOINED: this player is resuming the body that has
+                // been drifting since they dropped, with their score intact. To
+                // everyone else a slot that went quiet starts fighting again, and
+                // "JOINED THE MATCH" would read as a different person arriving.
+                text = pa + " RECONNECTED.";
+                color = SKYBLUE;
+                visibility.set(VIS_ALL);
+                break;
             case MSG_TYPE_LEFT_GAME:
                 // No "YOU" substitution: by construction the local viewer is
                 // never the one who left (they wouldn't be here to see it).

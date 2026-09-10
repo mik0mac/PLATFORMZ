@@ -217,12 +217,27 @@ inline std::string serializeName(const std::string& name) {
 // also re-passes the gate if an idle-reaped client re-registers. Over
 // WebSocket the key is checked from the URL during the HTTP upgrade instead,
 // but sending it here too is harmless.
-inline std::string serializeHello(const std::string& name, const std::string& key = "") {
+// `clientId` is this install's own id from the local profile (D1). The server
+// uses it for exactly one thing: handing us back the slot we just dropped out
+// of, body and score intact, if we return inside MID_MATCH_LEAVE_GRACE_SEC.
+//
+// `matchCode` is the room we believe we are in. UDP has no disconnect event, so
+// a client whose packets stopped arriving re-runs this handshake from scratch -
+// and without naming the room, it would land back in the default one while its
+// body drifts on in the room it actually left.
+//
+// Both are omitted when empty, so this stays wire-compatible with a server that
+// has never heard of them.
+inline std::string serializeHello(const std::string& name, const std::string& key = "",
+                                  const std::string& clientId = "",
+                                  const std::string& matchCode = "") {
     nlohmann::json j = {
         {"type", "hello"},
         {"name", name}
     };
-    if (!key.empty()) j["key"] = key;
+    if (!key.empty())       j["key"]   = key;
+    if (!clientId.empty())  j["cid"]   = clientId;
+    if (!matchCode.empty()) j["match"] = matchCode;
     return j.dump();
 }
 
