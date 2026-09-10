@@ -739,9 +739,19 @@ and **evicted by Safari's tracking prevention after 7 days without a visit**. A
 web `clientId` is "stable across sessions, usually" — the most a browser will
 promise without the account this project has deliberately chosen not to have.
 
-**`localOpt` is restored; `onlineOpt` is deliberately not.** Your offline setup
-is yours and should still be there next launch. A room gets its rules from its
-preset or its host — never from whatever the player last did in single player.
+**Two remembered rule sets, not one.** `lastLocalOptions` seeds the LOCAL
+screen; `lastCustomOptions` seeds the CUSTOM one. Same reason `main.cpp` keeps
+`localOpt` and `onlineOpt` apart — a solo practice arena and the room you host
+for friends are different habits, and a change to one must not quietly retune the
+other.
+
+The custom bundle is captured **only from a room that is ours**: the CUSTOM setup
+screen, or a LOBBY whose kind is Custom and whose host slot is ours. The
+exclusions are the point. Joining someone else's room fills `onlineOpt` from
+*their* echo, and an official room's are a locked preset with no host at all —
+neither is this player's setup, so saving either would silently overwrite it.
+`screens.h` grew a shared `HostSlot()` so `main.cpp` and the lobby cannot drift
+on who the host is.
 
 `main.cpp` samples the live values into the profile every frame and lets
 `profile::Autosave` decide whether that is worth a write (at most one every 2 s,

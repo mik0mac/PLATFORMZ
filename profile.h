@@ -1,8 +1,9 @@
 // profile.h
 //
 // The player's persistent local profile: display name, a stable per-install
-// clientId, master volume, and the last LOCAL match rules. Written as small JSON
-// to a per-user location the game owns.
+// clientId, master volume, and two remembered rule sets - the last LOCAL match's
+// and the last CUSTOM room this player hosted. Written as small JSON to a
+// per-user location the game owns.
 //
 // This is the project's ONLY persistence layer on the client side, and it is
 // deliberately tiny. Three rules shape everything below:
@@ -92,6 +93,16 @@ struct Profile {
     std::string token;             // server-issued identity token (D3). Empty until then.
     float       masterVolumeDb = 0.0f;  // 0 dB = full scale (see audio.h)
     MatchOptions lastLocalOptions;      // the offline match's rules
+    // The rules from the last CUSTOM room this player set up themselves. Kept
+    // apart from lastLocalOptions because they are two different habits: a solo
+    // practice arena and the room you host for friends want different settings,
+    // and a change to one must not quietly retune the other. Same reason
+    // main.cpp keeps localOpt and onlineOpt apart.
+    //
+    // Only ever written from a room we HOST. Joining someone else's room fills
+    // onlineOpt with THEIR rules from the server's echo, and an official room's
+    // are a locked preset - neither is this player's setup, so neither is saved.
+    MatchOptions lastCustomOptions;
     std::string lastServer;        // last server URL played on   (recorded; unread today)
     std::string lastMatch;         // last room code joined       (recorded; unread today)
 };
@@ -256,8 +267,27 @@ inline bool WriteRaw(const std::string& json) {
 // Field by field on purpose - see rule 2. Every read supplies a default, so a
 // file written by an older build (or a hand-edited one missing keys) loads
 // cleanly instead of throwing.
+inline nlohmann::json OptionsToJson(const MatchOptions& o) {
+    return {
+        {"map",         o.mapSize},
+        {"players",     o.numPlayers},
+        {"botDiff",     o.botDifficulty},
+        {"wallElast",   o.wallElasticity},
+        {"platElast",   o.platformElasticity},
+        {"speedBoost",  o.speedBoost},
+        {"rocketSpeed", o.rocketSpeedScale},
+        {"explRadius",  o.explosionRadiusScale},
+        {"jetThrust",   o.jetpackThrust},
+        {"fuelBurn",    o.fuelConsumption},
+        {"fuelRegen",   o.fuelRegenPct},
+        {"walls",       o.wallsEnabled},
+        {"rocketPhys",  o.rocketsObeyPhysics},
+        {"friendlyFire",o.friendlyFire},
+        {"coast",       o.coastMode},
+    };
+}
+
 inline std::string Serialize(const Profile& p) {
-    const MatchOptions& o = p.lastLocalOptions;
     nlohmann::json j = {
         {"version",  PROFILE_FORMAT_VERSION},
         {"name",     p.name},
@@ -266,23 +296,8 @@ inline std::string Serialize(const Profile& p) {
         {"volumeDb", p.masterVolumeDb},
         {"lastServer", p.lastServer},
         {"lastMatch",  p.lastMatch},
-        {"options", {
-            {"map",         o.mapSize},
-            {"players",     o.numPlayers},
-            {"botDiff",     o.botDifficulty},
-            {"wallElast",   o.wallElasticity},
-            {"platElast",   o.platformElasticity},
-            {"speedBoost",  o.speedBoost},
-            {"rocketSpeed", o.rocketSpeedScale},
-            {"explRadius",  o.explosionRadiusScale},
-            {"jetThrust",   o.jetpackThrust},
-            {"fuelBurn",    o.fuelConsumption},
-            {"fuelRegen",   o.fuelRegenPct},
-            {"walls",       o.wallsEnabled},
-            {"rocketPhys",  o.rocketsObeyPhysics},
-            {"friendlyFire",o.friendlyFire},
-            {"coast",       o.coastMode},
-        }},
+        {"options",       OptionsToJson(p.lastLocalOptions)},
+        {"customOptions", OptionsToJson(p.lastCustomOptions)},
     };
     return j.dump();
 }
@@ -317,10 +332,10 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
     str(j, "lastMatch",  p.lastMatch);
     flt(j, "volumeDb",   p.masterVolumeDb);
 
-    auto oi = j.find("options");
-    if (oi != j.end() && oi->is_object()) {
+    auto readOptions = [&](const char* key, MatchOptions& m) {
+        auto oi = j.find(key);
+        if (oi == j.end() || !oi->is_object()) return;
         const nlohmann::json& o = *oi;
-        MatchOptions& m = p.lastLocalOptions;
         str    (o, "map",          m.mapSize);
         integer(o, "players",      m.numPlayers);
         flt    (o, "botDiff",      m.botDifficulty);
@@ -336,7 +351,11 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
         boolean(o, "rocketPhys",   m.rocketsObeyPhysics);
         boolean(o, "friendlyFire", m.friendlyFire);
         boolean(o, "coast",        m.coastMode);
-    }
+    };
+    readOptions("options",       p.lastLocalOptions);
+    // Absent in a version-1 file written before custom rooms were remembered;
+    // that simply leaves the compile-time defaults, which is the right answer.
+    readOptions("customOptions", p.lastCustomOptions);
     return true;
 }
 
@@ -344,6 +363,20 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
 // A profile is a file the player can edit, so treat every loaded value as
 // untrusted input and clamp it into the range the UI can actually represent.
 // Without this, a hand-typed "players": 400 would reach setPlayerCount().
+inline void SanitizeOptions(MatchOptions& m) {
+    if (mapSizePresets.find(m.mapSize) == mapSizePresets.end()) m.mapSize = MatchOptions{}.mapSize;
+    m.numPlayers          = (int)Clampf((float)m.numPlayers, 1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS);
+    m.botDifficulty       = Clampf(m.botDifficulty, 0.0f, BOT_DIFFICULTY);
+    m.wallElasticity      = Clampf(m.wallElasticity, 0.0f, 1.0f);
+    m.platformElasticity  = Clampf(m.platformElasticity, 0.0f, 1.0f);
+    m.speedBoost          = Clampf(m.speedBoost, 1.0f, 2.0f);
+    m.rocketSpeedScale    = Clampf(m.rocketSpeedScale, 1.0f, 2.0f);
+    m.explosionRadiusScale= Clampf(m.explosionRadiusScale, 1.0f, 4.0f);
+    m.jetpackThrust       = Clampf(m.jetpackThrust, 1.0f, 2.0f);
+    m.fuelConsumption     = (int)Clampf((float)m.fuelConsumption, 0.0f, 100.0f);
+    m.fuelRegenPct        = (int)Clampf((float)m.fuelRegenPct, 0.0f, 100.0f);
+}
+
 inline void Sanitize(Profile& p) {
     if (p.name.size() > PLAYER_NAME_MAX_CHARS) p.name.resize(PLAYER_NAME_MAX_CHARS);
     std::string clean;
@@ -356,18 +389,8 @@ inline void Sanitize(Profile& p) {
 
     p.masterVolumeDb = Clampf(p.masterVolumeDb, MASTER_VOLUME_MIN_DB, 0.0f);
 
-    MatchOptions& m = p.lastLocalOptions;
-    if (mapSizePresets.find(m.mapSize) == mapSizePresets.end()) m.mapSize = MatchOptions{}.mapSize;
-    m.numPlayers          = (int)Clampf((float)m.numPlayers, 1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS);
-    m.botDifficulty       = Clampf(m.botDifficulty, 0.0f, BOT_DIFFICULTY);
-    m.wallElasticity      = Clampf(m.wallElasticity, 0.0f, 1.0f);
-    m.platformElasticity  = Clampf(m.platformElasticity, 0.0f, 1.0f);
-    m.speedBoost          = Clampf(m.speedBoost, 1.0f, 2.0f);
-    m.rocketSpeedScale    = Clampf(m.rocketSpeedScale, 1.0f, 2.0f);
-    m.explosionRadiusScale= Clampf(m.explosionRadiusScale, 1.0f, 4.0f);
-    m.jetpackThrust       = Clampf(m.jetpackThrust, 1.0f, 2.0f);
-    m.fuelConsumption     = (int)Clampf((float)m.fuelConsumption, 0.0f, 100.0f);
-    m.fuelRegenPct        = (int)Clampf((float)m.fuelRegenPct, 0.0f, 100.0f);
+    SanitizeOptions(p.lastLocalOptions);
+    SanitizeOptions(p.lastCustomOptions);
 }
 
 //MARK: The one instance

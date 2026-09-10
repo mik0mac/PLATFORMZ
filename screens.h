@@ -484,6 +484,20 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     return out;
 }
 
+//MARK: Who is the host
+// Whatever slot the SERVER flagged - never recomputed from slot order. The host
+// is the room's CREATOR, not the lowest slot, and an official room has none at
+// all, so "lowest connected human" is the wrong answer in both directions.
+// Returns -1 for a hostless room.
+//
+// Lives here rather than inside DrawLobby because main.cpp needs the same answer
+// to decide whether the current room's options are this player's to remember.
+inline int HostSlot(const std::vector<Player>& players) {
+    for (int i = 0; i < (int)players.size(); ++i)
+        if (players[i].isHost) return i;
+    return -1;
+}
+
 //MARK: Shared chrome
 // Master volume, pinned bottom-right on every setup screen. Rides the dB scale
 // (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left) so track travel
@@ -797,12 +811,8 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
                            s.copyNotice.empty() ? GRAY : ui::OUTLINE);
     }
 
-    // Host is whatever slot the SERVER flagged. We do not recompute it: the host
-    // is the room's creator, not the lowest slot, and an official room has none.
-    int hostSlot = -1;
-    for (int i = 0; i < (int)players.size(); ++i)
-        if (players[i].isHost) { hostSlot = i; break; }
-    const bool amHost = (myIndex >= 0 && myIndex == hostSlot);
+    const int  hostSlot = HostSlot(players);
+    const bool amHost   = (myIndex >= 0 && myIndex == hostSlot);
 
     const float bottom = DrawRosterPanel(s, players, myIndex, myName, opt, /*networked*/ true,
                                          s.inMatchCode, s.inMatchKind, /*top*/ 220.0f);

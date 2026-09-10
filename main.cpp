@@ -950,6 +950,21 @@ int main(int argc, char** argv) {
                 prof.lastServer = serverUrl;
                 if (!shell.inMatchCode.empty()) prof.lastMatch = shell.inMatchCode;
             }
+            // The rules of a custom room that is OURS. Two cases, and the
+            // exclusions matter more than the inclusions:
+            //   CUSTOM screen - the setup we are about to create a room from.
+            //   LOBBY, ours   - the room exists and the server flagged us host,
+            //                   so the options echoed back to us are our own.
+            // Everything else is deliberately skipped. Joining someone else's
+            // room fills onlineOpt from THEIR echo, and an official room's are a
+            // locked preset with no host at all - neither is this player's
+            // setup, and saving either would quietly overwrite it.
+            if (screen == GameScreen::CUSTOM
+                || (screen == GameScreen::LOBBY
+                    && shell.inMatchKind == MatchKind::Custom
+                    && myIndex >= 0 && myIndex == HostSlot(gameSpace.getPlayers()))) {
+                prof.lastCustomOptions = onlineOpt;
+            }
             profile::Autosave(GetTime());
         }
 
@@ -1148,6 +1163,11 @@ int main(int argc, char** argv) {
                         // Seed the name the first time only, so a player who typed
                         // one and stepped back doesn't lose it.
                         if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        // Start from the rules this player last hosted with.
+                        // onlineOpt is otherwise whatever the last room we were in
+                        // echoed at us - possibly a stranger's - which is a
+                        // strange thing to hand someone building their own room.
+                        onlineOpt = profile::Get().lastCustomOptions;
                         // One modal, two option sets: hand it the values it is
                         // about to edit, or its sliders show the other mode's.
                         shell.syncShadows(onlineOpt);
@@ -1388,6 +1408,12 @@ int main(int argc, char** argv) {
                         // Naming and visibility belong on their own screen now, so
                         // this hands off rather than minting a room blind.
                         if (shell.customName.empty()) shell.customName = myDisplayName() + "'S MATCH";
+                        // Same entry, same seeding as the title's CUSTOM MATCH -
+                        // and the syncShadows this path was missing, without which
+                        // the OPTIONS modal's three int sliders open on stale
+                        // values.
+                        onlineOpt = profile::Get().lastCustomOptions;
+                        shell.syncShadows(onlineOpt);
                         screen = GameScreen::CUSTOM;
                         break;
                     case BrowseAction::Join:

@@ -69,8 +69,13 @@ only `main.cpp` and `collisions.cpp` as translation units.
   from player state each frame (eye at the player-sphere center).
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
 - `profile.h` — the client's **only** persistence: display name, a stable
-  per-install `clientId`, master volume and the last LOCAL match rules, as small
-  JSON. Native writes
+  per-install `clientId`, master volume, and two remembered rule sets — the last
+  LOCAL match's and the last CUSTOM room the player **hosted** — as small JSON.
+  Two bundles, not one, for the same reason `main.cpp` keeps `localOpt` and
+  `onlineOpt` apart: a solo practice arena and the room you host for friends are
+  different habits. The custom one is written only from a room we host, so
+  joining someone else's (or an official room's locked preset) never overwrites
+  it. Native writes
   `~/Library/Application Support/PLATFORMZ/profile.json` (0600, via a
   write-then-`rename` so a crash can't truncate it); the web build uses
   `localStorage`. Never writes beside the binary — inside the signed `.app`,

@@ -68,6 +68,11 @@ int main() {
     profile::Get().lastLocalOptions.numPlayers = 6;
     profile::Get().lastLocalOptions.friendlyFire = !MatchOptions{}.friendlyFire;
     profile::Get().lastMatch = "7QK2";
+    // The two rule sets must not be the same values, or "they round-trip
+    // independently" below would pass even if one overwrote the other.
+    profile::Get().lastCustomOptions.mapSize    = "SMALL";
+    profile::Get().lastCustomOptions.numPlayers = 3;
+    profile::Get().lastCustomOptions.speedBoost = 1.75f;
     CHECK(profile::Save(), "Save() writes when something changed");
     CHECK(!profile::Save(), "Save() is a no-op when nothing changed");
 
@@ -81,6 +86,15 @@ int main() {
     CHECK(profile::Get().lastLocalOptions.friendlyFire != MatchOptions{}.friendlyFire,
                                                                "a toggle survives a relaunch");
     CHECK(profile::Get().lastMatch == "7QK2",  "last match code survives a relaunch");
+    CHECK(profile::Get().lastCustomOptions.mapSize == "SMALL",   "custom map survives a relaunch");
+    CHECK(profile::Get().lastCustomOptions.numPlayers == 3,      "custom roster survives a relaunch");
+    CHECK(profile::Get().lastCustomOptions.speedBoost > 1.74f
+       && profile::Get().lastCustomOptions.speedBoost < 1.76f,   "custom slider survives a relaunch");
+    // The whole point of two bundles: hosting a fast 3-player room must not
+    // retune the 6-player XL arena you practise in alone.
+    CHECK(profile::Get().lastLocalOptions.mapSize == "XL"
+       && profile::Get().lastCustomOptions.mapSize == "SMALL",
+          "local and custom rules stay independent");
 
     // --- garbage on disk ------------------------------------------------
     std::printf("\ncorrupt file\n");
@@ -94,7 +108,8 @@ int main() {
     WriteFile(path, "{\"name\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\","
                     "\"clientId\":\"nope\",\"volumeDb\":9999,"
                     "\"options\":{\"players\":400,\"map\":\"MOON\",\"botDiff\":\"hard\","
-                    "\"explRadius\":1000,\"fuelBurn\":-5}}");
+                    "\"explRadius\":1000,\"fuelBurn\":-5},"
+                    "\"customOptions\":{\"players\":-9,\"jetThrust\":50}}");
     profile::Load();
     const profile::Profile& p = profile::Get();
     CHECK(p.name.size() <= PLAYER_NAME_MAX_CHARS,   "over-long name is clamped");
@@ -106,6 +121,8 @@ int main() {
                                                     "wrong-typed number is ignored, not thrown on");
     CHECK(p.lastLocalOptions.explosionRadiusScale <= 4.0f, "out-of-range scale is clamped");
     CHECK(p.lastLocalOptions.fuelConsumption >= 0,  "negative fuel burn is clamped");
+    CHECK(p.lastCustomOptions.numPlayers >= 1,      "custom roster is clamped too, not just local");
+    CHECK(p.lastCustomOptions.jetpackThrust <= 2.0f,"custom scale is clamped too");
 
     // --- a missing key is not a reset -----------------------------------
     std::printf("\npartial file (a future build's field set, minus keys)\n");
@@ -114,6 +131,12 @@ int main() {
     CHECK(profile::Get().clientId == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "known keys load");
     CHECK(profile::Get().name == "SOLO",                                     "known keys load");
     CHECK(profile::Get().lastLocalOptions.mapSize == MatchOptions{}.mapSize, "absent keys keep defaults");
+    // A profile written before custom rooms were remembered has no
+    // "customOptions" at all. That must read as "no habit yet", not as garbage.
+    CHECK(profile::Get().lastCustomOptions.mapSize == MatchOptions{}.mapSize,
+          "a file with no customOptions loads the defaults");
+    CHECK(profile::Get().lastCustomOptions.numPlayers == MatchOptions{}.numPlayers,
+          "...across every field, not just the first");
 
     // --- ids do not repeat ----------------------------------------------
     std::printf("\nuuid uniqueness\n");
