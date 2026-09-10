@@ -44,7 +44,12 @@ MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]
 def enc(o): return json.dumps(o, separators=(",", ":")).encode()
 
 class C:
-    def __init__(self, name):
+    # `cid` is the client's install id from its local profile (D1). The server
+    # uses it to hand a reconnecting player back the slot they dropped out of.
+    # `match` names the room to land in, which a reconnect must state or it goes
+    # back to the default one.
+    def __init__(self, name, cid="", match=""):
+        self.cid, self.wantMatch = cid, match
         self.name, self.slot, self.seq, self.epoch = name, None, 0, 0
         self.phase, self.nplayers, self.alive = "(none)", 0, True
         # Which room the server put us in, and how it is run - straight off the
@@ -65,6 +70,11 @@ class C:
         self.joinfails    = []     # refusal reasons, in order
         self.created      = []     # codes of rooms we made
         self.players      = {}     # name -> {hp, score, alive, bot} from the last state
+        # The same rows keyed by SLOT. Names are not unique - a reconnecting
+        # player and the body they left behind are both called the same thing,
+        # and the name-keyed dict silently keeps only the last one. Anything
+        # reasoning about a particular body has to use this.
+        self.slots        = {}     # slot index -> the same dict
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.connect((HOST, PORT)); self.s.settimeout(0.2)
         self.parts = {}
@@ -74,7 +84,18 @@ class C:
     def hello(self):
         m = {"type": "hello", "name": self.name}
         if KEY: m["key"] = KEY      # the server's join gate wants it in the hello
+        if self.cid:       m["cid"]   = self.cid
+        if self.wantMatch: m["match"] = self.wantMatch
         self.send(m)
+
+    def drop(self):
+        """Go dark the way a real client does: stop pinging, close the socket.
+
+        No goodbye - that is the point. The server has to notice on its own, and
+        the body has to sit there until it does."""
+        self.alive = False
+        try: self.s.close()
+        except OSError: pass
     def _ping(self):
         while self.alive:
             time.sleep(0.5)
@@ -122,6 +143,7 @@ class C:
                 # u8 flash, u8 spectate, u16 score, u8 flags, u8 oob, then a
                 # length-prefixed name.
                 self.players = {}
+                self.slots   = {}
                 off = 51
                 try:
                     for _ in range(self.nplayers):
@@ -134,11 +156,14 @@ class C:
                         off  += 1                              # oob timer
                         nlen  = d[off]; off += 1
                         name  = d[off:off + nlen].decode("utf-8", "replace"); off += nlen
-                        self.players[name] = {
+                        row = {
                             "id": pid, "hp": hp, "score": score,
                             "alive": bool(flags & 1), "bot": bool(flags & 2),
                             "host": bool(flags & 32),
+                            "name": name,
                         }
+                        self.players[name] = row
+                        self.slots[pid - 1] = row      # pid is slot + 1 on the wire
                 except (IndexError, struct.error):
                     pass                                       # truncated/chunked frame
             elif tag == FULL:

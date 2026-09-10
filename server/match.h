@@ -37,6 +37,7 @@
 
 #include <boost/asio/ip/udp.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -69,6 +70,19 @@ struct ConnectedClient {
     // single-threaded. nameDirty flags an unapplied change.
     std::string name;
     bool nameDirty      = false;
+
+    // Who this connection claims to be, straight from the client's profile
+    // (D1). Used for one thing only: handing a reconnecting player back the slot
+    // they just left, with its body and score intact, inside
+    // MID_MATCH_LEAVE_GRACE_SEC.
+    //
+    // CLAIMED, not proven - the client generates it and owns the file it lives
+    // in. That is deliberate and sufficient here: the window is 15 seconds, the
+    // slot has to be sitting vacant, and the prize is someone else's
+    // half-dead body mid-match. Anything that outlives a match (a leaderboard)
+    // must wait for D3's signed token, which lands beside this as a second
+    // field rather than replacing it.
+    std::string clientId;
 
     // Transport + sink. WS uses `session` (shared ownership, so a Send racing a
     // disconnect can never touch a freed Session); UDP uses `udpEndpoint` +
@@ -241,6 +255,16 @@ struct Match {
     // (deterministic state serialization). Protected by clientMutex.
     std::map<uint64_t, ConnectedClient> clients;
     std::mutex clientMutex;
+
+    // Who last sat in each slot, by clientId. Server-side only and deliberately
+    // NOT on Player: Player crosses the wire, and every client would then be
+    // told every other player's install id for no reason.
+    //
+    // An entry outliving its owner is harmless - SeatPlayer only honours it while
+    // the slot is vacant AND its body is still inside the leave grace, so a stale
+    // name can never hand a slot to the wrong person. Guarded by clientMutex,
+    // like `clients` itself.
+    std::array<std::string, GAMESPACE_NUMBER_OF_PLAYERS> slotOwner{};
     // NOTE: udpIndex is NOT here. Endpoint -> connId is server-wide, because there
     // is one UDP socket for the whole process and a datagram has to be routed to
     // its match before any match's lock is taken. It lives in server_main.cpp as
@@ -293,6 +317,28 @@ struct Match {
     // clientMutex. Resolving lazily rather than on every departure path means
     // there is no removal site that can forget to do it - and there are five of
     // them (detach, disconnect, the UDP idle reaper, room moves, compaction).
+    // The result of seating a player: which slot, and whether they RESUMED one
+    // they already held rather than taking a fresh one. The caller needs the
+    // distinction because a resume must not touch the body - that is the whole
+    // point - while a fresh seat must reset it (see TakeOverSlot).
+    struct Seat { int slot = -1; bool resumed = false; };
+
+    // The one way to put a human in a slot. Claim and take-over used to be two
+    // calls at three separate sites, and the comment at the WebSocket one records
+    // what that cost: a path that forgot the second call seated people into
+    // bot bodies. One method, so a fourth caller cannot get it half right.
+    // Caller MUST hold gameMutex AND clientMutex.
+    Seat SeatPlayer(const std::string& clientId, const std::string& name);
+
+    // The slot this clientId may resume, or -1. Caller holds both locks.
+    int HeldSlotFor(const std::string& clientId);
+
+    // Evict a already-quiet connection holding this same clientId, so a player
+    // returning on a new UDP endpoint can reclaim their own slot instead of
+    // being handed a new one while their body drifts. Caller holds clientMutex.
+    void SupersedeStaleTwin(const std::string& clientId,
+                            const boost::asio::ip::udp::endpoint& newEndpoint);
+
     uint64_t ResolveHostLocked();
     // Slot the host occupies, or -1 if the room has none. Caller holds clientMutex.
     int      HostSlotLocked();

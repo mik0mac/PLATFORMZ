@@ -814,7 +814,20 @@ Nothing is baked into the web build — browser tokens live in `localStorage`.
 
 ---
 
-### D2. Reconnect into your own slot
+### D2. Reconnect into your own slot — **DONE**
+*Landed on `d2-reconnect-slot`. `server/test/probe_reconnect.py` drops a player
+mid-match and proves the four things that matter: the same id gets the same slot
+back with its body and score intact, a different id does not get that slot, no id
+at all does not get it either, and once the body is gone a returner is revived
+fresh rather than seated into a corpse.*
+
+**Built on `clientId`, not on D3's token — deliberately.** The plan's own D1
+section says why: restoring your own slot inside a 15-second window is low-stakes
+and self-defeating to cheat. The prize is someone else's half-dead body in a match
+already in progress. D3 lands beside `clientId` as a second field on
+`ConnectedClient` and upgrades the check from *claimed* to *verified*; nothing
+here has to move for that.
+
 **Why:** the machinery already exists and is unused — a mid-match leaver's body is
 held open for `MID_MATCH_LEAVE_GRACE_SEC = 15 s` (`constants.h:118`,
 `HandleMidMatchLeavers` L382), but nothing can prove "I am that player", so a
@@ -827,7 +840,47 @@ UDP-endpoint-change case (laptop sleep, new NAT mapping — already called out a
 L1806) actually work.
 
 **Files:** `wire.h`, `server/server_main.cpp`, `elements.h`.
-**Depends on:** D1, D3, A3.
+**Depends on:** D1, A3. (D3 upgrades it; it is not a blocker — see above.)
+
+#### What shipped
+**One way to seat a player.** Claim and take-over were two calls at three call
+sites, and the comment at the WebSocket one records what that cost: a path that
+forgot the second seated people into bot bodies. They are now a single
+`Match::SeatPlayer`, which either resumes a held slot or takes a fresh one and
+resets it. A reconnect must never route through `TakeOverSlot` — that resets
+health, ammo, position and score, so it would hand the player their own body
+wiped clean.
+
+**`ClaimFreeSlot` got a second pass.** A slot whose body is being held for a
+reconnecting player is skipped on the first pass, so a newcomer arriving during
+someone's grace takes an untouched slot instead of walking into their body. The
+second pass gives those slots up anyway when nothing else is free: refusing a
+player entry to protect a leaver who may never return is the worse trade.
+
+**The two clocks had to be reconciled.** A client gives up after ~3 s of silence
+and re-runs the handshake; the server does not free a quiet UDP slot for 10 s. In
+that window a laptop that woke with a new NAT mapping — the exact case this
+feature exists for — arrives as a stranger while its old endpoint still owns the
+slot, so the resume finds it occupied and the body it came back for drifts off
+and dies. `SupersedeStaleTwin` drops an *already quiet* connection holding the
+same id. The silence guard is what keeps that from being a footgun: two clients
+run from one machine share a profile and therefore a `clientId`, which LAN
+testing does routinely, so a twin that is still sending is left alone.
+
+**Slot ownership is per-match**, cleared at match start. `resetPlayersForMatch`
+deliberately leaves `leaveGraceSec` alone, so a countdown armed in the previous
+match can still be running on a slot in this one; without clearing, that player
+rejoining would "resume" a body from a match they never played.
+
+**`clampName` was the wrong clamp for an id.** It caps at
+`PLAYER_NAME_MAX_CHARS` (32) and a UUID is 36, so it quietly sawed the last four
+characters off every id. `clampClientId` + `CLIENT_ID_MAX_CHARS` (64) replaces
+it, with room for D3's longer token.
+
+The WebSocket carries the id as `?cid=` on the upgrade URL, for the same reason
+`?key=` travels that way: a WS connection claims its slot during the handshake,
+before any hello could arrive. It rides the *dial* URL, kept apart from the
+`serverUrl` the profile records and the UI shows.
 
 ---
 

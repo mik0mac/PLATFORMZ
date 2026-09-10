@@ -84,6 +84,11 @@ const double         UDP_CLIENT_TIMEOUT = 10.0;
 // (crash/force-quit - no "goodbye" possible) shouldn't sit around looking
 // connected for as long as a mid-match one would need to survive a hitch.
 const double         UDP_CLIENT_TIMEOUT_LOBBY = 3.0;
+// How quiet an existing connection must be before a hello carrying the same
+// clientId is allowed to take its place. Above the client's own ~3 s
+// silence-reset would make reconnects miss their body; at zero, a second client
+// launched from the same machine (same profile, same id) would evict the first.
+const double         UDP_TWIN_SUPERSEDE_SEC = 2.0;
 // const float          SERVER_GRAVITY = MOON_GRAVITY; // matches client default
 
 //MARK: Globals
@@ -186,13 +191,122 @@ static std::shared_ptr<Match> MatchForConn(uint64_t connId);
 
 // Lowest player slot not owned by a connected client, or -1 if the server is
 // full. Caller MUST hold gameMutex (reads players) AND clientMutex (reads clients).
+//
+// Two passes, not one. A slot whose body is still being held open for a
+// reconnecting player (see HandleMidMatchLeavers) is skipped on the first pass,
+// so a newcomer arriving during someone's 15-second grace takes an untouched
+// slot instead of walking into their body and resetting it. The second pass
+// gives those slots up anyway when nothing else is free: refusing a player
+// entry to protect a leaver who may never return is the worse trade, and the
+// leaver still gets a fresh slot if they come back.
 int Match::ClaimFreeSlot() {
     auto& players = gameSpace.getPlayers();
     SlotMask claimed = 0;
     for (auto& [cid, c] : clients) SlotAdd(claimed, c.playerId);
     for (int i = 0; i < (int)players.size(); i++)
+        if (!SlotSet(claimed, i) && players[i].leaveGraceSec < 0.0f) return i;
+    for (int i = 0; i < (int)players.size(); i++)
         if (!SlotSet(claimed, i)) return i;
     return -1;
+}
+
+// The slot this clientId is entitled to resume, or -1. Every condition here is
+// load-bearing:
+//   non-empty id   an older client sends none; "" must never match the "" left
+//                  in an untouched slotOwner entry, or the first joiner to a
+//                  fresh match would "resume" slot 0.
+//   vacant         somebody else is sitting there now; they win, we get a new slot.
+//   grace running  leaveGraceSec > 0 means HandleMidMatchLeavers is holding this
+//                  body open right now. Below zero it either expired (the body is
+//                  eliminated) or was never armed (LOBBY, where there is no body
+//                  to resume and slots get compacted anyway).
+//   alive          belt and braces with the above: never seat someone into a corpse.
+// Caller MUST hold gameMutex AND clientMutex.
+int Match::HeldSlotFor(const std::string& clientId) {
+    if (clientId.empty()) return -1;
+    auto& players = gameSpace.getPlayers();
+    SlotMask taken = 0;
+    for (auto& [cid, c] : clients) SlotAdd(taken, c.playerId);
+    for (int i = 0; i < (int)players.size() && i < GAMESPACE_NUMBER_OF_PLAYERS; ++i) {
+        if (SlotSet(taken, i))            continue;
+        if (slotOwner[i] != clientId)     continue;
+        if (players[i].leaveGraceSec <= 0.0f) continue;
+        if (!players[i].isAlive)          continue;
+        return i;
+    }
+    return -1;
+}
+
+// Drop a stale connection that is already holding this clientId, so the player
+// returning under a new network identity can have their own slot back.
+//
+// Needed because the two clocks disagree. A client gives up after ~3 s of
+// silence and re-runs the handshake; the server does not free a quiet UDP slot
+// for UDP_CLIENT_TIMEOUT (10 s mid-match). In the window between, a laptop that
+// woke with a new NAT mapping arrives as a stranger while its old endpoint still
+// owns the slot - so the resume finds the slot occupied, hands out a fresh one,
+// and the body it was coming back for drifts off and dies. Exactly the case this
+// feature exists for.
+//
+// The silence guard is what keeps this from being a footgun: two clients run
+// from one machine share a profile, and therefore a clientId (LAN testing does
+// this routinely). A twin that is actively sending is a real second player and
+// is left alone; only one that has already gone quiet is treated as the same
+// player's abandoned connection.
+//
+// WS records are never superseded - TCP delivers a real disconnect, so a live WS
+// connection with this id is genuinely someone else at the keyboard.
+//
+// Caller MUST hold clientMutex.
+void Match::SupersedeStaleTwin(const std::string& clientId,
+                               const boost::asio::ip::udp::endpoint& newEndpoint) {
+    if (clientId.empty()) return;
+    const double now = NowSec();
+    for (auto it = clients.begin(); it != clients.end(); ) {
+        const ConnectedClient& c = it->second;
+        const bool twin = c.transport == Transport::UDP
+                       && c.clientId == clientId
+                       && c.udpEndpoint != newEndpoint
+                       && (now - c.lastSeenSec) > UDP_TWIN_SUPERSEDE_SEC;
+        if (!twin) { ++it; continue; }
+        std::cout << "UDP client " << c.udpEndpoint
+                  << " superseded by the same client id on a new endpoint"
+                  << " (slot " << c.playerId << ")\n";
+        { std::lock_guard<std::mutex> cl(g_connMutex);
+          g_udpIndex.erase(c.udpEndpoint);
+          g_connMatch.erase(it->first); }
+        it = clients.erase(it);
+    }
+    connectedCount.store((int)clients.size());
+}
+
+// Seat a human: resume the slot they were holding, or take a fresh one.
+//
+// The resume path deliberately does NOTHING to the body beyond cancelling the
+// eviction countdown. Position, velocity, health, ammo and score are exactly as
+// they were left, which is the entire feature - routing a reconnect through
+// TakeOverSlot would hand the player their own body wiped clean and lose the
+// score they are coming back to defend.
+//
+// Caller MUST hold gameMutex AND clientMutex.
+Match::Seat Match::SeatPlayer(const std::string& clientId, const std::string& name) {
+    Seat seat;
+    seat.slot = HeldSlotFor(clientId);
+    if (seat.slot >= 0) {
+        seat.resumed = true;
+        auto& p = gameSpace.getPlayers()[seat.slot];
+        p.leaveGraceSec = -1.0f;    // back before the countdown ran out
+        p.isBot         = false;    // never botified mid-match, but say so explicitly
+        Message msg(MSG_TYPE_REJOINED_GAME, p.name, p.name, p.id, p.id);
+        gameSpace.emitMessage(msg);
+    } else {
+        seat.slot = ClaimFreeSlot();
+        if (seat.slot < 0) return seat;
+        TakeOverSlot(seat.slot, name);
+    }
+    if (seat.slot >= 0 && seat.slot < GAMESPACE_NUMBER_OF_PLAYERS)
+        slotOwner[seat.slot] = clientId;
+    return seat;
 }
 
 // UDP has no disconnect event, so a client that quit just goes quiet. Free any
@@ -518,6 +632,22 @@ static std::string clampName(std::string name) {
                name.end());
     if (name.size() > PLAYER_NAME_MAX_CHARS) name.resize(PLAYER_NAME_MAX_CHARS);
     return name;
+}
+
+// Same scrubbing for an identifier, but NOT clampName's 32-char cap: a
+// version-4 UUID is 36 characters, so clamping one as if it were a display name
+// would quietly saw the last four off. It still needs a bound - this is
+// untrusted input we store per slot - so 64, which leaves room for the longer
+// signed token D3 will carry without revisiting this.
+//
+// Never rendered, only compared for equality, so the character rule is about
+// keeping junk out of logs rather than about layout.
+static std::string clampClientId(std::string id) {
+    id.erase(std::remove_if(id.begin(), id.end(),
+                            [](unsigned char c) { return c < 32 || c > 126; }),
+             id.end());
+    if (id.size() > CLIENT_ID_MAX_CHARS) id.resize(CLIENT_ID_MAX_CHARS);
+    return id;
 }
 
 static PlayerInput parseInput(const std::string& json) {
@@ -1098,17 +1228,22 @@ public:
                 // (e.g. a client whose network identity changed across a sleep)
                 // must not be able to push this new WS client above it.
                 target->ReapIdleUdpClients();
-                playerId = target->ClaimFreeSlot();
+                // ?cid=UUID is the client's own install id (D1), carried on the
+                // upgrade URL for the same reason ?key= is: a WebSocket claims
+                // its slot here, during the handshake, long before any hello
+                // could arrive. Absent for an older client, which simply never
+                // resumes anything.
+                const std::string cid =
+                    clampClientId(QueryParam(std::string(self->req_.target()), "cid"));
+                // Resume the slot this player is holding, or take a fresh one and
+                // reset it. One call: see Match::SeatPlayer.
+                const Match::Seat seat = target->SeatPlayer(cid, std::string());
+                playerId = seat.slot;
                 if (playerId != -1) {
                     self->connId_ = nextConnId++;
-                    // Mid-match this slot is a live bot; hand its body over. Every
-                    // path that seats a human has to do this, not just the
-                    // join-by-code one - a latecomer CONNECTING to a running match
-                    // arrives here, and without it they inherited the bot's score
-                    // and its magenta colour.
-                    target->TakeOverSlot(playerId, std::string());
                     ConnectedClient c;
                     c.playerId  = playerId;
+                    c.clientId  = cid;
                     c.transport = Transport::WS;
                     c.session   = self;
                     target->clients[self->connId_] = c;
@@ -1340,11 +1475,11 @@ static bool AttachConn(uint64_t connId, const std::string& code,
         std::lock_guard<std::mutex> gg(m->gameMutex);
         std::lock_guard<std::mutex> gc(m->clientMutex);
         m->ReapIdleUdpClients();
-        slot = m->ClaimFreeSlot();
+        // rec carries the clientId forward from the room we are leaving, so
+        // hopping back into a room we dropped out of resumes the held body.
+        const Match::Seat seat = m->SeatPlayer(rec.clientId, rec.name);
+        slot = seat.slot;
         if (slot != -1) {
-            // Mid-match, this slot is a live bot: hand its body over rather than
-            // leaving the newcomer as a magenta bot with someone else's score.
-            m->TakeOverSlot(slot, rec.name);
             rec.playerId  = slot;
             rec.hasInput  = false;      // never carry aim or a fire latch across rooms
             rec.lastInput = PlayerInput{};
@@ -2030,6 +2165,19 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // client's generate() uses, so both modes build worlds identically.
             gameSpace.generatePlatforms();
             gameSpace.resetPlayersForMatch();
+            // Slot ownership is per-MATCH. resetPlayersForMatch deliberately
+            // leaves leaveGraceSec alone (it belongs to the vacancy logic), so a
+            // countdown armed by someone who left the previous match can still be
+            // running on a slot in this one - and without clearing these, that
+            // player rejoining would "resume" a body from a match they never
+            // played and everyone would see a spurious RECONNECTED line.
+            {
+                std::lock_guard<std::mutex> cl(clientMutex);
+                slotOwner.fill(std::string());
+                for (auto& [cid, c] : clients)
+                    if (c.playerId >= 0 && c.playerId < GAMESPACE_NUMBER_OF_PLAYERS)
+                        slotOwner[c.playerId] = c.clientId;   // whoever is here NOW owns their slot
+            }
             gameSpace.generateAsteroids();
             // Seed every slot's bot personality once for this match (stable per
             // slot id) at the requested difficulty. Which slots are bots is set
@@ -2563,13 +2711,23 @@ private:
             // got a new NAT mapping) must reclaim its old slot immediately
             // rather than racing this tick's scheduled sweep and losing to it.
             target->ReapIdleUdpClients();
-            playerId = target->ClaimFreeSlot();
+            std::string nm0 = clampName(parseString(helloMsg, "name"));
+            // "cid" is the client's install id (D1). This is the path that
+            // matters most for it: UDP has no disconnect event, so a client whose
+            // NAT mapping changed across a laptop sleep arrives here as a total
+            // stranger on a new endpoint - the id is the only thing tying it to
+            // the body still drifting in the arena.
+            const std::string cid = clampClientId(parseString(helloMsg, "cid"));
+            // Before claiming: if this player's previous connection is still
+            // sitting on their slot but has gone quiet, let go of it.
+            target->SupersedeStaleTwin(cid, from);
+            const Match::Seat seat = target->SeatPlayer(cid, nm0);
+            playerId = seat.slot;
             if (playerId != -1) {
                 uint64_t connId = nextConnId++;
-                std::string nm0 = clampName(parseString(helloMsg, "name"));
-                target->TakeOverSlot(playerId, nm0);   // see the WS path
                 ConnectedClient c;
                 c.playerId    = playerId;
+                c.clientId    = cid;
                 c.transport   = Transport::UDP;
                 c.udpEndpoint = from;
                 c.lastSeenSec = NowSec();

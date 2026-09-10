@@ -72,7 +72,8 @@ enum MessageType {
     MSG_TYPE_LOST_IN_SPACE,
     MSG_TYPE_ASTEROID_ELIMINATION,
     MSG_TYPE_LEFT_GAME,
-    MSG_TYPE_JOINED_GAME, // appended last: MessageType crosses the wire as a raw int
+    MSG_TYPE_JOINED_GAME,
+    MSG_TYPE_REJOINED_GAME, // appended last: MessageType crosses the wire as a raw int
     COUNT
 };
 
@@ -244,6 +245,12 @@ const size_t PLAYER_NAME_MAX_CHARS = 32;
 // and the profile that remembers what was typed (profile.h) cannot disagree
 // about what fits - the server clamps incoming names with clampName either way.
 const size_t MATCH_NAME_MAX_CHARS = 24;
+
+// Bound on the client-supplied install id (profile.h's clientId), enforced
+// server-side. Not PLAYER_NAME_MAX_CHARS: that is 32 and a UUID is 36, so
+// reusing it would silently truncate every id. 64 leaves headroom for D3's
+// signed token to travel the same way without another constant.
+const size_t CLIENT_ID_MAX_CHARS = 64;
 
 //MARK: Reticle Constants
 // The reticle is a purely visual in-world object (no collision): the player's
