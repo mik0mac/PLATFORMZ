@@ -749,7 +749,10 @@ for friends are different habits, and a change to one must not quietly retune th
 other.
 
 The custom bundle is captured **only from a room that is ours**: the CUSTOM setup
-screen, or a LOBBY whose kind is Custom and whose host slot is ours. The
+screen, or a LOBBY for a room **we created** (the code from the server's `created`
+reply) and still host. Host alone was the original rule and it was a bug: walking
+into an empty room — the default room every connection lands in — makes you its
+host by default, so its stock rules were saved over your own setup. The
 exclusions are the point. Joining someone else's room fills `onlineOpt` from
 *their* echo, and an official room's are a locked preset with no host at all —
 neither is this player's setup, so saving either would silently overwrite it.
