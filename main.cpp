@@ -758,6 +758,7 @@ int main(int argc, char** argv) {
             // place its code is ever shown. Put it in the code field too, so it
             // can be copied out of the UI rather than a log.
             shell.joinCode = m.createdCode;
+            shell.createdCode = m.createdCode;   // this one is ours - see the profile capture
             shell.setBrowseStatus("CREATED MATCH " + m.createdCode, GetTime());
             return true;
         }
@@ -984,14 +985,22 @@ int main(int argc, char** argv) {
             // The rules of a custom room that is OURS. Two cases, and the
             // exclusions matter more than the inclusions:
             //   CUSTOM screen - the setup we are about to create a room from.
-            //   LOBBY, ours   - the room exists and the server flagged us host,
-            //                   so the options echoed back to us are our own.
+            //   LOBBY, ours   - a room WE CREATED, and we are still its host, so
+            //                   the options echoed back to us are our own.
             // Everything else is deliberately skipped. Joining someone else's
             // room fills onlineOpt from THEIR echo, and an official room's are a
             // locked preset with no host at all - neither is this player's
             // setup, and saving either would quietly overwrite it.
+            //
+            // "Host" alone was not enough, and that was a bug: walk into an empty
+            // custom room - the default room every connection lands in - and you
+            // become its host by default, so its stock rules were saved over the
+            // setup you actually use (a 7-player XL room came back as 4 players).
+            // Hosting a room is not the same as having made it.
             if (screen == GameScreen::CUSTOM
                 || (screen == GameScreen::LOBBY
+                    && !shell.createdCode.empty()
+                    && shell.inMatchCode == shell.createdCode
                     && shell.inMatchKind == MatchKind::Custom
                     && myIndex >= 0 && myIndex == HostSlot(gameSpace.getPlayers()))) {
                 prof.lastCustomOptions = onlineOpt;
