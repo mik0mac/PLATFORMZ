@@ -450,7 +450,24 @@ format, and before destroying or resizing the instance.
   SERVER VERSION MISMATCH instead of connecting.
 - **Web:** rebuild on your Mac (`make web RAYLIB_WEB_DIR=$HOME/raylib`), commit +
   push the regenerated `web/platformz.*` (they're tracked), then on the box:
-  `git pull` and `cp /opt/PLATFORMZ/web/platformz.* /var/www/html/`.
+  `git pull` and copy them to **whichever directory is actually serving the page**:
+  - after the HTTPS upgrade (Caddy — the normal state of a public box):
+    `cp /opt/PLATFORMZ/web/platformz.* /var/www/platformz/`
+  - on the plain-HTTP setup from step 7:
+    `cp /opt/PLATFORMZ/web/platformz.* /var/www/html/`
+
+  This step used to name only `/var/www/html/` — right for plain HTTP, but
+  **not** where Caddy serves from (see "HTTPS upgrade" below). On an HTTPS box
+  the copy succeeded, changed nothing anyone could see, and the site kept serving
+  a month-old build: one that predated the lobby entirely and, after the
+  welcome-version bump, showed every browser visitor SERVER VERSION MISMATCH.
+  Copying to the wrong directory raises no error, so **check the copy landed**:
+
+  ```bash
+  # the wasm the site serves must be the one you just built - same hash
+  curl -s https://yourdomain.com/platformz.wasm | shasum
+  shasum /opt/PLATFORMZ/web/platformz.wasm
+  ```
 - **The box holds state a `git pull` will not restore** — see "What the server
   keeps on disk" above. `git clean` inside `/opt/PLATFORMZ` is safe today only
   because the scoreboard lives in `/var/lib/platformz`, which is exactly why the
