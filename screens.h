@@ -122,6 +122,14 @@ struct ShellState {
     bool        customNameFocused = false;
     bool        customPrivate = false;      // invite-only: hidden from the browser
 
+    // The room THIS player created, from the server's `created` reply. Being host
+    // is not the same as owning the room: walk into an empty room - the default
+    // one every connection lands in, say - and you become its host by default.
+    // Only a room you made is "your custom match" for the profile to remember.
+    // Never needs clearing: room codes are never reused, so a stale value can
+    // only ever fail to match.
+    std::string createdCode;
+
     std::string joinCode;                   // JOIN CODE field contents
     bool        joinCodeFocused = false;
     // "COPIED" confirmation under the lobby's code, cleared on a timer - a copy
