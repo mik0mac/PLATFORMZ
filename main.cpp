@@ -27,9 +27,10 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h> // emscripten_run_script_string (read page URL)
-// Tell shell.html whether a title-screen modal (CONTROLS/OPTIONS) is open, so its
-// mousedown pointer-lock handler can skip grabbing the cursor for menu popups.
-EM_JS(void, PlatformzSetModalOpen, (int open), { if (window.Module) Module.modalOpen = !!open; });
+// Tell shell.html whether the MOUSE BELONGS TO THE UI right now, so its mousedown
+// pointer-lock handler knows not to grab the cursor. True on every menu screen
+// and whenever a modal is up; false only while a match is actually being played.
+EM_JS(void, PlatformzSetUiOwnsMouse, (int owns), { if (window.Module) Module.uiOwnsMouse = !!owns; });
 
 // COPY INVITE, browser edition. Builds this page's URL with ?match=CODE merged in
 // (keeping ?server= and ?key= intact - drop the key and the link stops working on
@@ -64,7 +65,7 @@ EM_JS(void, PlatformzCopyInvite, (const char* code, char* out, int cap), {
     stringToUTF8(link, out, cap);
 });
 #else
-inline void PlatformzSetModalOpen(int) {} // no-op on native builds
+inline void PlatformzSetUiOwnsMouse(int) {} // no-op on native builds
 
 // Ctrl+C (SIGINT) / SIGTERM: without a handler, the default disposition kills
 // the process immediately, skipping the MARK: TEARDOWN block below entirely -
@@ -1095,14 +1096,23 @@ int main(int argc, char** argv) {
                 myIndex = -1; // UDP only: treat as disconnected; resume the hello handshake
         }
 
-        // Web only: keep shell.html's pointer-lock handler in sync with whether a
-        // title-screen modal is open (no-op on native). Modals live only on the
-        // title screen, so force it false everywhere else.
-        // Any shell screen can hold a modal now, not just the title.
-        const bool inShell = screen == GameScreen::TITLE  || screen == GameScreen::LOCAL
-                          || screen == GameScreen::CUSTOM || screen == GameScreen::LOBBY
-                          || screen == GameScreen::BROWSE;
-        PlatformzSetModalOpen(inShell && (shell.showControls || shell.showOptions || shell.showScores));
+        // Web only: tell shell.html whether the mouse belongs to the UI, so its
+        // mousedown handler knows whether to take pointer lock (no-op on native).
+        //
+        // Stated as "are we PLAYING?" rather than by listing the menu screens,
+        // which is the bug this replaces: the flag only ever described modals, so
+        // clicking anywhere on FIND A MATCH, the lobby, or the local/custom setup
+        // screens captured the cursor and the pointer vanished on a screen made
+        // entirely of buttons. A new screen would have joined that list silently;
+        // now anything that is not the match itself is covered by construction.
+        //
+        // COUNTDOWN counts as playing: the world is already built and the cursor
+        // was captured when the match started (see DisableCursor in startGame),
+        // so a click during the countdown must not drop the lock. A modal on top
+        // of a match - CONTROLS during the countdown - still hands the mouse back.
+        const bool playing = screen == GameScreen::PLAYING || screen == GameScreen::COUNTDOWN;
+        PlatformzSetUiOwnsMouse(!playing
+                                || shell.showControls || shell.showOptions || shell.showScores);
 
         // MARK: AUDIO VOLUME
         // game volume adjustment, in MASTER_VOLUME_STEP_DB (3 dB) steps so every

@@ -45,7 +45,10 @@
       }
       canvas.addEventListener('mousedown', function () {
         if (locked() || !requestLock) return;
-        if (window.Module && Module.modalOpen) return; // don't grab the cursor for menu popups (CONTROLS/OPTIONS)
+        // The game sets this whenever the mouse belongs to the UI: every menu
+        // screen (title, browser, lobby, setup, game over) and any open modal.
+        // Without it a click on a screen made of buttons stole the pointer.
+        if (window.Module && Module.uiOwnsMouse) return;
         var r = requestLock.call(canvas);
         if (r && typeof r.catch === 'function') r.catch(function () {}); // Chrome returns a Promise
       });
