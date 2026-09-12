@@ -29,6 +29,7 @@
 #include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
 #include "jsonmin.h"      // jf/ji/ju/jb/js - the shared JSON writers
+#include "crypto.h"       // HMAC-SHA256 + constant-time compare (E1's cookie, later D3's token)
 #include "match.h"        // Match: the world, its roster, and everything that ticks
 #include "registry.h"     // MatchRegistry: which rooms exist, and their lifecycle
 #include "../scoreboard.h" // cumulative all-time score table, persisted between runs
@@ -42,6 +43,7 @@
 
 #include <iostream>
 #include <cstdlib>   // getenv (join key)
+#include <cstring>   // strcmp (join refusal tokens)
 #include <memory>
 #include <map>
 #include <set>
@@ -134,6 +136,109 @@ static std::string QueryParam(const std::string& target, const std::string& name
     }
     return "";
 }
+//MARK: UDP handshake cookie (E1)
+// -------------------------------------------------------------------------
+// Return-routability check for UDP. A source address in a datagram is a claim,
+// not a fact - anyone can put yours in a packet they send. Before E1, a ~60 byte
+// `hello` from any address at all was answered immediately with a welcome of up
+// to ~3 KB, which makes this server a ~50x reflector: spoof the victim's address,
+// send hellos, and we do the flooding on the attacker's behalf.
+//
+// The fix is the one QUIC and DTLS use. An unknown endpoint's hello gets back
+// only a cookie; the client echoes it in its next hello; we recompute the cookie
+// from the address we ACTUALLY OBSERVE and only then hand out a slot and a
+// welcome. A spoofer never sees the cookie (it goes to the address they forged),
+// so the handshake stops dead at a reply smaller than the packet that triggered
+// it - there is no amplification left to sell.
+//
+// STATELESS is the point, not an optimisation. The cookie is derived, never
+// stored: a flood of spoofed hellos costs one HMAC and one small send each and
+// allocates nothing, so closing the amplification hole cannot be turned around
+// into a memory-exhaustion hole.
+//
+// The secret behind the HMAC is the server's, shared with D3's identity token
+// when that lands - see crypto.h for why it is HMAC and not hash(secret||data),
+// and why it must come from the environment rather than be minted per boot.
+std::string g_identitySecret;
+
+// Cookie lifetime. A cookie is valid for its own 30s bucket and the one before,
+// so it lasts 30-60s depending on when in the bucket it was minted. Long enough
+// that a client on a bad link can lose a couple of hellos and still finish the
+// handshake; short enough that a cookie captured off the wire is stale before
+// it is worth much (and it is bound to the capturer's address anyway).
+const double COOKIE_BUCKET_SEC = 30.0;
+
+// NowSec() is the steady clock, deliberately. A cookie only has to stay valid
+// for the seconds between our reply and the client's next hello, and the steady
+// clock cannot jump - a wall-clock adjustment (NTP stepping the box, or a DST
+// change on a badly configured host) would silently invalidate every cookie in
+// flight and strand every client mid-handshake.
+static uint64_t CookieBucketNow() {
+    return (uint64_t)(NowSec() / COOKIE_BUCKET_SEC);
+}
+
+// The bytes a cookie commits to: the address family, the address, the port, and
+// the bucket. Everything that makes the cookie specific to one peer at one time.
+// Fixed-shape and length-prefixed so no two different endpoints can produce the
+// same byte string (which is the only way one peer's cookie would work for
+// another).
+static std::string CookieMessage(const udp::endpoint& from, uint64_t bucket) {
+    std::string msg;
+    msg.reserve(32);
+    const auto addr = from.address();
+    if (addr.is_v4()) {
+        const auto b = addr.to_v4().to_bytes();
+        msg += (char)4; msg += (char)b.size();
+        msg.append(reinterpret_cast<const char*>(b.data()), b.size());
+    } else {
+        const auto b = addr.to_v6().to_bytes();
+        msg += (char)6; msg += (char)b.size();
+        msg.append(reinterpret_cast<const char*>(b.data()), b.size());
+    }
+    const uint16_t port = from.port();
+    msg += (char)(uint8_t)(port & 0xff);
+    msg += (char)(uint8_t)(port >> 8);
+    for (int i = 0; i < 8; ++i) msg += (char)(uint8_t)(bucket >> (8 * i));
+    return msg;
+}
+
+// 96 bits of truncated HMAC, as 24 hex characters.
+static std::string MintCookie(const udp::endpoint& from, uint64_t bucket) {
+    const std::string msg = CookieMessage(from, bucket);
+    return pz::HexPrefix(pz::HmacSha256(g_identitySecret, msg.data(), msg.size()), 12);
+}
+
+// True if `offered` is a cookie we issued to THIS endpoint recently.
+//
+// Both comparisons run even after the first one matches. Bailing out early would
+// make "right cookie, wrong bucket" measurably slower than "right cookie, right
+// bucket" - a smaller leak than a byte-by-byte compare, but free to avoid.
+static bool CookieOk(const std::string& offered, const udp::endpoint& from) {
+    if (offered.size() != 24) return false;
+    const uint64_t now = CookieBucketNow();
+    bool ok = pz::ConstantTimeEqual(offered, MintCookie(from, now));
+    ok |= pz::ConstantTimeEqual(offered, MintCookie(from, now - 1));
+    return ok;
+}
+
+// The whole reply to an unvalidated hello: 51 bytes. Nothing else may ever be
+// added to it - every byte here is amplification, and this is the ONLY thing an
+// unproven address can extract.
+//
+// The honest arithmetic, since the plan claimed a factor below 1: a real
+// client's hello is ~90 bytes, so it is below 1 for anyone actually playing.
+// The smallest hello a script could hand-craft is `{"type":"hello"}` at 16
+// bytes, which makes the worst case 51/16 = 3.2x on payload, or 79/44 = 1.8x
+// once the 28 bytes of IP+UDP header both directions carry are counted. That is
+// down from ~3 KB / 90 B = 33x today, and 1.8x is not a reflector anyone would
+// bother with - at that ratio you may as well aim your uplink at the victim
+// directly. Getting strictly below 1 would mean a binary challenge tag (~13
+// bytes) instead of JSON; the protocol says JSON, and the gap between 1.8x and
+// 0.3x is not worth a message type the browser build can never use.
+static std::string buildChallenge(const std::string& cookie) {
+    return std::string("{\"type\":\"challenge\",\"c\":") + js(cookie) + "}";
+}
+
 // Bytes actually put on a socket, for A4's egress budget. Process-wide: the
 // transfer quota is a property of the box, not of any one match.
 EgressCounters g_egress;
@@ -1503,18 +1608,28 @@ static bool AttachConn(uint64_t connId, const std::string& code,
 // Private rooms need their join code; a wrong one is refused the same way a
 // missing room is, so probing cannot distinguish "no such room" from "wrong code"
 // by timing or reply.
+//
+// `outWhy`, when given, receives the refusal token (nullptr means it worked).
+// Only the client-driven `join` verb wants it, to charge a wrong guess against
+// E1's bad-code budget - the moves the SERVER initiates (create, quick, leave)
+// pass codes it just produced itself and must not be charged for them.
 static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
-                            const std::string& code, const std::string& joinCode) {
+                            const std::string& code, const std::string& joinCode,
+                            const char** outWhy = nullptr) {
     ConnectedClient rec;
     MatchEntry entry;
     const char* why = "unknown";
+    if (outWhy) *outWhy = nullptr;
 
     // Refuse to the sink the CALLER already handed us, rather than looking the
     // connection up again: when that lookup missed it sent to a
     // default-constructed record - no session, no endpoint - so the refusal went
     // nowhere and the client just waited. Silence is the one thing a refusal must
     // never be.
-    auto refuse = [&](const char* token) { SendToClient(caller, buildJoinFail(token)); };
+    auto refuse = [&](const char* token) {
+        if (outWhy) *outWhy = token;
+        SendToClient(caller, buildJoinFail(token));
+    };
 
     if (!g_registry.FindEntry(code, entry)) { refuse("notfound"); return; }
     if (entry.isPrivate && entry.joinCode != joinCode) { refuse("badcode"); return; }
@@ -1540,6 +1655,115 @@ static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
     }
     std::cout << "conn " << connId << " -> match " << code << "\n";
 }
+
+//MARK: Per-connection abuse budgets (E1)
+// -------------------------------------------------------------------------
+// The cookie above proves an address is real. These two budgets bound what a
+// real address can then make the server do - because "the packets come from a
+// machine that exists" is not the same as "the packets are in good faith".
+//
+// Keyed by connection, not by match: a connection can hop rooms, and a budget
+// you can reset by joining somewhere else is not a budget. Kept here rather than
+// in ConnectedClient because that record is copied out from under a lock at
+// every call site (and copied wholesale between matches on a move), so a counter
+// living in it would be incremented on a temporary and thrown away.
+struct ConnBudget {
+    double listTokens   = 0.0;   // match-list allowance; see AllowListReply
+    double listFilled   = 0.0;   // when listTokens was last topped up
+    double joinWindow   = 0.0;   // start of the minute the bad joins below are counted in
+    int    badJoins     = 0;
+    double touchedSec   = 0.0;   // for the sweep; see PruneBudgets
+};
+static std::map<uint64_t, ConnBudget> g_budgets;
+static std::mutex g_budgetMutex;
+
+// One match list per second per connection, sustained. The reply is the largest
+// thing an authenticated client can ask for on demand (B1 caps it at ~1.2 KB),
+// so answering every request is exactly the amplification the cookie just
+// closed, re-opened one handshake later.
+//
+// A BUCKET rather than a flat "never twice inside a second", because a person
+// using the browser genuinely does burst: open it, page, page again, all within
+// a second. A hard interval would swallow the second and third clicks and leave
+// the screen waiting on a reply that is never coming. Three tokens absorbs that;
+// the refill rate is what actually bounds a script.
+const double LIST_REFILL_PER_SEC = 1.0;
+const double LIST_BURST          = 3.0;
+// Bad join codes per minute. The code space is 4 characters, which a script
+// walks in seconds if every guess gets an answer.
+const int    BAD_JOIN_PER_MINUTE   = 5;
+const double BAD_JOIN_WINDOW_SEC   = 60.0;
+
+// Connection ids only ever go up, so this map would otherwise grow for the life
+// of the process - slowly, but a server that is meant to run for months has no
+// "slowly" that is fine. Sweep entries nothing has touched in a while, and only
+// when the map is big enough for the walk to be worth it.
+static void PruneBudgets(double now) {   // caller holds g_budgetMutex
+    if (g_budgets.size() < 512) return;
+    for (auto it = g_budgets.begin(); it != g_budgets.end(); ) {
+        if (now - it->second.touchedSec > 120.0) it = g_budgets.erase(it);
+        else ++it;
+    }
+}
+
+// True if this connection's `list` should be answered. False means drop it on
+// the floor SILENTLY - not "too fast, try later", because an error reply is
+// still a reply and a rate limiter that answers is not a rate limiter.
+static bool AllowListReply(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    PruneBudgets(now);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    // A fresh entry has listFilled == 0, so `now - 0` is however long this
+    // process has been up - a huge refill that the clamp turns into a full
+    // bucket. Exactly right for a connection we have never seen, and it means
+    // no special first-request case to get wrong.
+    b.listTokens = std::min(LIST_BURST,
+                            b.listTokens + (now - b.listFilled) * LIST_REFILL_PER_SEC);
+    b.listFilled = now;
+    if (b.listTokens < 1.0) return false;
+    b.listTokens -= 1.0;
+    return true;
+}
+
+// True if this connection may try a join code at all.
+//
+// Note what this gates: EVERY attempt once the budget is spent, not just the
+// wrong ones. It has to. Whether a code is a guess is only knowable after the
+// registry lookup that answers the guess - so a limiter that let "good" codes
+// through would be a limiter that answers every guess, which is no limiter at
+// all. The cost is real and deliberate: mistype a code five times and you wait
+// out the minute before the right one is accepted. That is the same bargain
+// every login lockout makes, and the window is 60 seconds, not an hour.
+static bool AllowJoinAttempt(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    PruneBudgets(now);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    if (now - b.joinWindow >= BAD_JOIN_WINDOW_SEC) { b.joinWindow = now; b.badJoins = 0; }
+    return b.badJoins < BAD_JOIN_PER_MINUTE;
+}
+
+// Charge one failed guess. Only wrong/unknown codes are charged: hopping
+// between rooms, or bouncing repeatedly off one that is full or already playing,
+// means you named a room that exists - normal behaviour while waiting for a
+// seat, and nothing a brute-forcer gets to do.
+static void NoteBadJoin(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    if (now - b.joinWindow >= BAD_JOIN_WINDOW_SEC) { b.joinWindow = now; b.badJoins = 0; }
+    b.badJoins++;
+}
+
+// Nothing erases an entry on disconnect on purpose. Connection ids are never
+// reused, so a returning player always arrives on a fresh one and can never
+// inherit a spent budget - which leaves the sweep above as the only cleanup
+// anyone has to remember, instead of one more thing every disconnect path (WS
+// close, goodbye, idle reap, room move) would have to call and could forget.
 
 //MARK: Directory
 // The verbs that operate on the ROOM LIST rather than on a match: what exists,
@@ -1623,6 +1847,11 @@ static std::string buildJoinFail(const char* why) {
 static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
                                   const std::string& msg) {
     if (msg.find("\"type\":\"list\"") != std::string::npos) {
+        // Budgeted (E1): a small burst, then one list a second, and a request
+        // over budget is dropped without a word. The browser asks once when it
+        // opens and once per page, so a real client never notices; a script
+        // asking 10,000 times a second gets one reply a second.
+        if (!AllowListReply(connId)) return true;
         SendToClient(c, buildMatchList((int)parseUInt(msg, "cur", 0)));
         return true;
     }
@@ -1679,7 +1908,21 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
     if (msg.find("\"type\":\"join\"") != std::string::npos) {
         const std::string want = clampName(parseString(msg, "m"));
         const std::string code = clampName(parseString(msg, "code"));
-        MoveConnToMatch(connId, c, want, code);
+        // A room code is 4 characters. Answering every guess turns that into a
+        // few seconds of scripting, so a connection gets BAD_JOIN_PER_MINUTE
+        // wrong ones and is then told to wait - checked before the registry is
+        // touched, so a refused attempt reveals nothing about what exists.
+        if (!AllowJoinAttempt(connId)) {
+            SendToClient(c, buildJoinFail("rate_limited"));
+            return true;
+        }
+        const char* why = nullptr;
+        MoveConnToMatch(connId, c, want, code, &why);
+        // Only a guess counts. "Full" or "in progress" means they named a real
+        // room and simply could not get in, which is a normal thing to do
+        // repeatedly while waiting for a seat.
+        if (why && (std::strcmp(why, "notfound") == 0 || std::strcmp(why, "badcode") == 0))
+            NoteBadJoin(connId);
         return true;
     }
 
@@ -2681,16 +2924,39 @@ private:
             if (idx != g_udpIndex.end()) { connId = idx->second; known = true; }
         }
         if (known) { HandleClientMessage(connId, msg); return; }
-        // Unknown endpoint: only a hello registers a slot; ignore stray datagrams.
+        // Unknown endpoint: only a hello is looked at, and even that one gets
+        // nothing but a cookie until it proves it can receive replies. Every
+        // other verb - list, join, create, quick - is dropped unread, which is
+        // E1 scope item 2: nothing large ever leaves here for an address we have
+        // not confirmed is real. That falls out of this early return, so do not
+        // "helpfully" start handling a directory request from a stranger.
         if (msg.find("\"type\":\"hello\"") != std::string::npos) RegisterPeer(from, msg);
     }
 
     void RegisterPeer(const udp::endpoint& from, const std::string& helloMsg) {
         // Join gate: a hello without the right key claims nothing and gets NO
-        // reply - silence also kills the reflection trick (spoofed hellos can't
-        // make us mail welcomes at a victim address the prankster picked).
+        // reply - not even a cookie. To a port scanner a silent port looks like
+        // nothing worth probing.
         if (!JoinKeyOk(parseString(helloMsg, "key"))) {
             std::cout << "UDP join rejected (bad key)\n";
+            return;
+        }
+        // Return-routability check (E1). A first hello carries no cookie, so it
+        // gets one back and nothing else; the client echoes it and arrives here
+        // again, this time with something only an endpoint that actually
+        // RECEIVED our reply could know. A spoofer's cookie went to the address
+        // they forged, so they never get past this line - and the 51 bytes they
+        // did extract cost them more to send than they got back.
+        //
+        // A stale cookie (older than two buckets) lands here too and is simply
+        // re-challenged, which is also what a client coming back after a long
+        // pause looks like. Nothing to distinguish, nothing to log.
+        const std::string cookie = parseString(helloMsg, "c");
+        if (!CookieOk(cookie, from)) {
+            ConnectedClient probe;
+            probe.transport   = Transport::UDP;
+            probe.udpEndpoint = from;
+            SendToClient(probe, buildChallenge(MintCookie(from, CookieBucketNow())));
             return;
         }
         int playerId = -1;
@@ -2806,6 +3072,17 @@ int main() {
         std::cout << "Join key: REQUIRED (PLATFORMZ_KEY is set)\n";
     } else {
         std::cout << "Join key: none (open server; set PLATFORMZ_KEY to require one)\n";
+    }
+
+    // The key behind every tag this server issues - today E1's UDP handshake
+    // cookie, later D3's identity token. Loaded before either listener exists,
+    // because the first datagram to arrive needs it.
+    {
+        std::string warn;
+        g_identitySecret = pz::LoadServerSecret(warn);
+        std::cout << "UDP handshake cookie: ON (HMAC-SHA256, "
+                  << (int)COOKIE_BUCKET_SEC << "s buckets)\n";
+        if (!warn.empty()) std::cout << "WARNING: " << warn << "\n";
     }
 
     // Cumulative all-time scores. The default path is RELATIVE, so a dev build

@@ -125,7 +125,7 @@ inline const char* joinFailureText(JoinFailure f) {
 
 struct ServerMessage {
     enum class Type { None, Welcome, State, Full, VersionMismatch, Leaderboard,
-                      MatchList, JoinFail, Created, Unknown };
+                      MatchList, JoinFail, Created, Challenge, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -178,6 +178,11 @@ struct ServerMessage {
     // JoinFail only.
     JoinFailure joinFail = JoinFailure::None;
 
+    // Challenge only (UDP): the server's handshake cookie. Not a refusal - it is
+    // the server saying "prove you can receive this", and the answer is to send
+    // the hello again with the cookie in it. See serializeHello.
+    std::string challenge;
+
     // Created only: the room you just made. You are placed in it automatically,
     // but you still need the code to invite anyone - and a PRIVATE room is hidden
     // from the match list, so this reply is the only way its creator ever learns
@@ -226,11 +231,21 @@ inline std::string serializeName(const std::string& name) {
 // and without naming the room, it would land back in the default one while its
 // body drifts on in the room it actually left.
 //
-// Both are omitted when empty, so this stays wire-compatible with a server that
+// `cookie` is the server's UDP handshake cookie (E1), echoed straight back. A
+// UDP source address is a claim anyone can make, so the server answers a hello
+// from an unknown endpoint with nothing but a cookie; only a hello carrying it
+// back - proving we actually RECEIVED that reply at the address we claim - gets
+// a slot and a welcome. Empty on the first hello of a session, by definition:
+// there is nothing to echo until the server has challenged us. Meaningless over
+// WebSocket, where TCP's own handshake already proved the address, so the
+// server never asks for one there.
+//
+// All are omitted when empty, so this stays wire-compatible with a server that
 // has never heard of them.
 inline std::string serializeHello(const std::string& name, const std::string& key = "",
                                   const std::string& clientId = "",
-                                  const std::string& matchCode = "") {
+                                  const std::string& matchCode = "",
+                                  const std::string& cookie = "") {
     nlohmann::json j = {
         {"type", "hello"},
         {"name", name}
@@ -238,6 +253,7 @@ inline std::string serializeHello(const std::string& name, const std::string& ke
     if (!key.empty())       j["key"]   = key;
     if (!clientId.empty())  j["cid"]   = clientId;
     if (!matchCode.empty()) j["match"] = matchCode;
+    if (!cookie.empty())    j["c"]     = cookie;
     return j.dump();
 }
 
@@ -729,6 +745,13 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 msg.matches.push_back(std::move(r));
             }
         }
+        return msg;
+    }
+    // The UDP handshake cookie (E1). Answering it is the client's only job: the
+    // server will not hand out a slot until a hello comes back carrying this.
+    if (type == "challenge") {
+        msg.type      = ServerMessage::Type::Challenge;
+        msg.challenge = j.value("c", std::string());
         return msg;
     }
     if (type == "created") {

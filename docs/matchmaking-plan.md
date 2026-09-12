@@ -926,7 +926,7 @@ someone else's row by typing their name. D3 supplies the identity that fixes it.
 
 # Epic E — Ops, abuse, and proof it scales
 
-### E1. UDP handshake token (anti-spoof / anti-amplification) — **do not skip**
+### E1. UDP handshake token (anti-spoof / anti-amplification) — **DONE** (#88)
 **Why:** UDP source addresses are spoofable and **the vector already exists
 today** — a ~60 B `hello` from an unknown endpoint is answered immediately
 (`RegisterPeer` L1793) with a LARGE-map welcome of ~3 KB. `PLATFORMZ_KEY` masks
@@ -987,6 +987,46 @@ token silently becomes invalid on every deploy, which for D3 means every player
 looks like a new person after each release. It is root-owned config, not game
 state, so it belongs in the env file rather than `/var/lib/platformz` — but it is
 part of the backup surface either way.
+
+#### What shipped, and the three places it differs from the plan above
+
+`server/crypto.h` is the shared primitive: SHA-256 and HMAC-SHA256, a
+constant-time compare, and `LoadServerSecret`. No OpenSSL — the server links
+Boost and nothing else, and a new package on the deploy box is a worse trade than
+80 lines with RFC 4231 vectors behind them (`server/test/crypto_test.cpp`). D3
+inherits all of it. The cookie itself is 96 bits of truncated HMAC over
+`family ‖ addr ‖ port ‖ bucket`, minted and checked in `server_main.cpp`'s
+"UDP handshake cookie" section; the client stashes it in `udpCookie` and re-sends
+`hello` on the next frame rather than waiting out the 0.5 s retry.
+
+**1. The amplification factor is not below 1, and the plan's arithmetic was
+optimistic.** The challenge is 51 bytes. A real client's hello is ~90, so it *is*
+below 1 for anyone playing — but the smallest hello a script can craft is
+`{"type":"hello"}` at 16 bytes, making the worst case 3.2x on payload, or 1.8x
+once both directions' 28 bytes of IP+UDP header are counted. That is down from
+~33x, and nobody builds a reflector at 1.8x. Strictly below 1 would mean a binary
+challenge tag (~13 B) instead of JSON; not worth a message type for the gap.
+`probe_cookie.py` prints the measured numbers rather than asserting a ratio.
+
+**2. The list limit is a token bucket with a burst of 3, not a flat one per
+second.** A hard interval silently swallows a second and third click inside one
+second — which is what a person paging the browser actually does — and leaves the
+screen waiting on a reply that is never coming. The refill rate (1/s) is what
+bounds a script; the burst is what keeps the UI honest. `probe_directory.py`
+caught this: its two `list` calls 0.6 s apart both have to be answered.
+
+**3. Once the join budget is spent it refuses *every* join, not only wrong
+codes.** Whether a code is a guess is only knowable after the lookup that answers
+the guess, so a limiter that let good codes through would answer every guess.
+Only wrong codes are *charged*, so hopping rooms or bouncing off a full one costs
+nothing — but five typos does mean waiting out the minute. That is the same
+bargain a login lockout makes, and it is worth stating because the tempting
+"softer" version is not a limit at all.
+
+Scope item 2 needed no code: an unknown UDP endpoint only ever reaches the
+`hello` branch, so `list`/`join`/`create`/`quick` from a stranger were already
+dropped unread. There is now a comment saying so, and a probe check, because that
+is a property somebody could helpfully break.
 
 **Files:** `server/server_main.cpp`, `net_client.h`/`main.cpp` (echo the cookie).
 **Depends on:** B1. **Must land before the server is publicly advertised.**

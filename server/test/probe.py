@@ -50,6 +50,9 @@ class C:
     # back to the default one.
     def __init__(self, name, cid="", match=""):
         self.cid, self.wantMatch = cid, match
+        # E1's UDP handshake cookie, once the server has issued one. See hello().
+        self.cookie = ""
+        self.challenges = 0        # how many times we were asked to prove our address
         self.name, self.slot, self.seq, self.epoch = name, None, 0, 0
         self.phase, self.nplayers, self.alive = "(none)", 0, True
         # Which room the server put us in, and how it is run - straight off the
@@ -86,6 +89,12 @@ class C:
         if KEY: m["key"] = KEY      # the server's join gate wants it in the hello
         if self.cid:       m["cid"]   = self.cid
         if self.wantMatch: m["match"] = self.wantMatch
+        # E1's handshake cookie. The first hello of a session has none, so the
+        # server replies with a challenge instead of a welcome and _read re-sends
+        # this immediately with the cookie in it. Every caller therefore sees the
+        # same thing it always did (a slot appears a round trip later), which is
+        # why no probe but probe_cookie.py had to change.
+        if self.cookie:    m["c"]     = self.cookie
         self.send(m)
 
     def drop(self, goodbye=False):
@@ -184,7 +193,16 @@ class C:
                 except ValueError:
                     continue
                 t = j.get("type")
-                if t == "leaderboard":
+                if t == "challenge":
+                    # Return-routability check (E1): echo the cookie straight
+                    # back. Only when it CHANGES, or a server that kept
+                    # rejecting us would put this thread in a tight hello loop.
+                    self.challenges += 1
+                    c = j.get("c", "")
+                    if c and c != self.cookie:
+                        self.cookie = c
+                        self.hello()
+                elif t == "leaderboard":
                     rows = [(e.get("n", ""), e.get("s", 0)) for e in j.get("lb", [])]
                     self.leaderboards.append((self.phase, rows))
                 elif t == "matchlist":
