@@ -197,6 +197,72 @@ All three join on connect instead of idling in whatever room the server parked
 you in. A code that has been reaped (rooms are destroyed 30 s after emptying)
 comes back as a refusal on the browser screen, not a hang.
 
+### The key and the room code are different things — keep them that way
+
+They look alike (a short string in a URL) and they are not remotely the same
+gate. Conflating them is the mistake this section exists to prevent.
+
+| | `PLATFORMZ_KEY` | A room's 4-char code |
+|---|---|---|
+| Answers | "may you speak to this process at all" | "may you enter this room" |
+| Checked at | WS upgrade / UDP hello, before anything else | `join`, after you are already connected |
+| On failure | **no reply at all** — the port looks dead | a `joinfail` you can read on screen |
+| Scope | the whole server | one room, for as long as it exists |
+| Who sets it | the operator, once, in `/etc/platformz.env` | minted by the server when a private room is made |
+
+Both can be on at once, and that is the interesting part: **there is no
+configuration fork between "friends only" and "public".**
+
+- **Friends-only (today).** Set `PLATFORMZ_KEY`. Only people holding it reach the
+  server at all, so the match browser is only ever seen by people you invited.
+  Room codes still work inside that, for a private room within the group.
+- **Public.** Unset `PLATFORMZ_KEY` and restart. Anyone can connect and browse;
+  private rooms are hidden from the list and their codes become the real
+  invite mechanism. Nothing else changes — same binary, same rooms, same client.
+
+Going public is a one-line change, which is exactly why the abuse limits below
+are not optional.
+
+### Abuse limits, and the two knobs that tune them
+
+The server enforces these with no configuration at all; they are listed so a
+refusal in the log is recognisable rather than mysterious.
+
+| Limit | Default | Refusal |
+|---|---|---|
+| Concurrent rooms | 12 (`MATCH_MAX_CONCURRENT`) | `server_full` on create |
+| Rooms one **address** may mint | 3, one back every 2 min | `server_full` on create |
+| Room moves (join / quick / leave) | 5 in hand, 1/s | `rate_limited` |
+| Wrong room codes | 5 per minute per connection | `rate_limited` |
+| Match-list replies | 3 in hand, 1/s | *silently dropped* |
+| UDP handshake | must echo a cookie (E1) | a challenge, and nothing else |
+| Live matches at once | off (= the room cap) | the start is **held**, not refused |
+
+Two are tunable, both for real scenarios rather than for tinkering:
+
+```bash
+# Your players share a NAT - a LAN party, an office, a household - so they all
+# look like one address to the room-creation budget. Raise it, or 0 to disable.
+PLATFORMZ_MAX_ROOMS_PER_ADDR=8
+
+# The transfer graph, not the tick time, is this box's ceiling: a full match
+# costs ~310 KB/s. Cap how many may run at once. A start that exceeds it is
+# HELD - the room waits in its lobby and begins when a live match ends - so
+# nobody's button press is lost and the client needs no new error to explain.
+PLATFORMZ_MAX_ACTIVE=6
+```
+
+Both go in `/etc/platformz.env` beside the key. `GET /status` reports
+`maxMatches`, `maxActive` and the live counts, so you can check what a running
+server actually thinks its limits are.
+
+**Nothing here ever hangs up on a player.** A full room does not end a
+connection: you stay connected with no slot, the browser shows that room as 8/8,
+and you pick another — or wait, and your client takes the next seat that frees up
+on its own. That was a real bug once (the server sent a "full" packet and dropped
+the socket, which over UDP is indistinguishable from the server being gone) and
+it is the thing most worth re-checking if connection behaviour ever looks odd.
+
 ## 7. Serve the web client over HTTP
 
 The `web/` files are already built (`make web` output). Point nginx's default site

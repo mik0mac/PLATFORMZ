@@ -37,8 +37,9 @@ namespace nb {
 // decoded a stale server's packets at 4x scale instead of rejecting them.
 //
 // Values are never recycled, even once no live build uses them: 0x05 and 0x07
-// are burned by earlier state layouts, and a stale client in the wild still
-// speaks them. Reusing one would make a genuine mismatch decode as valid.
+// are burned by earlier state layouts, 0x06 by the retired "full" rejection
+// (see below), and a stale client in the wild still speaks them. Reusing one
+// would make a genuine mismatch decode as valid.
 static const uint8_t STATE_BIN_VERSION   = 0x09; // per-tick state packet (bumped: match-epoch u32 added to the state header)
 // 0x0A, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09 are taken by
 // the tags below and by STATE. Bumped from 0x02 when the welcome grew the match
@@ -47,19 +48,24 @@ static const uint8_t STATE_BIN_VERSION   = 0x09; // per-tick state packet (bumpe
 // into an honest SERVER VERSION MISMATCH.
 static const uint8_t WELCOME_BIN_VERSION = 0x0A; // welcome (slot + room identity + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
-static const uint8_t FULL_BIN_VERSION    = 0x06; // rejection: every player slot is claimed (no payload)
+// 0x06 is BURNED. It was FULL_BIN_VERSION: "every player slot is claimed", sent
+// once and followed by the connection being dropped. E2 retired the whole idea -
+// a connection is never dropped for fullness now, it simply holds no slot and
+// stays in the directory where it can pick another room (server_main.cpp's
+// "Unseated connections"). Fullness travels as a `joinfail` instead, which is
+// JSON and therefore works identically on both transports. Do not reuse 0x06.
 
 // Distinct tags, checked at compile time. STATE is matched FIRST in applyMessage,
 // so a collision wouldn't error at runtime - it would silently swallow the other
-// message type (a STATE/FULL clash makes "server full" decode as a truncated
-// state packet, and the client never learns it was rejected).
+// message type (a clash makes one message decode as a truncated packet of the
+// other, and the client never learns it was rejected).
 static_assert(STATE_BIN_VERSION != WELCOME_BIN_VERSION &&
               STATE_BIN_VERSION != CHUNK_VERSION &&
-              STATE_BIN_VERSION != FULL_BIN_VERSION &&
-              WELCOME_BIN_VERSION != CHUNK_VERSION &&
-              WELCOME_BIN_VERSION != FULL_BIN_VERSION &&
-              CHUNK_VERSION != FULL_BIN_VERSION,
+              WELCOME_BIN_VERSION != CHUNK_VERSION,
               "binary packet tags must be unique - they share byte 0");
+static_assert(STATE_BIN_VERSION != 0x06 && WELCOME_BIN_VERSION != 0x06 &&
+              CHUNK_VERSION != 0x06,
+              "0x06 is burned by the retired FULL packet and must never be reused");
 
 // ---- chunking: oversized UDP messages ----
 // A datagram over ~1400 bytes IP-fragments, and some home routers/NATs drop

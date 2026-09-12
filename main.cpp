@@ -777,6 +777,15 @@ int main(int argc, char** argv) {
             // mapping so the client and the protocol can drift apart safely.
             shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
             shell.awaitingList = false;
+            // Before we hold a slot, a refusal IS the connection status: we are
+            // connected and being told there is nowhere to sit. The browse status
+            // line above is only on screen in the browser, so drive the same flag
+            // the retired `full` message used to, and the lobby keeps saying
+            // "match in progress" instead of "connecting" forever. Cleared by the
+            // next welcome, which is what getting in looks like.
+            if (myIndex < 0 && (m.joinFail == JoinFailure::Full ||
+                                m.joinFail == JoinFailure::ServerFull))
+                shell.serverFull = true;
             return true;
         }
         if (m.type == ServerMessage::Type::Created) {
@@ -792,13 +801,6 @@ int main(int argc, char** argv) {
             // Server-owned all-time table, already ranked. Replace wholesale -
             // each message is the complete top-N, not a delta.
             shell.leaderboard = std::move(m.leaderboard);
-            return true;
-        }
-        if (m.type == ServerMessage::Type::Full) {
-            // Every slot is claimed (mid-match, no bot filler). The hello resend
-            // loop keeps retrying; this just drives the lobby message so it reads
-            // "match in progress" instead of "connecting".
-            shell.serverFull = true;
             return true;
         }
         if (m.type == ServerMessage::Type::VersionMismatch) {

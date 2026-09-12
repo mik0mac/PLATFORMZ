@@ -1033,7 +1033,7 @@ is a property somebody could helpfully break.
 
 ---
 
-### E2. Caps, rate limits, and the key story
+### E2. Caps, rate limits, and the key story — **DONE** (#89)
 **Scope:**
 - `MAX_MATCHES` (E: from A4), matches-created-per-address, joins-per-second.
 - **`PLATFORMZ_KEY` stays as the server-wide front door** (unchanged semantics:
@@ -1044,6 +1044,64 @@ is a property somebody could helpfully break.
 - Public server ⇒ drop the key; friends-only ⇒ keep it. Document both.
 
 **Files:** `server/server_main.cpp`, `docs/deploy-vultr.md`.
+
+#### What shipped
+
+**Fullness no longer ends a connection, and that was most of the work.** The old
+shape was: no free slot → send a `full` packet → stop reading (WS) or never
+register the peer (UDP). Over UDP that is indistinguishable from an unreachable
+server, so the client sat re-helloing into nothing behind "MATCH IN PROGRESS —
+WAITING FOR A SLOT...". Being hung up on is the worst possible answer to "this
+room is full", because the one thing you want next is the list of rooms that are
+not.
+
+So the server grew a third state for a connection: **unseated**. A connection is
+now in exactly one of two places — some match's `clients` map, or `g_unseated` —
+and an unseated one is a working client that can list, join, and create. Its
+`hello` (which the client is already re-sending every 0.5 s while it has no slot)
+doubles as "is there a seat yet?", so a freeing slot is taken within half a
+second with no new client code at all. Both transports funnel through one
+`SeatOrPark`: the room you asked for, else the default room plus a `full`
+refusal so you know your invite did not land, else parked with `server_full`.
+
+`FULL_BIN_VERSION` (0x06) and `{"type":"full"}` are both gone, and `0x06` is
+burned in `netbin.h`. Fullness travels as a `joinfail`, which is JSON and so
+behaves identically on both transports. The client maps a `full`/`server_full`
+refusal received *before* it has a slot onto the same `serverFull` flag the old
+message drove, so the existing UI string survived the protocol change.
+
+**Two things needed no code.** Match names already go through `clampName` — the
+same printable-ASCII, length-capped filter player names use — and the join-code
+alphabet was already the unambiguous 32-character one with no `O`/`0`/`I`/`1`,
+4 chars, private rooms hidden from the list. Both now have a comment saying so
+and a probe check, because they are properties somebody could helpfully break.
+
+**Three departures from the scope above:**
+
+**1. `MAX_ACTIVE_MATCHES` ships OFF.** A4 measured that CPU fits ~16 matches and
+that *transfer* is the binding constraint at roughly 7×, which is a judgement
+about the hosting plan and not about the code — so picking a live-match number
+here would have been inventing one. It is `PLATFORMZ_MAX_ACTIVE`, defaulting to
+the room cap (so it can never fire), reported by `/status`. When it does bite the
+start is **held, not refused**: the room waits in its lobby and begins the moment
+a live match ends. Nobody's button press is lost, and there is no new failure the
+client would have to be taught to explain.
+
+**2. The per-address creation budget is tunable, because an address is a coarse
+identity.** A LAN party, an office, a household all arrive from one NAT and share
+one bucket, so the fourth person to make a room would be refused for something
+someone else did. That is a real scenario, not a hypothetical:
+`PLATFORMZ_MAX_ROOMS_PER_ADDR` (default 3, 0 disables). `probe_directory.py`
+found this immediately — it fills the registry from one address to test paging.
+
+**3. "Joins-per-second" became "moves-per-second", covering `leave` too.**
+Join-leave-join-leave is the cheapest roster churn there is, and every accepted
+move costs a welcome plus a leaderboard — the two biggest packets the server
+sends. Budgeting only the join half would have made the budget meaningless.
+
+Tests: `server/test/probe_capacity.py` (a full room does not drop you; an
+unseated client can still browse and join; it seats itself when a slot frees; the
+address and move budgets; name sanitising).
 
 ---
 

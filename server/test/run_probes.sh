@@ -36,7 +36,7 @@ trap cleanup EXIT INT TERM PIPE
 # produced a page of nonsense failures.
 port_free() { ! lsof -nP -iTCP:9000 -sTCP:LISTEN >/dev/null 2>&1; }
 
-for probe in probe probe_cookie probe_leaderboard probe_directory probe_official probe_host probe_mapsize probe_multimatch probe_joinprogress probe_reconnect; do
+for probe in probe probe_cookie probe_capacity probe_leaderboard probe_directory probe_official probe_host probe_mapsize probe_multimatch probe_joinprogress probe_reconnect; do
   log="$TMP/$probe.log"
   rm -f "$TMP/$probe.scores"
 
@@ -47,7 +47,19 @@ for probe in probe probe_cookie probe_leaderboard probe_directory probe_official
   # is the subshell's pid and killing it leaves the server running - which is how
   # strays end up holding port 9000 and the next run refuses to start. With exec
   # the subshell BECOMES gameserver, so $! is the thing we actually want to kill.
-  ( cd server && exec env PLATFORMZ_SCORES="$TMP/$probe.scores" ./gameserver >"$log" 2>&1 ) &
+  # Per-probe server environment. probe_directory fills the registry to prove
+  # paging works, and every probe client shares one source address (127.0.0.1),
+  # so E2's per-address creation budget would stop it at three rooms - the probe
+  # would then fail for a reason that has nothing to do with paging. 0 turns that
+  # budget off, which is the same knob an operator turns for a LAN party behind
+  # one NAT. probe_capacity tests the budget itself, so it gets the default.
+  # A plain string, deliberately unquoted below so it word-splits to nothing when
+  # empty. An empty ARRAY would be cleaner but trips `set -u` on macOS's bash 3.2.
+  env_extra=""
+  [ "$probe" = "probe_directory" ] && env_extra="PLATFORMZ_MAX_ROOMS_PER_ADDR=0"
+
+  # shellcheck disable=SC2086  # $env_extra must split
+  ( cd server && exec env PLATFORMZ_SCORES="$TMP/$probe.scores" $env_extra ./gameserver >"$log" 2>&1 ) &
   SERVER_PID=$!
   for _ in $(seq 1 40); do grep -q "lobby ready" "$log" 2>/dev/null && break; sleep 0.3; done
 

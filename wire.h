@@ -124,7 +124,10 @@ inline const char* joinFailureText(JoinFailure f) {
 }
 
 struct ServerMessage {
-    enum class Type { None, Welcome, State, Full, VersionMismatch, Leaderboard,
+    // No `Full`. It used to be its own message and its own binary tag, sent just
+    // before the server hung up on you; E2 retired both. Fullness is a JoinFail
+    // now (reason `full` or `server_full`) and nobody gets hung up on.
+    enum class Type { None, Welcome, State, VersionMismatch, Leaderboard,
                       MatchList, JoinFail, Created, Challenge, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
@@ -673,7 +676,10 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         uint8_t tag = (uint8_t)text[0];
         if (tag == nb::STATE_BIN_VERSION)   return applyBinaryState(text, gs);
         if (tag == nb::WELCOME_BIN_VERSION) return applyBinaryWelcome(text, gs);
-        if (tag == nb::FULL_BIN_VERSION)    { ServerMessage m; m.type = ServerMessage::Type::Full; return m; }
+        // No FULL tag any more (0x06, burned in netbin.h). Fullness is a
+        // `joinfail` now - see Type::JoinFail below - because E2 stopped the
+        // server dropping a connection over it: you hold no slot, you stay
+        // connected, and you pick another room.
         // Chunks are a transport concern - UdpTransport reassembles them
         // (net_client.h) and only ever hands us completed messages. One arriving
         // here is a stray, not a version skew, so drop it quietly rather than
@@ -719,7 +725,14 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         }
         return msg;
     }
-    if (type == "full") { msg.type = ServerMessage::Type::Full; return msg; }
+    // A server from before E2, refusing the connection because every slot was
+    // claimed. Kept only so such a server's refusal still reads as "match is
+    // full" rather than vanishing; nothing produces this any more.
+    if (type == "full") {
+        msg.type     = ServerMessage::Type::JoinFail;
+        msg.joinFail = JoinFailure::Full;
+        return msg;
+    }
 
     // All-time score table. Rows arrive already ranked best-first (the server
     // partial_sorts before sending), so the client renders them in order as-is.

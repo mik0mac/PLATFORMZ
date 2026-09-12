@@ -181,6 +181,22 @@ const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
 // graph, not the tick time. Raising this past ~16 needs the egress work first
 // (broadcast decimation via GameSpace::extrapolate), not a faster tick.
 const int    MATCH_MAX_CONCURRENT = 12;
+// Matches allowed to be LIVE (countdown or playing) at once. Rooms in a lobby
+// cost almost nothing; a running match is where the ~310 KB/s goes, and transfer
+// is this box's real ceiling - see the note above.
+//
+// Defaults to MATCH_MAX_CONCURRENT, i.e. OFF: with 12 rooms and a cap of 12 it
+// can never fire, and nothing about today's behaviour changes. It exists so the
+// operator has a lever when the transfer graph says so, set at boot with
+// PLATFORMZ_MAX_ACTIVE and reported by /status. Deliberately not a lower number
+// picked out of the air here - A4 measured that CPU fits ~16 and that transfer
+// is the binding constraint, which is a judgement about the hosting plan, not
+// about the code.
+//
+// When it does bite, a start is HELD, not refused: the room stays in its lobby
+// and begins the moment a live match ends. Nobody's button press is lost, and
+// there is no failure the client would have to be taught to explain.
+const int    MATCH_MAX_ACTIVE_DEFAULT = MATCH_MAX_CONCURRENT;
 
 //MARK: Public room governance
 // A public room has no meaningful host: whoever holds the lowest connected slot
