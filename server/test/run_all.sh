@@ -25,6 +25,7 @@ run() {   # run <name> <source> [extra sources...]
   "$OUT/$name" || fail=1
 }
 
+run crypto      server/test/crypto_test.cpp
 run reassembly  server/test/reassembly_test.cpp
 run grid_equiv  server/test/grid_equiv_test.cpp collisions.cpp
 run registry    server/test/registry_test.cpp

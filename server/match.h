@@ -91,6 +91,17 @@ struct ConnectedClient {
     std::shared_ptr<Session> session;
     boost::asio::ip::udp::endpoint udpEndpoint;
     double        lastSeenSec  = 0.0;
+
+    // Where this connection came from, as a printable IP. Taken from the socket
+    // (the TCP peer address, or the UDP source we have already proved by cookie),
+    // never from anything the client said about itself - the whole point is that
+    // it cannot be chosen.
+    //
+    // Used for exactly one thing: the per-address match-creation budget (E2). It
+    // is a coarse identity - everyone behind one NAT shares it - which is why it
+    // gates only room CREATION, where the abuse is one machine minting rooms
+    // until nobody else can, and never joining or playing.
+    std::string   remoteAddr;
 };
 
 //MARK: Slot mask
@@ -156,6 +167,11 @@ struct Match {
     // ---- Phase ----------------------------------------------------------
     std::atomic<Phase> gamePhase{Phase::LOBBY};
     std::atomic<bool>  startRequested{false};
+    // Sim-thread only. True while a pending start is being held back by the
+    // live-match cap (E2), purely so the log says so once rather than 60 times a
+    // second. The request itself stays in startRequested and fires as soon as
+    // capacity appears - a held start is deferred, never lost.
+    bool               startHeld = false;
     // Seconds left in the pre-match countdown, published in every state packet so
     // all clients show the same number and drive their fade-ins in lockstep.
     // Written by the sim thread each COUNTDOWN tick, read by the io thread in

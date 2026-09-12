@@ -29,6 +29,7 @@
 #include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
 #include "jsonmin.h"      // jf/ji/ju/jb/js - the shared JSON writers
+#include "crypto.h"       // HMAC-SHA256 + constant-time compare (E1's cookie, later D3's token)
 #include "match.h"        // Match: the world, its roster, and everything that ticks
 #include "registry.h"     // MatchRegistry: which rooms exist, and their lifecycle
 #include "../scoreboard.h" // cumulative all-time score table, persisted between runs
@@ -42,6 +43,7 @@
 
 #include <iostream>
 #include <cstdlib>   // getenv (join key)
+#include <cstring>   // strcmp (join refusal tokens)
 #include <memory>
 #include <map>
 #include <set>
@@ -134,6 +136,109 @@ static std::string QueryParam(const std::string& target, const std::string& name
     }
     return "";
 }
+//MARK: UDP handshake cookie (E1)
+// -------------------------------------------------------------------------
+// Return-routability check for UDP. A source address in a datagram is a claim,
+// not a fact - anyone can put yours in a packet they send. Before E1, a ~60 byte
+// `hello` from any address at all was answered immediately with a welcome of up
+// to ~3 KB, which makes this server a ~50x reflector: spoof the victim's address,
+// send hellos, and we do the flooding on the attacker's behalf.
+//
+// The fix is the one QUIC and DTLS use. An unknown endpoint's hello gets back
+// only a cookie; the client echoes it in its next hello; we recompute the cookie
+// from the address we ACTUALLY OBSERVE and only then hand out a slot and a
+// welcome. A spoofer never sees the cookie (it goes to the address they forged),
+// so the handshake stops dead at a reply smaller than the packet that triggered
+// it - there is no amplification left to sell.
+//
+// STATELESS is the point, not an optimisation. The cookie is derived, never
+// stored: a flood of spoofed hellos costs one HMAC and one small send each and
+// allocates nothing, so closing the amplification hole cannot be turned around
+// into a memory-exhaustion hole.
+//
+// The secret behind the HMAC is the server's, shared with D3's identity token
+// when that lands - see crypto.h for why it is HMAC and not hash(secret||data),
+// and why it must come from the environment rather than be minted per boot.
+std::string g_identitySecret;
+
+// Cookie lifetime. A cookie is valid for its own 30s bucket and the one before,
+// so it lasts 30-60s depending on when in the bucket it was minted. Long enough
+// that a client on a bad link can lose a couple of hellos and still finish the
+// handshake; short enough that a cookie captured off the wire is stale before
+// it is worth much (and it is bound to the capturer's address anyway).
+const double COOKIE_BUCKET_SEC = 30.0;
+
+// NowSec() is the steady clock, deliberately. A cookie only has to stay valid
+// for the seconds between our reply and the client's next hello, and the steady
+// clock cannot jump - a wall-clock adjustment (NTP stepping the box, or a DST
+// change on a badly configured host) would silently invalidate every cookie in
+// flight and strand every client mid-handshake.
+static uint64_t CookieBucketNow() {
+    return (uint64_t)(NowSec() / COOKIE_BUCKET_SEC);
+}
+
+// The bytes a cookie commits to: the address family, the address, the port, and
+// the bucket. Everything that makes the cookie specific to one peer at one time.
+// Fixed-shape and length-prefixed so no two different endpoints can produce the
+// same byte string (which is the only way one peer's cookie would work for
+// another).
+static std::string CookieMessage(const udp::endpoint& from, uint64_t bucket) {
+    std::string msg;
+    msg.reserve(32);
+    const auto addr = from.address();
+    if (addr.is_v4()) {
+        const auto b = addr.to_v4().to_bytes();
+        msg += (char)4; msg += (char)b.size();
+        msg.append(reinterpret_cast<const char*>(b.data()), b.size());
+    } else {
+        const auto b = addr.to_v6().to_bytes();
+        msg += (char)6; msg += (char)b.size();
+        msg.append(reinterpret_cast<const char*>(b.data()), b.size());
+    }
+    const uint16_t port = from.port();
+    msg += (char)(uint8_t)(port & 0xff);
+    msg += (char)(uint8_t)(port >> 8);
+    for (int i = 0; i < 8; ++i) msg += (char)(uint8_t)(bucket >> (8 * i));
+    return msg;
+}
+
+// 96 bits of truncated HMAC, as 24 hex characters.
+static std::string MintCookie(const udp::endpoint& from, uint64_t bucket) {
+    const std::string msg = CookieMessage(from, bucket);
+    return pz::HexPrefix(pz::HmacSha256(g_identitySecret, msg.data(), msg.size()), 12);
+}
+
+// True if `offered` is a cookie we issued to THIS endpoint recently.
+//
+// Both comparisons run even after the first one matches. Bailing out early would
+// make "right cookie, wrong bucket" measurably slower than "right cookie, right
+// bucket" - a smaller leak than a byte-by-byte compare, but free to avoid.
+static bool CookieOk(const std::string& offered, const udp::endpoint& from) {
+    if (offered.size() != 24) return false;
+    const uint64_t now = CookieBucketNow();
+    bool ok = pz::ConstantTimeEqual(offered, MintCookie(from, now));
+    ok |= pz::ConstantTimeEqual(offered, MintCookie(from, now - 1));
+    return ok;
+}
+
+// The whole reply to an unvalidated hello: 51 bytes. Nothing else may ever be
+// added to it - every byte here is amplification, and this is the ONLY thing an
+// unproven address can extract.
+//
+// The honest arithmetic, since the plan claimed a factor below 1: a real
+// client's hello is ~90 bytes, so it is below 1 for anyone actually playing.
+// The smallest hello a script could hand-craft is `{"type":"hello"}` at 16
+// bytes, which makes the worst case 51/16 = 3.2x on payload, or 79/44 = 1.8x
+// once the 28 bytes of IP+UDP header both directions carry are counted. That is
+// down from ~3 KB / 90 B = 33x today, and 1.8x is not a reflector anyone would
+// bother with - at that ratio you may as well aim your uplink at the victim
+// directly. Getting strictly below 1 would mean a binary challenge tag (~13
+// bytes) instead of JSON; the protocol says JSON, and the gap between 1.8x and
+// 0.3x is not worth a message type the browser build can never use.
+static std::string buildChallenge(const std::string& cookie) {
+    return std::string("{\"type\":\"challenge\",\"c\":") + js(cookie) + "}";
+}
+
 // Bytes actually put on a socket, for A4's egress budget. Process-wide: the
 // transfer quota is a property of the box, not of any one match.
 EgressCounters g_egress;
@@ -154,9 +259,27 @@ std::atomic<int> g_uptimeSeconds{0};
 // simulation. The once-a-second reaper in the driver loop does take it, to move a
 // destroyed room's clients home; that is outside every match lock, so it obeys the
 // order above.
-std::map<uint64_t, std::string> g_connMatch;   // connId -> match code ("" = homeless)
+std::map<uint64_t, std::string> g_connMatch;   // connId -> match code ("" = unseated)
 std::map<udp::endpoint, uint64_t> g_udpIndex;  // UDP source -> connId
 std::mutex g_connMutex;
+
+// Connections that are connected but hold no player slot (E2).
+//
+// Before E2 there was no such thing: a client that arrived when every slot was
+// taken got a "full" packet and had its socket dropped, which over UDP left it
+// re-helloing forever behind "MATCH IN PROGRESS - WAITING FOR A SLOT...". Being
+// hung up on is the worst possible answer to "this room is full", because the
+// one thing you want next is the list of rooms that are not.
+//
+// So fullness no longer ends a connection. It parks it here: still connected,
+// still able to browse and join, and its `hello` becomes a retry for a seat. A
+// connection is therefore in EXACTLY ONE of two places - some match's `clients`
+// map, or this one - and every path that moves a connection has to preserve
+// that. (Registry::Reap never destroys a room that still has clients, so a room
+// vanishing cannot strand one here by accident.)
+//
+// Guarded by g_connMutex: it is connection routing, not match state.
+std::map<uint64_t, ConnectedClient> g_unseated;
 
 // Monotonic connection id. Process-level, not per-match: an id must stay unique
 // across every match so a stale packet can never be mistaken for a live client.
@@ -174,6 +297,29 @@ std::mutex    udpSendMutex;
 // lookup for a per-connection one instead of introducing the whole path at once.
 MatchRegistry g_registry{MATCH_MAX_CONCURRENT};
 
+// How many matches may be LIVE at once (E2). Set once in main() from
+// PLATFORMZ_MAX_ACTIVE, then only read. See MATCH_MAX_ACTIVE_DEFAULT in
+// constants.h for why the default makes this a no-op.
+int g_maxActiveMatches = MATCH_MAX_ACTIVE_DEFAULT;
+
+// True if `self` may begin a match right now. Counts the rooms that are already
+// live, ignoring `self` so a restart of a match that is itself counted as active
+// can't be blocked by its own reflection.
+//
+// Only ever called when a start is actually pending, which is rare - it takes
+// the registry mutex, and doing that 60 times a second per room would put the
+// sim thread in the way of every io thread for no reason.
+static bool ActiveMatchBudgetAllows(const Match* self) {
+    if (g_maxActiveMatches >= MATCH_MAX_CONCURRENT) return true;  // cap off
+    int live = 0;
+    for (const auto& m : g_registry.All()) {
+        if (m.get() == self) continue;
+        const Phase ph = m->gamePhase.load();
+        if (ph == Phase::COUNTDOWN || ph == Phase::PLAYING) live++;
+    }
+    return live < g_maxActiveMatches;
+}
+
 // The default room, created at boot and pinned so it is never reaped. Every
 // existing call site reaches the match through this, exactly as it used to reach
 // the global - which is what keeps this step behaviour-identical.
@@ -188,6 +334,13 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg);
 // Which match a connection is bound to; defined with the routing helpers below,
 // but Session::Read needs it to clean up the right room on disconnect.
 static std::shared_ptr<Match> MatchForConn(uint64_t connId);
+// Seating and forgetting, both defined with the routing helpers below. Session
+// needs them at connect and at disconnect, and both must behave identically for
+// the two transports - which is the whole reason they are functions and not
+// inline code in each listener.
+static void SeatOrPark(uint64_t connId, const ConnectedClient& rec,
+                       const std::string& wantCode);
+static void ForgetConn(uint64_t connId);
 
 // Lowest player slot not owned by a connected client, or -1 if the server is
 // full. Caller MUST hold gameMutex (reads players) AND clientMutex (reads clients).
@@ -420,7 +573,25 @@ void Match::HandleMidMatchLeavers(SlotMask claimed, bool allowBotify, float dt) 
             continue;
         }
         if (p.isBot) continue;      // a real bot slot, never had a human - not a leaver
-        if (!p.isAlive) continue;   // already dead/eliminated - nothing to do
+        if (!p.isAlive) {
+            // Dead, and nobody is sitting in it: there is nothing left to come
+            // back to, so stop reserving the slot. Clearing the countdown here
+            // is what keeps this function and HeldSlotFor agreeing - HeldSlotFor
+            // already refuses to resume a body that is not alive, but
+            // ClaimFreeSlot's first pass reads leaveGraceSec, and those two
+            // disagreed in exactly one case: an unattended body DESTROYED while
+            // its grace was still running. That path leaves here through the
+            // `continue` below without ever reaching the decrement, so the
+            // countdown froze at whatever positive value it held - forever - and
+            // the first pass treated a dead, ownerless slot as reserved for the
+            // rest of the match. A latecomer then took a higher slot while slot
+            // 0 sat empty, which is an intermittent bug precisely because it
+            // depends on whether an asteroid happens to finish the body off
+            // inside those 15 seconds. (Pre-existing; found by probe_host
+            // failing about two runs in five.)
+            p.leaveGraceSec = -1.0f;
+            continue;
+        }
         if (p.leaveGraceSec < 0.0f) {
             p.leaveGraceSec = MID_MATCH_LEAVE_GRACE_SEC; // just noticed vacant - arm the countdown
             continue;
@@ -762,11 +933,6 @@ std::string Match::welcomeFor(const ConnectedClient& c) {
                                          : buildWelcome(c.playerId);
 }
 
-// Rejection: every player slot is already claimed (typical mid-match, since the
-// roster is sized to the connected humans at match start with no bot filler).
-// Sent instead of silently dropping the connection, so the client can show
-// "match in progress" rather than a generic connect failure and keep retrying
-// in the background.
 //MARK: Leaderboard packet
 // The all-time table. Sent as entries rather than Scoreboard's preformatted
 // leaderboardString: that string is newline-separated and js() only escapes " and
@@ -792,15 +958,6 @@ static std::string buildLeaderboard() {
     }
     s += "]}";
     return s;
-}
-
-static std::string buildFull() {
-    return "{\"type\":\"full\"}";
-}
-static std::string buildFullBinary() {
-    std::string b;
-    nb::putU8(b, nb::FULL_BIN_VERSION);
-    return b;
 }
 
 //MARK: State packet
@@ -1138,7 +1295,16 @@ std::string Match::buildStateBinary(uint32_t tick, uint32_t lastSeq,
 // -------------------------------------------------------------------------
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    explicit Session(tcp::socket socket) : ws_(std::move(socket)) {}
+    explicit Session(tcp::socket socket) : ws_(std::move(socket)) {
+        // Read the peer address once, here, while the socket is certainly open.
+        // Asking later (at Accept, after two async hops) can fail on a connection
+        // that has already gone, and this is the only identity E2's per-address
+        // creation budget has. Errors leave it empty, which that budget treats as
+        // "unknown address" rather than as everyone sharing one bucket.
+        boost::system::error_code ec;
+        const auto ep = ws_.next_layer().remote_endpoint(ec);
+        if (!ec) remoteAddr_ = ep.address().to_string();
+    }
 
     void Start() {
         // Read the HTTP upgrade request ourselves (instead of letting
@@ -1184,6 +1350,7 @@ public:
         body += ",\"active\":"  + ji(t.active);
         body += ",\"players\":" + ji(t.players);
         body += ",\"maxMatches\":" + ji(MATCH_MAX_CONCURRENT);
+        body += ",\"maxActive\":"  + ji(g_maxActiveMatches);
         body += ",\"maxPlayers\":" + ji(GAMESPACE_NUMBER_OF_PLAYERS);
         // The deployed-binary question: these must match the client's netbin.h.
         body += ",\"stateTag\":"   + ji((int)nb::STATE_BIN_VERSION);
@@ -1210,83 +1377,38 @@ public:
         ws_.async_accept(req_, [self = shared_from_this()](beast::error_code ec) {
             if (ec) { std::cerr << "accept: " << ec.message() << "\n"; return; }
 
-            // Assign player slot - acquire locks in a consistent order:
-            // always gameMutex before clientMutex to match SimulationLoop.
             // ?match=CODE on the upgrade URL picks the room - that is how an
             // invite link works. Unknown or absent lands in the default room, so
             // every deployed client keeps working exactly as before.
-            std::string targetCode =
+            const std::string targetCode =
                 clampName(QueryParam(std::string(self->req_.target()), "match"));
-            auto target = targetCode.empty() ? nullptr : g_registry.Find(targetCode);
-            if (!target) { target = g_defaultMatch; targetCode = g_defaultCode; }
+            // ?cid=UUID is the client's own install id (D1), carried on the
+            // upgrade URL for the same reason ?key= is: a WebSocket claims its
+            // slot here, during the handshake, long before any hello could
+            // arrive. Absent for an older client, which simply never resumes
+            // anything.
+            const std::string cid =
+                clampClientId(QueryParam(std::string(self->req_.target()), "cid"));
 
-            int playerId = -1;
-            {
-                std::lock_guard<std::mutex> gg(target->gameMutex);
-                std::lock_guard<std::mutex> gc(target->clientMutex);
-                // Reap eagerly, not just on the periodic tick: a stale UDP slot
-                // (e.g. a client whose network identity changed across a sleep)
-                // must not be able to push this new WS client above it.
-                target->ReapIdleUdpClients();
-                // ?cid=UUID is the client's own install id (D1), carried on the
-                // upgrade URL for the same reason ?key= is: a WebSocket claims
-                // its slot here, during the handshake, long before any hello
-                // could arrive. Absent for an older client, which simply never
-                // resumes anything.
-                const std::string cid =
-                    clampClientId(QueryParam(std::string(self->req_.target()), "cid"));
-                // Resume the slot this player is holding, or take a fresh one and
-                // reset it. One call: see Match::SeatPlayer.
-                const Match::Seat seat = target->SeatPlayer(cid, std::string());
-                playerId = seat.slot;
-                if (playerId != -1) {
-                    self->connId_ = nextConnId++;
-                    ConnectedClient c;
-                    c.playerId  = playerId;
-                    c.clientId  = cid;
-                    c.transport = Transport::WS;
-                    c.session   = self;
-                    target->clients[self->connId_] = c;
-                    { std::lock_guard<std::mutex> cl(g_connMutex);
-                      g_connMatch[self->connId_] = targetCode; }
-                    target->connectedCount.store((int)target->clients.size());
-                    // Note: no bot-slot refresh here. Bots exist only during a match
-                    // (set at match start + reconciled each sim tick), so the lobby
-                    // stays bot-free and a mid-match join's slot yields on the next
-                    // tick's reconcile (see SimulationLoop). Marking bots here would
-                    // also invert the gameMutex->clientMutex order we hold above.
-                    std::cout << "Client connected -> player slot " << playerId
-                              << " in " << targetCode
-                          << ". Active: " << target->clients.size() << "\n";
-                }
-            }
+            self->connId_ = nextConnId++;
+            ConnectedClient c;
+            c.clientId   = cid;
+            c.transport  = Transport::WS;
+            c.session    = self;
+            // Who this connection is, for the per-address creation budget. Taken
+            // from the socket, never from anything the client said.
+            c.remoteAddr = self->remoteAddr_;
 
-            if (playerId == -1) {
-                // Server full (every slot claimed - typical mid-match with no bot
-                // filler). Tell the client so it can show "match in progress"
-                // instead of a silent connect failure, then drop the socket.
-                // Deliberately NOT the synchronous ws_.close(): that performs a
-                // blocking WS closing handshake, and doing it while gameMutex was
-                // held used to freeze the whole match - SimulationLoop takes the
-                // same mutex every tick, so the sim thread stalled for however
-                // long the handshake took, on every retry. Send() posts onto this
-                // session's strand and keeps `self` alive via the async_write
-                // chain until the frame goes out (or errors); the socket then
-                // closes non-blocking when the Session's last reference drops.
-                std::cout << "Server full, rejecting connection\n";
-                self->Send(buildFull());
-                return;
-            }
+            // Seating, the welcome and the leaderboard all live in SeatOrPark,
+            // shared with the UDP path. A full room no longer ends the
+            // connection: worst case this client is parked with no slot and told
+            // so, and it stays here browsing until one frees up.
+            SeatOrPark(self->connId_, c, targetCode);
 
-            // Send welcome with the assigned slot + the current platform layout
-            // (empty in the lobby; the client renders from it instead of running
-            // generate()). Re-sent to everyone when a match (re)starts.
-            self->Send(target->buildWelcome(playerId));
-            // All-time table, right behind the welcome. The client's LEADERBOARD
-            // modal lives on the title screen, so a client that has just joined and
-            // never seen a match end still needs it.
-            self->Send(buildLeaderboard());
-
+            // Read() UNCONDITIONALLY, even unseated. This is E2's actual change
+            // on this path: the old code returned here without reading, which is
+            // what dropped the socket, which is what left the client re-helloing
+            // into a server that was no longer listening to it.
             self->Read();
         });
     }
@@ -1304,7 +1426,8 @@ private:
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
     http::request<http::string_body> req_; // the upgrade request (read in Start, accepted in Accept)
-    uint64_t connId_ = 0;   // this Session's key into `clients` (set in Start)
+    uint64_t connId_ = 0;   // this Session's key into `clients` (set in Accept)
+    std::string remoteAddr_; // peer IP, captured at construction (see the ctor)
 
     // Outbound queue - strand-only state (touched exclusively from handlers
     // running on this session's strand, so no mutex).
@@ -1368,8 +1491,10 @@ private:
                             m->connectedCount.store((int)m->clients.size());
                         }
                     }
-                    { std::lock_guard<std::mutex> cl(g_connMutex);
-                      g_connMatch.erase(self->connId_); }
+                    // Clears the unseated record too: a client parked because the
+                    // server was full still has one, and it must not outlive the
+                    // socket it was reachable through.
+                    ForgetConn(self->connId_);
                     return;
                 }
 
@@ -1441,12 +1566,74 @@ static std::shared_ptr<Match> MatchForConn(uint64_t connId) {
     return code.empty() ? nullptr : g_registry.Find(code);
 }
 
+// Park a connection with no slot. It keeps its transport (session or UDP
+// endpoint) so we can still talk to it, loses its playerId because it has none,
+// and starts its idle clock now - an unseated UDP peer is reaped on the same
+// silence rule a seated one is (see SweepUnseated).
+static void ParkConn(uint64_t connId, ConnectedClient rec) {
+    rec.playerId    = -1;
+    rec.hasInput    = false;
+    rec.lastInput   = PlayerInput{};
+    rec.firePending = false;
+    rec.lastSeenSec = NowSec();
+    std::lock_guard<std::mutex> lk(g_connMutex);
+    g_unseated[connId] = std::move(rec);
+    g_connMatch[connId].clear();
+}
+
+// Drop every trace of a connection: its seat is the caller's business, this is
+// the routing side. Called from both transports' disconnect paths, so a UDP
+// endpoint can be claimed again and an unseated record cannot outlive its
+// socket.
+static void ForgetConn(uint64_t connId) {
+    std::lock_guard<std::mutex> lk(g_connMutex);
+    auto it = g_unseated.find(connId);
+    if (it != g_unseated.end() && it->second.transport == Transport::UDP)
+        g_udpIndex.erase(it->second.udpEndpoint);
+    g_connMatch.erase(connId);
+    g_unseated.erase(connId);
+}
+
+// Drop unseated UDP peers that have gone quiet, once a second from the driver
+// loop. A parked client is not silent - it is re-sending hello every 0.5s
+// looking for a seat - so silence here means the same thing it means in a lobby.
+// WS connections are left alone: their socket closing is an event, and Read()'s
+// error path already calls ForgetConn.
+//
+// Without this, being full would leak: every spoof-proof stranger that arrived
+// while the server had no room would sit in g_unseated and g_udpIndex forever.
+static void SweepUnseated() {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_connMutex);
+    for (auto it = g_unseated.begin(); it != g_unseated.end(); ) {
+        if (it->second.transport == Transport::UDP &&
+            now - it->second.lastSeenSec > UDP_CLIENT_TIMEOUT_LOBBY) {
+            g_udpIndex.erase(it->second.udpEndpoint);
+            g_connMatch.erase(it->first);
+            it = g_unseated.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 // Take a connection out of whatever match holds it, returning its record so the
 // caller can put it somewhere else. The slot it vacates is left to the match's
 // own per-tick reconcile, exactly as a disconnect is.
+//
+// An UNSEATED connection detaches too, from g_unseated - that is what lets
+// someone parked by a full server join a room the moment one frees up, using
+// the same join path as everybody else.
 static bool DetachConn(uint64_t connId, ConnectedClient& out) {
     auto m = MatchForConn(connId);
-    if (!m) return false;
+    if (!m) {
+        std::lock_guard<std::mutex> lk(g_connMutex);
+        auto it = g_unseated.find(connId);
+        if (it == g_unseated.end()) return false;
+        out = it->second;
+        g_unseated.erase(it);
+        return true;
+    }
     {
         std::lock_guard<std::mutex> lock(m->clientMutex);
         auto it = m->clients.find(connId);
@@ -1470,7 +1657,7 @@ static bool AttachConn(uint64_t connId, const std::string& code,
     auto m = g_registry.Find(code);
     if (!m) { why = "notfound"; return false; }
 
-    int slot = -1;
+    int slot = -1, seated = 0;
     {
         std::lock_guard<std::mutex> gg(m->gameMutex);
         std::lock_guard<std::mutex> gc(m->clientMutex);
@@ -1484,15 +1671,31 @@ static bool AttachConn(uint64_t connId, const std::string& code,
             rec.hasInput  = false;      // never carry aim or a fire latch across rooms
             rec.lastInput = PlayerInput{};
             rec.firePending = false;
-            rec.nameDirty = true;       // re-apply our name onto the new slot
+            // Re-apply our name onto the new slot - but only if we have one. A
+            // connection that has not named itself yet (a fresh WS client, which
+            // sends its name only after the welcome tells it its slot) would
+            // otherwise blank the slot's "PLAYER N" default.
+            rec.nameDirty = !rec.name.empty();
             rec.lastSeenSec = NowSec(); // arrive alive, not with the old room's stamp
             m->clients[connId] = rec;
             m->connectedCount.store((int)m->clients.size());
+            seated = (int)m->clients.size();
         }
     }
     if (slot == -1) { why = "full"; return false; }
+    // The one place a connection takes a seat, so the one place worth logging it
+    // - connect and room-hop both land here.
+    std::cout << "conn " << connId << " ("
+              << (rec.transport == Transport::UDP ? "udp" : "ws")
+              << ") -> slot " << slot << " in " << code
+              << ". Active there: " << seated << "\n";
 
-    { std::lock_guard<std::mutex> lk(g_connMutex); g_connMatch[connId] = code; }
+    // Seated, so it is no longer unseated - the two are exclusive by
+    // construction, and doing it here rather than at each call site means a new
+    // path cannot leave a connection in both places.
+    { std::lock_guard<std::mutex> lk(g_connMutex);
+      g_connMatch[connId] = code;
+      g_unseated.erase(connId); }
     // Off every match lock, like every other send site.
     SendToClient(rec, m->welcomeFor(rec));
     SendToClient(rec, buildLeaderboard());
@@ -1503,18 +1706,28 @@ static bool AttachConn(uint64_t connId, const std::string& code,
 // Private rooms need their join code; a wrong one is refused the same way a
 // missing room is, so probing cannot distinguish "no such room" from "wrong code"
 // by timing or reply.
+//
+// `outWhy`, when given, receives the refusal token (nullptr means it worked).
+// Only the client-driven `join` verb wants it, to charge a wrong guess against
+// E1's bad-code budget - the moves the SERVER initiates (create, quick, leave)
+// pass codes it just produced itself and must not be charged for them.
 static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
-                            const std::string& code, const std::string& joinCode) {
+                            const std::string& code, const std::string& joinCode,
+                            const char** outWhy = nullptr) {
     ConnectedClient rec;
     MatchEntry entry;
     const char* why = "unknown";
+    if (outWhy) *outWhy = nullptr;
 
     // Refuse to the sink the CALLER already handed us, rather than looking the
     // connection up again: when that lookup missed it sent to a
     // default-constructed record - no session, no endpoint - so the refusal went
     // nowhere and the client just waited. Silence is the one thing a refusal must
     // never be.
-    auto refuse = [&](const char* token) { SendToClient(caller, buildJoinFail(token)); };
+    auto refuse = [&](const char* token) {
+        if (outWhy) *outWhy = token;
+        SendToClient(caller, buildJoinFail(token));
+    };
 
     if (!g_registry.FindEntry(code, entry)) { refuse("notfound"); return; }
     if (entry.isPrivate && entry.joinCode != joinCode) { refuse("badcode"); return; }
@@ -1531,15 +1744,244 @@ static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
     }
 
     if (!DetachConn(connId, rec)) { refuse("notfound"); return; }
-    if (!AttachConn(connId, code, rec, why)) {
-        // Put them back where they were rather than stranding them nowhere.
+    if (!AttachConn(connId, code, rec, why)) {   // logs the seat itself
+        // Put them back where they were rather than stranding them nowhere -
+        // and if even the default room has no seat, park them unseated. What we
+        // must never do is leave a live connection in neither place, which is
+        // what the old "try the default and hope" line did on a full server.
         const char* ignored = "";
-        AttachConn(connId, g_defaultCode, rec, ignored);
+        if (!AttachConn(connId, g_defaultCode, rec, ignored)) ParkConn(connId, rec);
         refuse(why);
         return;
     }
-    std::cout << "conn " << connId << " -> match " << code << "\n";
 }
+
+// Seat a brand-new (or retrying) connection, without ever refusing the
+// connection itself. Three outcomes, all of which leave a client that works:
+//
+//   - the room it asked for had a seat  -> welcome, nothing else said;
+//   - that room was full, the default had one -> welcome, PLUS a `full` refusal,
+//     so the player learns their invite did not land instead of silently
+//     finding themselves somewhere they did not choose;
+//   - nothing free anywhere -> parked unseated with `server_full`. Still
+//     connected, still able to list and join, and its next hello retries.
+//
+// That last case is the whole point of E2. It used to be a "full" packet and a
+// dropped socket, which over UDP is indistinguishable from an unreachable server
+// and left the client re-helloing into the void forever.
+//
+// Shared by both transports' connect paths and by the unseated retry, so "what
+// happens when a room is full" has exactly one answer.
+static void SeatOrPark(uint64_t connId, const ConnectedClient& rec,
+                       const std::string& wantCode) {
+    const char* why = "";
+    std::string code = wantCode;
+    if (code.empty() || !g_registry.Find(code)) code = g_defaultCode;
+
+    if (AttachConn(connId, code, rec, why)) return;
+    if (code != g_defaultCode && AttachConn(connId, g_defaultCode, rec, why)) {
+        SendToClient(rec, buildJoinFail("full"));
+        return;
+    }
+    ParkConn(connId, rec);
+    SendToClient(rec, buildJoinFail("server_full"));
+}
+
+//MARK: Abuse budgets (E1, E2)
+// -------------------------------------------------------------------------
+// The cookie above proves an address is real. These budgets bound what a real
+// address can then make the server do - because "the packets come from a machine
+// that exists" is not the same as "the packets are in good faith".
+//
+// Most are keyed by CONNECTION, not by match: a connection can hop rooms, and a
+// budget you can reset by joining somewhere else is not a budget. They live here
+// rather than in ConnectedClient because that record is copied out from under a
+// lock at every call site (and copied wholesale between matches on a move), so a
+// counter living in it would be incremented on a temporary and thrown away.
+//
+// Room CREATION is the exception: it is keyed by source address, because the
+// abuse there is one machine opening connection after connection and minting a
+// room on each until the registry is full. See g_addrBudgets.
+
+// A token bucket. `burst` tokens to spend, refilled at `perSec`, one per
+// request. Buckets rather than flat intervals throughout, because everything
+// here is something a person does in short bursts and a script does forever: the
+// burst is what keeps the UI honest, the refill rate is what bounds the script.
+struct Bucket {
+    double tokens = 0.0;
+    double filled = 0.0;   // when `tokens` was last topped up
+};
+
+// Spend one token if there is one. A fresh Bucket has filled == 0, so `now - 0`
+// is however long this process has been up - a huge refill that the clamp turns
+// into a full bucket. Exactly right for something we have never seen, and it
+// means no special first-request case to get wrong.
+static bool TakeToken(Bucket& b, double now, double burst, double perSec) {
+    b.tokens = std::min(burst, b.tokens + (now - b.filled) * perSec);
+    b.filled = now;
+    if (b.tokens < 1.0) return false;
+    b.tokens -= 1.0;
+    return true;
+}
+
+struct ConnBudget {
+    Bucket list;                 // match-list replies
+    Bucket move;                 // join / quick / leave - anything that re-seats us
+    double joinWindow   = 0.0;   // start of the minute the bad joins below are counted in
+    int    badJoins     = 0;
+    double touchedSec   = 0.0;   // for the sweep; see PruneBudgets
+};
+static std::map<uint64_t, ConnBudget> g_budgets;
+
+struct AddrBudget {
+    Bucket create;
+    double touchedSec = 0.0;
+};
+static std::map<std::string, AddrBudget> g_addrBudgets;
+
+static std::mutex g_budgetMutex;   // guards both maps
+
+// One match list per second per connection, sustained (E1). The reply is the
+// largest thing an authenticated client can ask for on demand (B1 caps it at
+// ~1.2 KB), so answering every request is exactly the amplification the cookie
+// just closed, re-opened one handshake later. Three tokens covers a person
+// opening the browser and paging twice inside a second.
+const double LIST_REFILL_PER_SEC = 1.0;
+const double LIST_BURST          = 3.0;
+
+// Room moves per second per connection (E2). Every successful move costs a
+// welcome plus a leaderboard - the two biggest packets the server sends - and
+// churns a roster that other people are looking at. Five covers a player
+// thumbing down the browser trying rooms; it does not cover a script.
+const double MOVE_REFILL_PER_SEC = 1.0;
+const double MOVE_BURST          = 5.0;
+
+// Rooms one ADDRESS may mint (E2). This is the "anyone can make unlimited
+// matches" abuse: the registry holds MATCH_MAX_CONCURRENT rooms, so without this
+// one machine fills it and nobody else can create anything until the reaper
+// catches up. Three in hand and one back every two minutes is generous for a
+// person (who makes a room, plays in it, and makes another when that one ends)
+// and useless for a script, which needs 24 minutes to monopolise a registry that
+// reaps empty rooms in a fraction of that.
+//
+// An address is a COARSE identity, and this is the one place that matters: a LAN
+// party, an office, or a household all arrive from one NAT and share one bucket,
+// so the fourth person to try to make a room would be refused for something
+// somebody else did. That is a real scenario, not a hypothetical, which is why
+// PLATFORMZ_MAX_ROOMS_PER_ADDR exists - raise it, or set it to 0 to turn the
+// budget off entirely on a server whose players you know.
+const double CREATE_REFILL_PER_SEC     = 1.0 / 120.0;
+const int    CREATE_BURST_DEFAULT      = 3;
+int          g_maxRoomsPerAddr         = CREATE_BURST_DEFAULT;   // 0 = no budget
+
+// Bad join codes per minute (E1). The code space is 4 characters, which a script
+// walks in seconds if every guess gets an answer.
+const int    BAD_JOIN_PER_MINUTE   = 5;
+const double BAD_JOIN_WINDOW_SEC   = 60.0;
+
+// Connection ids only ever go up and addresses come and go, so these maps would
+// otherwise grow for the life of the process - slowly, but a server meant to run
+// for months has no "slowly" that is fine. Sweep entries nothing has touched in
+// a while, and only when a map is big enough for the walk to be worth it.
+static void PruneBudgets(double now) {   // caller holds g_budgetMutex
+    if (g_budgets.size() >= 512) {
+        for (auto it = g_budgets.begin(); it != g_budgets.end(); ) {
+            if (now - it->second.touchedSec > 120.0) it = g_budgets.erase(it);
+            else ++it;
+        }
+    }
+    // Addresses are swept on a much longer horizon than connections, because the
+    // create bucket refills over minutes: drop an address at two minutes and its
+    // budget would come back full every time it reconnected, which is exactly
+    // what it is there to prevent.
+    if (g_addrBudgets.size() >= 512) {
+        for (auto it = g_addrBudgets.begin(); it != g_addrBudgets.end(); ) {
+            if (now - it->second.touchedSec > g_maxRoomsPerAddr / CREATE_REFILL_PER_SEC)
+                it = g_addrBudgets.erase(it);
+            else ++it;
+        }
+    }
+}
+
+// True if this connection's `list` should be answered. False means drop it on
+// the floor SILENTLY - not "too fast, try later", because an error reply is
+// still a reply and a rate limiter that answers is not a rate limiter.
+static bool AllowListReply(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    PruneBudgets(now);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    return TakeToken(b.list, now, LIST_BURST, LIST_REFILL_PER_SEC);
+}
+
+// True if this connection may be re-seated right now (join / quick / leave).
+// Unlike the list, a refusal here IS answered - the player pressed a button and
+// is owed a reason - which is affordable because a `joinfail` is ~40 bytes
+// against the welcome it is declining to send.
+static bool AllowMove(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    PruneBudgets(now);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    return TakeToken(b.move, now, MOVE_BURST, MOVE_REFILL_PER_SEC);
+}
+
+// True if this address may mint another room. An empty address (we could not
+// read the peer's, which should not happen) is allowed through rather than
+// sharing one bucket with every other unknown - a budget that punishes a
+// bookkeeping failure would be a strange thing to debug.
+static bool AllowCreate(const std::string& addr) {
+    if (g_maxRoomsPerAddr <= 0) return true;   // budget turned off by the operator
+    if (addr.empty()) return true;
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    PruneBudgets(now);
+    AddrBudget& b = g_addrBudgets[addr];
+    b.touchedSec = now;
+    return TakeToken(b.create, now, (double)g_maxRoomsPerAddr, CREATE_REFILL_PER_SEC);
+}
+
+// True if this connection may try a join code at all.
+//
+// Note what this gates: EVERY attempt once the budget is spent, not just the
+// wrong ones. It has to. Whether a code is a guess is only knowable after the
+// registry lookup that answers the guess - so a limiter that let "good" codes
+// through would be a limiter that answers every guess, which is no limiter at
+// all. The cost is real and deliberate: mistype a code five times and you wait
+// out the minute before the right one is accepted. That is the same bargain
+// every login lockout makes, and the window is 60 seconds, not an hour.
+static bool AllowJoinAttempt(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    PruneBudgets(now);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    if (now - b.joinWindow >= BAD_JOIN_WINDOW_SEC) { b.joinWindow = now; b.badJoins = 0; }
+    return b.badJoins < BAD_JOIN_PER_MINUTE;
+}
+
+// Charge one failed guess. Only wrong/unknown codes are charged: hopping
+// between rooms, or bouncing repeatedly off one that is full or already playing,
+// means you named a room that exists - normal behaviour while waiting for a
+// seat, and nothing a brute-forcer gets to do.
+static void NoteBadJoin(uint64_t connId) {
+    const double now = NowSec();
+    std::lock_guard<std::mutex> lk(g_budgetMutex);
+    ConnBudget& b = g_budgets[connId];
+    b.touchedSec = now;
+    if (now - b.joinWindow >= BAD_JOIN_WINDOW_SEC) { b.joinWindow = now; b.badJoins = 0; }
+    b.badJoins++;
+}
+
+// Nothing erases a connection entry on disconnect on purpose. Connection ids are
+// never reused, so a returning player always arrives on a fresh one and can
+// never inherit a spent budget - which leaves the sweep above as the only
+// cleanup anyone has to remember, instead of one more thing every disconnect
+// path (WS close, goodbye, idle reap, room move) would have to call and could
+// forget. The address entries deliberately DO survive a reconnect; that is the
+// entire point of keying them by address.
 
 //MARK: Directory
 // The verbs that operate on the ROOM LIST rather than on a match: what exists,
@@ -1623,11 +2065,31 @@ static std::string buildJoinFail(const char* why) {
 static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
                                   const std::string& msg) {
     if (msg.find("\"type\":\"list\"") != std::string::npos) {
+        // Budgeted (E1): a small burst, then one list a second, and a request
+        // over budget is dropped without a word. The browser asks once when it
+        // opens and once per page, so a real client never notices; a script
+        // asking 10,000 times a second gets one reply a second.
+        if (!AllowListReply(connId)) return true;
         SendToClient(c, buildMatchList((int)parseUInt(msg, "cur", 0)));
         return true;
     }
 
     if (msg.find("\"type\":\"create\"") != std::string::npos) {
+        // Budgeted per ADDRESS, not per connection (E2): one machine opening a
+        // fresh connection for each room is exactly the abuse, so a per-connection
+        // budget would be free to sidestep. Refused as server_full, which is what
+        // it amounts to from where the player is standing - there is no room for
+        // them to make - and is already a sentence the client knows how to say.
+        if (!AllowCreate(c.remoteAddr)) {
+            SendToClient(c, buildJoinFail("server_full"));
+            std::cout << "Create refused: address " << c.remoteAddr
+                      << " is over its budget\n";
+            return true;
+        }
+        // clampName, the same one player names go through: printable ASCII only,
+        // capped at PLAYER_NAME_MAX_CHARS. A room name is rendered in everybody's
+        // browser, so control characters and unbounded length are not somebody
+        // else's problem.
         const std::string name    = clampName(parseString(msg, "n"));
         const std::string preset  = clampName(parseString(msg, "pre"));
         const std::string code    = clampName(parseString(msg, "code"));
@@ -1679,11 +2141,36 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
     if (msg.find("\"type\":\"join\"") != std::string::npos) {
         const std::string want = clampName(parseString(msg, "m"));
         const std::string code = clampName(parseString(msg, "code"));
-        MoveConnToMatch(connId, c, want, code);
+        // Two separate gates, both refusing with rate_limited. AllowMove is E2's
+        // joins-per-second: every accepted move costs a welcome and a
+        // leaderboard and churns a roster other people are watching.
+        // AllowJoinAttempt is E1's brute-force budget, below.
+        if (!AllowMove(connId)) {
+            SendToClient(c, buildJoinFail("rate_limited"));
+            return true;
+        }
+        // A room code is 4 characters. Answering every guess turns that into a
+        // few seconds of scripting, so a connection gets BAD_JOIN_PER_MINUTE
+        // wrong ones and is then told to wait - checked before the registry is
+        // touched, so a refused attempt reveals nothing about what exists.
+        if (!AllowJoinAttempt(connId)) {
+            SendToClient(c, buildJoinFail("rate_limited"));
+            return true;
+        }
+        const char* why = nullptr;
+        MoveConnToMatch(connId, c, want, code, &why);
+        // Only a guess counts. "Full" or "in progress" means they named a real
+        // room and simply could not get in, which is a normal thing to do
+        // repeatedly while waiting for a seat.
+        if (why && (std::strcmp(why, "notfound") == 0 || std::strcmp(why, "badcode") == 0))
+            NoteBadJoin(connId);
         return true;
     }
 
     if (msg.find("\"type\":\"quick\"") != std::string::npos) {
+        // Same move budget as `join` (E2) - QUICK MATCH re-seats you exactly the
+        // same way, and would otherwise be the cheap way around it.
+        if (!AllowMove(connId)) { SendToClient(c, buildJoinFail("rate_limited")); return true; }
         // Fullest joinable OFFICIAL lobby, else make one. One round trip, and the
         // "fullest" rule packs players together instead of scattering one each
         // across empty rooms.
@@ -1715,6 +2202,10 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
     }
 
     if (msg.find("\"type\":\"leave\"") != std::string::npos) {
+        // Leaving re-seats you too, so it spends from the same bucket (E2).
+        // Join-leave-join-leave is the cheapest roster churn there is, and
+        // exempting the leave half would make the join half's budget meaningless.
+        if (!AllowMove(connId)) { SendToClient(c, buildJoinFail("rate_limited")); return true; }
         // Back to the default room, which is the closest thing to a lobby until
         // the client grows a browser screen (C2/C3). Leaving to NO match would be
         // the eventual shape, but a client with nowhere to be would simply stop
@@ -1779,9 +2270,14 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         if (it != clients.end()) {
             std::cout << "Player " << it->second.playerId << " said goodbye. Active: "
                       << (clients.size() - 1) << "\n";
-            if (it->second.transport == Transport::UDP) {
+            {
                 std::lock_guard<std::mutex> cl(g_connMutex);
-                g_udpIndex.erase(it->second.udpEndpoint);
+                if (it->second.transport == Transport::UDP)
+                    g_udpIndex.erase(it->second.udpEndpoint);
+                // Also drop the routing entry, which used to be left behind: ids
+                // are never reused, so every deliberate quit leaked one map node
+                // for the life of the process.
+                g_connMatch.erase(connId);
             }
             clients.erase(it);
             connectedCount.store((int)clients.size());
@@ -1929,8 +2425,57 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
 // a broadcast. A packet for a room that has since been reaped falls back to the
 // default room rather than being dropped - the client is real and still
 // connected, it just has nowhere to be.
+// Everything an unseated connection can do (E2). It holds no player slot, so the
+// match verbs - input, start, name, endmatch - have no body to act on and are
+// dropped. Two things do reach it:
+//
+//   - the directory (list/join/create/quick), which is how it gets out of here;
+//   - `hello`, which is the client's existing handshake retry and doubles as
+//     "is there a seat yet?". That is the whole recovery path: the client is
+//     already re-sending hello every 0.5s while it has no slot, so a seat
+//     freeing up is picked up within half a second with no new client code.
+//
+// Returns false only if this connection is not parked here at all, which lets
+// the caller fall through to its old behaviour.
+static bool HandleUnseatedMessage(uint64_t connId, const std::string& msg) {
+    ConnectedClient sink;
+    {
+        std::lock_guard<std::mutex> lk(g_connMutex);
+        auto it = g_unseated.find(connId);
+        if (it == g_unseated.end()) return false;
+        it->second.lastSeenSec = NowSec();   // liveness, for SweepUnseated
+        sink = it->second;
+    }
+
+    if (HandleDirectoryMessage(connId, sink, msg)) return true;
+
+    if (msg.find("\"type\":\"hello\"") != std::string::npos) {
+        // A name may ride the hello exactly as it does on a first one. Keep it
+        // even if we stay unseated - ParkConn writes the record back, so the
+        // name is already right whenever a seat does appear.
+        const std::string nm = clampName(parseString(msg, "name"));
+        if (!nm.empty()) { sink.name = nm; sink.nameDirty = true; }
+        SeatOrPark(connId, sink, clampName(parseString(msg, "match")));
+        return true;
+    }
+
+    if (msg.find("\"type\":\"goodbye\"") != std::string::npos) {
+        ForgetConn(connId);
+        return true;
+    }
+
+    // Anything else: swallowed. Returning true rather than falling through is
+    // deliberate - without a slot there is no match this packet could belong to,
+    // and routing it to the default room would have it looked up in a client map
+    // it is not in and silently dropped there instead, which is the same outcome
+    // by a longer road.
+    return true;
+}
+
 static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     auto m = MatchForConn(connId);
+    // No room: parked with no seat (E2). Its own small dispatch, above.
+    if (!m && HandleUnseatedMessage(connId, msg)) return;
     if (!m) m = g_defaultMatch;
 
     // Stamp liveness HERE, because only here do we know which match holds the
@@ -2094,7 +2639,19 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         // Consume a pending start/restart request: build a fresh world and
         // reset the existing player slots (ids stay stable so connected
         // clients keep their slot mapping across a restart), then begin.
-        if (startRequested.exchange(false)) {
+        // Capacity hold (E2). A start is DEFERRED, never dropped: leave
+        // startRequested set and the room begins the moment a live match ends.
+        // Off by default (see MATCH_MAX_ACTIVE_DEFAULT), so at the shipped
+        // setting this test is a single integer compare that always passes.
+        if (startRequested.load() && !ActiveMatchBudgetAllows(this)) {
+            if (!startHeld) {
+                startHeld = true;
+                std::cout << "Match " << matchCode << " start held: "
+                          << g_maxActiveMatches << " live matches already "
+                          << "(PLATFORMZ_MAX_ACTIVE)\n";
+            }
+        } else if (startRequested.exchange(false)) {
+            startHeld = false;
             // Compact the connected clients into the lowest slots, in their
             // current slot order (order-preserving, so the host - lowest
             // slot - stays the host). This closes the hole a mid-session
@@ -2600,6 +3157,7 @@ void SimulationLoop() {
             ++g_uptimeSeconds;
             for (const std::string& code : g_registry.Reap(now))
                 std::cout << "Match " << code << " reaped\n";
+            SweepUnseated();
             ReportHeartbeat(g_defaultMatch->serverTick.load(), g_uptimeSeconds.load());
             if (PerfEnabled() && ++perfBeat >= PERF_REPORT_SECONDS) {
                 perfBeat = 0;
@@ -2681,19 +3239,41 @@ private:
             if (idx != g_udpIndex.end()) { connId = idx->second; known = true; }
         }
         if (known) { HandleClientMessage(connId, msg); return; }
-        // Unknown endpoint: only a hello registers a slot; ignore stray datagrams.
+        // Unknown endpoint: only a hello is looked at, and even that one gets
+        // nothing but a cookie until it proves it can receive replies. Every
+        // other verb - list, join, create, quick - is dropped unread, which is
+        // E1 scope item 2: nothing large ever leaves here for an address we have
+        // not confirmed is real. That falls out of this early return, so do not
+        // "helpfully" start handling a directory request from a stranger.
         if (msg.find("\"type\":\"hello\"") != std::string::npos) RegisterPeer(from, msg);
     }
 
     void RegisterPeer(const udp::endpoint& from, const std::string& helloMsg) {
         // Join gate: a hello without the right key claims nothing and gets NO
-        // reply - silence also kills the reflection trick (spoofed hellos can't
-        // make us mail welcomes at a victim address the prankster picked).
+        // reply - not even a cookie. To a port scanner a silent port looks like
+        // nothing worth probing.
         if (!JoinKeyOk(parseString(helloMsg, "key"))) {
             std::cout << "UDP join rejected (bad key)\n";
             return;
         }
-        int playerId = -1;
+        // Return-routability check (E1). A first hello carries no cookie, so it
+        // gets one back and nothing else; the client echoes it and arrives here
+        // again, this time with something only an endpoint that actually
+        // RECEIVED our reply could know. A spoofer's cookie went to the address
+        // they forged, so they never get past this line - and the 51 bytes they
+        // did extract cost them more to send than they got back.
+        //
+        // A stale cookie (older than two buckets) lands here too and is simply
+        // re-challenged, which is also what a client coming back after a long
+        // pause looks like. Nothing to distinguish, nothing to log.
+        const std::string cookie = parseString(helloMsg, "c");
+        if (!CookieOk(cookie, from)) {
+            ConnectedClient probe;
+            probe.transport   = Transport::UDP;
+            probe.udpEndpoint = from;
+            SendToClient(probe, buildChallenge(MintCookie(from, CookieBucketNow())));
+            return;
+        }
         // A hello may name the room it wants (that is how an invite link works over
         // UDP, mirroring ?match= on the WebSocket side). Unknown or absent lands
         // in the default room, so every existing client keeps working untouched.
@@ -2701,9 +3281,14 @@ private:
         auto target = targetCode.empty() ? nullptr : g_registry.Find(targetCode);
         if (!target) { target = g_defaultMatch; targetCode = g_defaultCode; }
 
-        ConnectedClient sink;
+        // "cid" is the client's install id (D1). This is the path that matters
+        // most for it: UDP has no disconnect event, so a client whose NAT mapping
+        // changed across a laptop sleep arrives here as a total stranger on a new
+        // endpoint - the id is the only thing tying it to the body still drifting
+        // in the arena.
+        const std::string cid = clampClientId(parseString(helloMsg, "cid"));
         {
-            // Lock order gameMutex->clientMutex, matching Session::Start.
+            // Lock order gameMutex->clientMutex, matching Session::Accept.
             std::lock_guard<std::mutex> gg(target->gameMutex);
             std::lock_guard<std::mutex> gc(target->clientMutex);
             // Reap eagerly, not just on the periodic tick: a client reconnecting
@@ -2711,54 +3296,34 @@ private:
             // got a new NAT mapping) must reclaim its old slot immediately
             // rather than racing this tick's scheduled sweep and losing to it.
             target->ReapIdleUdpClients();
-            std::string nm0 = clampName(parseString(helloMsg, "name"));
-            // "cid" is the client's install id (D1). This is the path that
-            // matters most for it: UDP has no disconnect event, so a client whose
-            // NAT mapping changed across a laptop sleep arrives here as a total
-            // stranger on a new endpoint - the id is the only thing tying it to
-            // the body still drifting in the arena.
-            const std::string cid = clampClientId(parseString(helloMsg, "cid"));
-            // Before claiming: if this player's previous connection is still
-            // sitting on their slot but has gone quiet, let go of it.
+            // If this player's previous connection is still sitting on their slot
+            // but has gone quiet, let go of it. BEFORE the seating attempt below,
+            // and in the room they asked for: their own stale twin is a common
+            // reason that room looks full, and superseding it is what turns
+            // "sorry, full" back into "here is your body".
             target->SupersedeStaleTwin(cid, from);
-            const Match::Seat seat = target->SeatPlayer(cid, nm0);
-            playerId = seat.slot;
-            if (playerId != -1) {
-                uint64_t connId = nextConnId++;
-                ConnectedClient c;
-                c.playerId    = playerId;
-                c.clientId    = cid;
-                c.transport   = Transport::UDP;
-                c.udpEndpoint = from;
-                c.lastSeenSec = NowSec();
-                std::string nm = clampName(parseString(helloMsg, "name"));
-                if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
-                target->clients[connId] = c;
-                { std::lock_guard<std::mutex> cl(g_connMutex);
-                  g_udpIndex[from]  = connId;
-                  g_connMatch[connId] = targetCode; }
-                target->connectedCount.store((int)target->clients.size());
-                sink = c;
-                std::cout << "UDP client connected -> player slot " << playerId
-                          << ". Active: " << target->clients.size() << "\n";
-            }
         }
-        // Welcome/reject after releasing locks (mirrors Session::Start): both
-        // buildWelcome and SendToClient's UDP path only take clientMutex-free
-        // locks (welcomeStaticMutex / udpSendMutex), unlike gameMutex/clientMutex.
-        if (playerId != -1) {
-            SendToClient(sink, target->welcomeFor(sink));
-            SendToClient(sink, buildLeaderboard()); // see the WS join path
-        } else {
-            std::cout << "Server full, rejecting UDP client\n";
-            // Reply so the client can show "match in progress" instead of
-            // silently retrying forever with no feedback (the hello resend
-            // loop otherwise looks identical to an unreachable server).
-            ConnectedClient reject;
-            reject.transport   = Transport::UDP;
-            reject.udpEndpoint = from;
-            SendToClient(reject, buildFullBinary());
-        }
+
+        const uint64_t connId = nextConnId++;
+        ConnectedClient c;
+        c.clientId    = cid;
+        c.transport   = Transport::UDP;
+        c.udpEndpoint = from;
+        c.remoteAddr  = from.address().to_string();
+        c.lastSeenSec = NowSec();
+        const std::string nm = clampName(parseString(helloMsg, "name"));
+        if (!nm.empty()) { c.name = nm; c.nameDirty = true; }
+
+        // Route the endpoint FIRST, so whatever SeatOrPark decides, this peer's
+        // next datagram already finds its connection. The receive loop has a
+        // single outstanding read, so nothing can arrive in between.
+        { std::lock_guard<std::mutex> cl(g_connMutex); g_udpIndex[from] = connId; }
+
+        // Seated, bumped to the default room, or parked with no slot at all -
+        // one shared answer with the WS path, and none of them hang up. The old
+        // code's last branch sent a "full" packet and simply never registered the
+        // peer, so the client re-helloed into silence forever.
+        SeatOrPark(connId, c, targetCode);
     }
 };
 
@@ -2806,6 +3371,43 @@ int main() {
         std::cout << "Join key: REQUIRED (PLATFORMZ_KEY is set)\n";
     } else {
         std::cout << "Join key: none (open server; set PLATFORMZ_KEY to require one)\n";
+    }
+
+    // Live-match cap (E2). Off at the default - see MATCH_MAX_ACTIVE_DEFAULT in
+    // constants.h - and there for the day the transfer graph says otherwise.
+    if (const char* ma = std::getenv("PLATFORMZ_MAX_ACTIVE"); ma && *ma) {
+        const int v = std::atoi(ma);
+        if (v > 0 && v <= MATCH_MAX_CONCURRENT) g_maxActiveMatches = v;
+        else std::cerr << "PLATFORMZ_MAX_ACTIVE=" << ma << " is not in 1.."
+                       << MATCH_MAX_CONCURRENT << "; keeping "
+                       << g_maxActiveMatches << "\n";
+    }
+    // Rooms one source address may mint. Raise it (or 0 to disable) when your
+    // players share a NAT - see AllowCreate.
+    if (const char* rp = std::getenv("PLATFORMZ_MAX_ROOMS_PER_ADDR"); rp && *rp) {
+        const int v = std::atoi(rp);
+        if (v >= 0 && v <= MATCH_MAX_CONCURRENT) g_maxRoomsPerAddr = v;
+        else std::cerr << "PLATFORMZ_MAX_ROOMS_PER_ADDR=" << rp << " is not in 0.."
+                       << MATCH_MAX_CONCURRENT << "; keeping "
+                       << g_maxRoomsPerAddr << "\n";
+    }
+    std::cout << "Match caps: " << MATCH_MAX_CONCURRENT << " rooms, "
+              << g_maxActiveMatches << " live"
+              << (g_maxActiveMatches >= MATCH_MAX_CONCURRENT
+                    ? " (no live cap; set PLATFORMZ_MAX_ACTIVE to add one)" : "")
+              << ", " << (g_maxRoomsPerAddr > 0 ? std::to_string(g_maxRoomsPerAddr)
+                                                : std::string("unlimited"))
+              << " per address\n";
+
+    // The key behind every tag this server issues - today E1's UDP handshake
+    // cookie, later D3's identity token. Loaded before either listener exists,
+    // because the first datagram to arrive needs it.
+    {
+        std::string warn;
+        g_identitySecret = pz::LoadServerSecret(warn);
+        std::cout << "UDP handshake cookie: ON (HMAC-SHA256, "
+                  << (int)COOKIE_BUCKET_SEC << "s buckets)\n";
+        if (!warn.empty()) std::cout << "WARNING: " << warn << "\n";
     }
 
     // Cumulative all-time scores. The default path is RELATIVE, so a dev build

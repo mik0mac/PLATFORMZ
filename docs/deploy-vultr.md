@@ -197,6 +197,72 @@ All three join on connect instead of idling in whatever room the server parked
 you in. A code that has been reaped (rooms are destroyed 30 s after emptying)
 comes back as a refusal on the browser screen, not a hang.
 
+### The key and the room code are different things — keep them that way
+
+They look alike (a short string in a URL) and they are not remotely the same
+gate. Conflating them is the mistake this section exists to prevent.
+
+| | `PLATFORMZ_KEY` | A room's 4-char code |
+|---|---|---|
+| Answers | "may you speak to this process at all" | "may you enter this room" |
+| Checked at | WS upgrade / UDP hello, before anything else | `join`, after you are already connected |
+| On failure | **no reply at all** — the port looks dead | a `joinfail` you can read on screen |
+| Scope | the whole server | one room, for as long as it exists |
+| Who sets it | the operator, once, in `/etc/platformz.env` | minted by the server when a private room is made |
+
+Both can be on at once, and that is the interesting part: **there is no
+configuration fork between "friends only" and "public".**
+
+- **Friends-only (today).** Set `PLATFORMZ_KEY`. Only people holding it reach the
+  server at all, so the match browser is only ever seen by people you invited.
+  Room codes still work inside that, for a private room within the group.
+- **Public.** Unset `PLATFORMZ_KEY` and restart. Anyone can connect and browse;
+  private rooms are hidden from the list and their codes become the real
+  invite mechanism. Nothing else changes — same binary, same rooms, same client.
+
+Going public is a one-line change, which is exactly why the abuse limits below
+are not optional.
+
+### Abuse limits, and the two knobs that tune them
+
+The server enforces these with no configuration at all; they are listed so a
+refusal in the log is recognisable rather than mysterious.
+
+| Limit | Default | Refusal |
+|---|---|---|
+| Concurrent rooms | 12 (`MATCH_MAX_CONCURRENT`) | `server_full` on create |
+| Rooms one **address** may mint | 3, one back every 2 min | `server_full` on create |
+| Room moves (join / quick / leave) | 5 in hand, 1/s | `rate_limited` |
+| Wrong room codes | 5 per minute per connection | `rate_limited` |
+| Match-list replies | 3 in hand, 1/s | *silently dropped* |
+| UDP handshake | must echo a cookie (E1) | a challenge, and nothing else |
+| Live matches at once | off (= the room cap) | the start is **held**, not refused |
+
+Two are tunable, both for real scenarios rather than for tinkering:
+
+```bash
+# Your players share a NAT - a LAN party, an office, a household - so they all
+# look like one address to the room-creation budget. Raise it, or 0 to disable.
+PLATFORMZ_MAX_ROOMS_PER_ADDR=8
+
+# The transfer graph, not the tick time, is this box's ceiling: a full match
+# costs ~310 KB/s. Cap how many may run at once. A start that exceeds it is
+# HELD - the room waits in its lobby and begins when a live match ends - so
+# nobody's button press is lost and the client needs no new error to explain.
+PLATFORMZ_MAX_ACTIVE=6
+```
+
+Both go in `/etc/platformz.env` beside the key. `GET /status` reports
+`maxMatches`, `maxActive` and the live counts, so you can check what a running
+server actually thinks its limits are.
+
+**Nothing here ever hangs up on a player.** A full room does not end a
+connection: you stay connected with no slot, the browser shows that room as 8/8,
+and you pick another — or wait, and your client takes the next seat that frees up
+on its own. That was a real bug once (the server sent a "full" packet and dropped
+the socket, which over UDP is indistinguishable from the server being gone) and
+it is the thing most worth re-checking if connection behaviour ever looks odd.
+
 ## 7. Serve the web client over HTTP
 
 The `web/` files are already built (`make web` output). Point nginx's default site
@@ -403,7 +469,7 @@ rebuilt from it.**
 | Path | What it is | If you lose it |
 |---|---|---|
 | `/var/lib/platformz/scores` | The all-time scoreboard: one `<score>\t<name>` line per player, rewritten at each match end | Every player's cumulative score is gone. The server starts a fresh board and logs that it loaded nothing; nothing else breaks |
-| `/etc/platformz.env` | `PLATFORMZ_KEY`, the join gate | Existing invite links and baked handout builds stop working, because the key they carry no longer matches. You have to reissue links and rebuild handouts |
+| `/etc/platformz.env` | `PLATFORMZ_KEY`, the join gate, and `PLATFORMZ_IDENTITY_SECRET`, the key behind every tag the server issues | Existing invite links and baked handout builds stop working, because the key they carry no longer matches — reissue links and rebuild handouts. Losing the identity secret costs one round of UDP handshakes now, and (once D3 lands) everyone's remembered identity |
 
 Everything else — the binary, the web bundle, the systemd unit, the Caddy config
 — is either in the repo or reproducible from the steps above.
@@ -433,12 +499,34 @@ Then copy the archive **off the instance** — a backup that only exists on the 
 is not a backup of the box. Run it before a redeploy that changes the scoreboard
 format, and before destroying or resizing the instance.
 
-> **Coming, and it belongs in this list.** E1's UDP handshake cookie and D3's
-> identity token share one secret, `PLATFORMZ_IDENTITY_SECRET`, which will live in
-> `/etc/platformz.env`. It **must survive restarts**: regenerate it and every
-> identity token already in players' profiles becomes invalid, so after each
-> deploy every returning player looks like somebody new. See
-> [`matchmaking-plan.md`](matchmaking-plan.md) E1/D3.
+### The identity secret
+
+`PLATFORMZ_IDENTITY_SECRET` is the key behind every tag the server issues — today
+E1's UDP handshake cookie, and D3's identity token when it lands. It lives in
+`/etc/platformz.env` beside the join key:
+
+```bash
+# on the box, as root. 32 random bytes, hex, no shell-special characters.
+printf 'PLATFORMZ_IDENTITY_SECRET=%s\n' "$(openssl rand -hex 32)" >> /etc/platformz.env
+systemctl restart platformz
+journalctl -u platformz | grep -i 'handshake cookie\|IDENTITY_SECRET'
+```
+
+A good boot prints `UDP handshake cookie: ON` and nothing else. If it also prints
+`WARNING: PLATFORMZ_IDENTITY_SECRET unset`, the server minted a random one for
+this boot and the line above did not take.
+
+**It must survive restarts.** A per-boot secret is harmless for E1 — clients
+whose cookie went stale across the restart just take one extra handshake round
+trip — but it is fatal for D3, where every identity token in every player's
+profile would become invalid on every deploy and each returning player would look
+like somebody new. It is also the reason it belongs in the backup above.
+
+Unlike `PLATFORMZ_KEY`, this one is **never** shared with players: it does not
+ride in invite links or handout builds, and nothing a client sends should ever
+contain it. Losing it costs a restart's worth of handshakes and (later) everyone's
+remembered identity; leaking it lets anyone mint cookies, which puts the
+reflection hole back.
 
 ## Redeploying after code changes
 

@@ -828,7 +828,12 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
     const float startY = bottom + 26.0f;
 
     if (!ready) {
-        const char* msg = s.serverFull ? "MATCH IN PROGRESS - WAITING FOR A SLOT..."
+        // "MATCH IN PROGRESS" is what this used to say, and it was a guess: a
+        // room can be full and still sitting in its lobby. It is also no longer
+        // the whole story - since E2 the server keeps us connected with no slot
+        // instead of hanging up, and our hello retries until one opens, so the
+        // wait is real and ends by itself. Say that.
+        const char* msg = s.serverFull ? "NO FREE SLOT - WAITING FOR ONE TO OPEN..."
                         : myIndex >= 0 ? "JOINING..." : "CONNECTING...";
         UiTextCentered(msg, screenWidth, (int)startY + 14, 20, GRAY);
     } else if (official) {

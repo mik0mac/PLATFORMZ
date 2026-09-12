@@ -926,7 +926,7 @@ someone else's row by typing their name. D3 supplies the identity that fixes it.
 
 # Epic E — Ops, abuse, and proof it scales
 
-### E1. UDP handshake token (anti-spoof / anti-amplification) — **do not skip**
+### E1. UDP handshake token (anti-spoof / anti-amplification) — **DONE** (#88)
 **Why:** UDP source addresses are spoofable and **the vector already exists
 today** — a ~60 B `hello` from an unknown endpoint is answered immediately
 (`RegisterPeer` L1793) with a LARGE-map welcome of ~3 KB. `PLATFORMZ_KEY` masks
@@ -988,12 +988,52 @@ looks like a new person after each release. It is root-owned config, not game
 state, so it belongs in the env file rather than `/var/lib/platformz` — but it is
 part of the backup surface either way.
 
+#### What shipped, and the three places it differs from the plan above
+
+`server/crypto.h` is the shared primitive: SHA-256 and HMAC-SHA256, a
+constant-time compare, and `LoadServerSecret`. No OpenSSL — the server links
+Boost and nothing else, and a new package on the deploy box is a worse trade than
+80 lines with RFC 4231 vectors behind them (`server/test/crypto_test.cpp`). D3
+inherits all of it. The cookie itself is 96 bits of truncated HMAC over
+`family ‖ addr ‖ port ‖ bucket`, minted and checked in `server_main.cpp`'s
+"UDP handshake cookie" section; the client stashes it in `udpCookie` and re-sends
+`hello` on the next frame rather than waiting out the 0.5 s retry.
+
+**1. The amplification factor is not below 1, and the plan's arithmetic was
+optimistic.** The challenge is 51 bytes. A real client's hello is ~90, so it *is*
+below 1 for anyone playing — but the smallest hello a script can craft is
+`{"type":"hello"}` at 16 bytes, making the worst case 3.2x on payload, or 1.8x
+once both directions' 28 bytes of IP+UDP header are counted. That is down from
+~33x, and nobody builds a reflector at 1.8x. Strictly below 1 would mean a binary
+challenge tag (~13 B) instead of JSON; not worth a message type for the gap.
+`probe_cookie.py` prints the measured numbers rather than asserting a ratio.
+
+**2. The list limit is a token bucket with a burst of 3, not a flat one per
+second.** A hard interval silently swallows a second and third click inside one
+second — which is what a person paging the browser actually does — and leaves the
+screen waiting on a reply that is never coming. The refill rate (1/s) is what
+bounds a script; the burst is what keeps the UI honest. `probe_directory.py`
+caught this: its two `list` calls 0.6 s apart both have to be answered.
+
+**3. Once the join budget is spent it refuses *every* join, not only wrong
+codes.** Whether a code is a guess is only knowable after the lookup that answers
+the guess, so a limiter that let good codes through would answer every guess.
+Only wrong codes are *charged*, so hopping rooms or bouncing off a full one costs
+nothing — but five typos does mean waiting out the minute. That is the same
+bargain a login lockout makes, and it is worth stating because the tempting
+"softer" version is not a limit at all.
+
+Scope item 2 needed no code: an unknown UDP endpoint only ever reaches the
+`hello` branch, so `list`/`join`/`create`/`quick` from a stranger were already
+dropped unread. There is now a comment saying so, and a probe check, because that
+is a property somebody could helpfully break.
+
 **Files:** `server/server_main.cpp`, `net_client.h`/`main.cpp` (echo the cookie).
 **Depends on:** B1. **Must land before the server is publicly advertised.**
 
 ---
 
-### E2. Caps, rate limits, and the key story
+### E2. Caps, rate limits, and the key story — **DONE** (#89)
 **Scope:**
 - `MAX_MATCHES` (E: from A4), matches-created-per-address, joins-per-second.
 - **`PLATFORMZ_KEY` stays as the server-wide front door** (unchanged semantics:
@@ -1004,6 +1044,64 @@ part of the backup surface either way.
 - Public server ⇒ drop the key; friends-only ⇒ keep it. Document both.
 
 **Files:** `server/server_main.cpp`, `docs/deploy-vultr.md`.
+
+#### What shipped
+
+**Fullness no longer ends a connection, and that was most of the work.** The old
+shape was: no free slot → send a `full` packet → stop reading (WS) or never
+register the peer (UDP). Over UDP that is indistinguishable from an unreachable
+server, so the client sat re-helloing into nothing behind "MATCH IN PROGRESS —
+WAITING FOR A SLOT...". Being hung up on is the worst possible answer to "this
+room is full", because the one thing you want next is the list of rooms that are
+not.
+
+So the server grew a third state for a connection: **unseated**. A connection is
+now in exactly one of two places — some match's `clients` map, or `g_unseated` —
+and an unseated one is a working client that can list, join, and create. Its
+`hello` (which the client is already re-sending every 0.5 s while it has no slot)
+doubles as "is there a seat yet?", so a freeing slot is taken within half a
+second with no new client code at all. Both transports funnel through one
+`SeatOrPark`: the room you asked for, else the default room plus a `full`
+refusal so you know your invite did not land, else parked with `server_full`.
+
+`FULL_BIN_VERSION` (0x06) and `{"type":"full"}` are both gone, and `0x06` is
+burned in `netbin.h`. Fullness travels as a `joinfail`, which is JSON and so
+behaves identically on both transports. The client maps a `full`/`server_full`
+refusal received *before* it has a slot onto the same `serverFull` flag the old
+message drove, so the existing UI string survived the protocol change.
+
+**Two things needed no code.** Match names already go through `clampName` — the
+same printable-ASCII, length-capped filter player names use — and the join-code
+alphabet was already the unambiguous 32-character one with no `O`/`0`/`I`/`1`,
+4 chars, private rooms hidden from the list. Both now have a comment saying so
+and a probe check, because they are properties somebody could helpfully break.
+
+**Three departures from the scope above:**
+
+**1. `MAX_ACTIVE_MATCHES` ships OFF.** A4 measured that CPU fits ~16 matches and
+that *transfer* is the binding constraint at roughly 7×, which is a judgement
+about the hosting plan and not about the code — so picking a live-match number
+here would have been inventing one. It is `PLATFORMZ_MAX_ACTIVE`, defaulting to
+the room cap (so it can never fire), reported by `/status`. When it does bite the
+start is **held, not refused**: the room waits in its lobby and begins the moment
+a live match ends. Nobody's button press is lost, and there is no new failure the
+client would have to be taught to explain.
+
+**2. The per-address creation budget is tunable, because an address is a coarse
+identity.** A LAN party, an office, a household all arrive from one NAT and share
+one bucket, so the fourth person to make a room would be refused for something
+someone else did. That is a real scenario, not a hypothetical:
+`PLATFORMZ_MAX_ROOMS_PER_ADDR` (default 3, 0 disables). `probe_directory.py`
+found this immediately — it fills the registry from one address to test paging.
+
+**3. "Joins-per-second" became "moves-per-second", covering `leave` too.**
+Join-leave-join-leave is the cheapest roster churn there is, and every accepted
+move costs a welcome plus a leaderboard — the two biggest packets the server
+sends. Budgeting only the join half would have made the budget meaningless.
+
+Tests: `server/test/probe_capacity.py` (a full room does not drop you; an
+unseated client can still browse and join; it seats itself when a slot frees; the
+address and move budgets; name sanitising).
 
 ---
 

@@ -474,6 +474,14 @@ int main(int argc, char** argv) {
     bool      udpTransport = networked && serverUrl.rfind("udp://", 0) == 0; // not const: flips to false if the UDP->WS auto-fallback fires
     double    connectStartTime = 0.0; // GetTime() when we first connected; drives the UDP->WS fallback timeout
     double    lastHelloTime = 0.0;
+    // The server's UDP handshake cookie (E1), held between hellos. A UDP source
+    // address is a claim anyone can forge, so the server answers a hello from an
+    // unknown endpoint with only this and waits to see it echoed back - proof we
+    // really are reachable at the address we sent from. Empty until the first
+    // challenge arrives, and kept afterwards so the silence-reset handshake can
+    // reuse it; the server re-challenges once it goes stale (30-60s), which
+    // costs one more round trip and nothing else. Never set over WebSocket.
+    std::string udpCookie;
     double    lastStateTime = 0.0;
     double    lastKeepaliveTime = 0.0;
     float     predYaw   = 0.0f;   // locally-predicted look (mouse drives this every
@@ -735,6 +743,23 @@ int main(int argc, char** argv) {
             TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
             return true;
         }
+        if (m.type == ServerMessage::Type::Challenge) {
+            // The server wants proof this address really is ours before it
+            // spends a welcome on us (E1). Stash the cookie and let the hello go
+            // out on the next maintenance tick - a frame away, rather than
+            // waiting out the 0.5s retry, so the handshake costs one round trip
+            // instead of half a second.
+            //
+            // Only a cookie we have not already answered rearms the timer. A
+            // server that keeps rejecting what we echo (clock skew, a secret
+            // rotated under us) would otherwise have us helloing every frame;
+            // repeats fall back to the ordinary 0.5s cadence instead.
+            if (!m.challenge.empty() && m.challenge != udpCookie) {
+                udpCookie = m.challenge;
+                lastHelloTime = 0.0;
+            }
+            return true;
+        }
         if (m.type == ServerMessage::Type::MatchList) {
             shell.matches     = std::move(m.matches);
             shell.listCursor  = m.listCursor;
@@ -752,6 +777,15 @@ int main(int argc, char** argv) {
             // mapping so the client and the protocol can drift apart safely.
             shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
             shell.awaitingList = false;
+            // Before we hold a slot, a refusal IS the connection status: we are
+            // connected and being told there is nowhere to sit. The browse status
+            // line above is only on screen in the browser, so drive the same flag
+            // the retired `full` message used to, and the lobby keeps saying
+            // "match in progress" instead of "connecting" forever. Cleared by the
+            // next welcome, which is what getting in looks like.
+            if (myIndex < 0 && (m.joinFail == JoinFailure::Full ||
+                                m.joinFail == JoinFailure::ServerFull))
+                shell.serverFull = true;
             return true;
         }
         if (m.type == ServerMessage::Type::Created) {
@@ -767,13 +801,6 @@ int main(int argc, char** argv) {
             // Server-owned all-time table, already ranked. Replace wholesale -
             // each message is the complete top-N, not a delta.
             shell.leaderboard = std::move(m.leaderboard);
-            return true;
-        }
-        if (m.type == ServerMessage::Type::Full) {
-            // Every slot is claimed (mid-match, no bot filler). The hello resend
-            // loop keeps retrying; this just drives the lobby message so it reads
-            // "match in progress" instead of "connecting".
-            shell.serverFull = true;
             return true;
         }
         if (m.type == ServerMessage::Type::VersionMismatch) {
@@ -1080,7 +1107,8 @@ int main(int argc, char** argv) {
                 // default room" into "get me back where I was", which is the only
                 // way the slot we are holding can be handed back to us.
                 net.send(serializeHello(shell.namePristine ? std::string() : shell.playerName,
-                                        joinKey, profile::Get().clientId, shell.inMatchCode));
+                                        joinKey, profile::Get().clientId, shell.inMatchCode,
+                                        udpCookie));
                 lastHelloTime = nowT;
             }
             // UDP keepalive: the client only streams input during PLAYING, so on
