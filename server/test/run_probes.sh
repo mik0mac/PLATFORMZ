@@ -11,15 +11,50 @@
 #
 # Complements run_all.sh, which builds the standalone C++ tests and needs no
 # server at all.
+# Two environment overrides, both for CI (E3):
+#   PLATFORMZ_SERVER_BIN   which binary in server/ to run (e.g. gameserver-tsan)
+#   PLATFORMZ_PROBE_SET    a space-separated subset, instead of all of them
+# Defaults reproduce exactly what a bare run has always done.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-BIN=server/gameserver
+SERVER_BIN="${PLATFORMZ_SERVER_BIN:-gameserver}"
+BIN="server/$SERVER_BIN"
 [ -x "$BIN" ] || { echo "build the server first: make -C server"; exit 1; }
 TMP="${TMPDIR:-/tmp}/platformz-probes"
 mkdir -p "$TMP"
 fail=0
 SERVER_PID=""
+
+# ThreadSanitizer: point the runtime at our suppressions ourselves, from a path
+# with no spaces in it.
+#
+# TSAN_OPTIONS is a space-separated key=value list with NO quoting of any kind,
+# so a checkout under e.g. "~/Dropbox (Personal)/VS_CODE/PLATFORMZ" cannot be
+# named in it at all - the runtime aborts with "expected '=' in TSAN_OPTIONS"
+# before main() ever runs, and all you see is a server that never came up.
+# Copying the file somewhere plain sidesteps that, and means neither the caller
+# nor the CI workflow has to know where the repo lives. An explicit
+# suppressions= from the caller always wins.
+case "$SERVER_BIN" in
+  *tsan*)
+    SUPP_DIR="$TMP"
+    case "$SUPP_DIR" in *" "*) SUPP_DIR="/tmp/platformz-tsan"; mkdir -p "$SUPP_DIR";; esac
+    if [ -f server/test/tsan.supp ]; then
+      cp server/test/tsan.supp "$SUPP_DIR/tsan.supp"
+      case "${TSAN_OPTIONS:-}" in
+        *suppressions=*) ;;
+        *) export TSAN_OPTIONS="${TSAN_OPTIONS:-} suppressions=$SUPP_DIR/tsan.supp" ;;
+      esac
+      echo "TSan suppressions: $SUPP_DIR/tsan.supp"
+    fi
+    ;;
+esac
+
+# Every probe, in an order chosen so the cheap ones fail first.
+ALL_PROBES="probe probe_cookie probe_capacity probe_leaderboard probe_directory \
+probe_official probe_host probe_mapsize probe_multimatch probe_joinprogress probe_reconnect"
+PROBES="${PLATFORMZ_PROBE_SET:-$ALL_PROBES}"
 
 # Never leave a server behind. An interrupted run - Ctrl-C, or a pipeline whose
 # reader exits and SIGPIPEs this script - would otherwise orphan a gameserver
@@ -36,7 +71,8 @@ trap cleanup EXIT INT TERM PIPE
 # produced a page of nonsense failures.
 port_free() { ! lsof -nP -iTCP:9000 -sTCP:LISTEN >/dev/null 2>&1; }
 
-for probe in probe probe_cookie probe_capacity probe_leaderboard probe_directory probe_official probe_host probe_mapsize probe_multimatch probe_joinprogress probe_reconnect; do
+# shellcheck disable=SC2086  # $PROBES is a word list on purpose
+for probe in $PROBES; do
   log="$TMP/$probe.log"
   rm -f "$TMP/$probe.scores"
 
@@ -59,7 +95,7 @@ for probe in probe probe_cookie probe_capacity probe_leaderboard probe_directory
   [ "$probe" = "probe_directory" ] && env_extra="PLATFORMZ_MAX_ROOMS_PER_ADDR=0"
 
   # shellcheck disable=SC2086  # $env_extra must split
-  ( cd server && exec env PLATFORMZ_SCORES="$TMP/$probe.scores" $env_extra ./gameserver >"$log" 2>&1 ) &
+  ( cd server && exec env PLATFORMZ_SCORES="$TMP/$probe.scores" $env_extra "./$SERVER_BIN" >"$log" 2>&1 ) &
   SERVER_PID=$!
   for _ in $(seq 1 40); do grep -q "lobby ready" "$log" 2>/dev/null && break; sleep 0.3; done
 
@@ -77,6 +113,16 @@ for probe in probe probe_cookie probe_capacity probe_leaderboard probe_directory
   kill "$SERVER_PID" 2>/dev/null
   for _ in $(seq 1 40); do kill -0 "$SERVER_PID" 2>/dev/null || break; sleep 0.25; done
   SERVER_PID=""
+
+  # A sanitizer says nothing about the probe's own pass/fail - it writes to the
+  # server's stderr and the server carries on. Unnoticed, a TSan job would go
+  # green on a run that reported a data race, which is the one outcome that would
+  # make having the job actively misleading.
+  if grep -q "WARNING: ThreadSanitizer" "$log" 2>/dev/null; then
+    echo "ThreadSanitizer reported a race during $probe (see $log)"
+    grep -c "WARNING: ThreadSanitizer" "$log" | sed 's/^/  reports: /'
+    fail=1
+  fi
 done
 
 if [ "$fail" -ne 0 ]; then echo; echo "SOME PROBES FAILED"; exit 1; fi

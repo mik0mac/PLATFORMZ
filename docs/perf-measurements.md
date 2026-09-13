@@ -193,10 +193,62 @@ race it.
 **`MATCH_MAX_CONCURRENT` stays conservative until measured on the box.** Whatever
 number comes out, take the lower of the CPU answer and the transfer-quota answer.
 
+## Results — 2026-09-12, ten matches at once (E3's harness, `server/loadtest`)
+
+Every number above was taken from **one** match and multiplied. `MATCH_MAX_CONCURRENT
+= 12` rests on that arithmetic, and nothing had ever put ten-plus matches under
+real load at the same time. E3's harness does, so here it is observed rather than
+derived.
+
+Run on Mike's Mac with the server on the same machine — so treat the *rates* as
+soft and the *per-match egress* as the finding, since bytes on the wire do not
+care whose CPU produced them:
+
+```
+./server/loadtest --matches 10 --clients 8 --seconds 30
+  10/10 rooms created,  80 clients spread across 10 rooms
+  state received  132256 packets
+  per client      54.2/s vs 60/s expected   (90.3% delivered)
+  egress seen     3250 KB/s total, 325 KB/s per match
+  extrapolated    8.63 TB/month at this load
+  generator ran   58.9 Hz          <- the harness itself kept up
+server PERF:  sim p50/p95/max 0.00/0.00/6.68 ms
+```
+
+**Per-match egress is 325 KB/s — the estimate was ~310.** The arithmetic was
+right, which is worth knowing, because everything downstream of it was too.
+
+**And it confirms the uncomfortable half.** Ten busy matches extrapolate to
+**8.6 TB/month against the $6 plan's 2 TB** — 4× over. Twelve would be ~10 TB.
+Meanwhile the sim cost p50 **0.00 ms** and peaked at 6.68 ms across all ten
+rooms. CPU is nowhere near the wall; transfer passed it long ago.
+
+So `MATCH_MAX_CONCURRENT = 12` is **not a capacity the transfer quota can pay
+for at sustained full load**. It was never claimed to be — `constants.h` already
+says "only ~2.4 PERMANENTLY full matches" — but the gap is now measured. Twelve
+is fine for twelve *rooms*, most of which sit in a lobby costing nothing; it is
+not fine for twelve simultaneously *full, playing* matches. That is precisely the
+case `PLATFORMZ_MAX_ACTIVE` (E2) exists to cap, and this run is the first
+evidence for choosing a number for it rather than guessing one. **~6 live matches
+fits 2 TB/month**; pick lower if anything else shares the plan.
+
+Two smaller things the run surfaced:
+
+- **MEDIUM welcomes chunk.** `netbin.h`'s comment says "in practice the LARGE-map
+  welcome"; 128 platforms at MEDIUM already exceeds one datagram. 6288 chunk
+  frames over 80 joins. Harmless — the reassembler handles it (#100) — but the
+  comment is understating where the threshold is.
+- **The `PERF` line reports the default room only** (`ReportPerf(*g_defaultMatch, …)`),
+  which had no clients throughout, so it printed `clients 0` while eighty were
+  connected. Its `sim` figure covers the whole beat and is still the right number;
+  the per-room fields are not.
+
 ## Still to do on the box
 
-1. `PLATFORMZ_PERF=1` on the Vultr instance, driven by `probe_load.py` from a
-   *different* machine so the measurement does not compete with the server.
+1. `PLATFORMZ_PERF=1` on the Vultr instance, driven from a *different* machine so
+   the measurement does not compete with the server:
+   `./loadtest --host platformz.space --matches 10 --clients 8 --seconds 60`
+   (and `probe_load.py` for the single-match case).
 2. `vmstat 1` alongside it — the `st` column is steal time, and it comes straight
    out of the tick budget.
 3. `/proc/net/dev` deltas for a real egress figure including IP/UDP overhead,

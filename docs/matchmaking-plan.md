@@ -1105,7 +1105,7 @@ address and move budgets; name sanitising).
 
 ---
 
-### E3. Load harness + CI smoke test
+### E3. Load harness + CI smoke test — **DONE** (#90)
 **Why:** A4's cap number and E1's mitigations are unprovable by hand, and the
 "stale server binary" class of bug has bitten this project before.
 
@@ -1116,6 +1116,58 @@ matches, assert state packets flow and the protocol tags match.
 
 **Files:** new `server/loadtest.cpp`, `server/Makefile`,
 `.github/workflows/build.yml`.
+
+#### What shipped
+
+CI went from one compile job to three: **Compile**, **Tests** (the standalone C++
+tests, all eleven protocol probes, and a smoke gate), and **ThreadSanitizer**. The
+repo already had fifteen tests that only ran when somebody remembered; wiring them
+in was the cheapest part of this and by far the largest gain.
+
+`server/loadtest.cpp` opens M×N UDP clients, creates and fills M rooms, starts
+them all, and holds 60 Hz input while measuring what a client can actually see:
+delivered state rate, worst inter-packet gap, and bytes. It reports the rate the
+*generator* achieved too — if the harness could not keep 60 Hz, every other
+number is about the test machine and not the server, and saying so is cheaper
+than someone discovering it later.
+
+**The finding is in `perf-measurements.md`: ten matches measured 325 KB/s each
+against an estimate of ~310, so the arithmetic behind `MATCH_MAX_CONCURRENT = 12`
+was right — and confirms that twelve simultaneously FULL matches is ~10 TB/month
+against a 2 TB plan, while the sim cost p50 0.00 ms.** CPU was never the wall.
+That is the first real evidence for choosing a `PLATFORMZ_MAX_ACTIVE` number
+(E2) instead of guessing one: **~6 live matches fits the quota.**
+
+**Three departures from the issue:**
+
+**1. The load half drives UDP, not WebSocket.** The numbers that matter are UDP's
+— that is what the native client speaks, where the binary state packet and the
+chunked welcome live, and E1's cookie exists nowhere else. WebSocket still gets
+covered, as `--mode ws-smoke` in the same binary, which CI runs: one connection,
+assert a welcome and a stream of state. That transport had *no* automated
+coverage before this, so it is a gain either way.
+
+**2. The harness cannot report per-match tick times, and does not pretend to.**
+Those are the server's own and it already prints them (`PLATFORMZ_PERF=1`). A
+client-side tool inventing a server-side number would be worse than not having it.
+
+**3. TSan needed a four-line suppression file** (`server/test/tsan.supp`) for
+`std::cout`, which [iostream.objects] guarantees is race-free but libc++ does not
+annotate. That was the *only* report across the whole probe suite — the server's
+own locking, including E2's new `g_unseated` and the budget maps, came out clean.
+
+Two things the harness caught in itself, both worth writing down because they are
+the same mistakes a *real* client could make: it did not send the keepalive, so
+the 3s lobby reaper culled its clients mid-setup and the resulting mess looked
+like a server fault; and it only kept *seated* clients alive, so E2's parked ones
+were swept while rooms were being created.
+
+Also: `probe_leaderboard` asserted that a leaderboard arrives before the GAMEOVER
+state packet. The server does send them in that order, but that is an arrival
+order over **UDP**, which promises nothing — the assertion failed about one run in
+five. It is reported now, with the hard check moved onto what is actually
+guaranteed (the table arrives, credited). A probe that cries wolf is worse than no
+probe once CI is watching it.
 
 ---
 

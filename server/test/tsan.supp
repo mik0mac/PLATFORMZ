@@ -1,0 +1,28 @@
+# ThreadSanitizer suppressions for the PLATFORMZ server (E3).
+#
+#   TSAN_OPTIONS="suppressions=$PWD/server/test/tsan.supp" \
+#   PLATFORMZ_SERVER_BIN=gameserver-tsan ./server/test/run_probes.sh
+#
+# KEEP THIS FILE SHORT. Every line here is a class of bug the job can no longer
+# find, so each one needs a reason that is about the standard or the runtime -
+# never "this one was noisy" or "we think it is fine".
+
+# std::cout, written from the sim thread and from the io threads.
+#
+# [iostream.objects] is explicit that concurrent formatted output to a
+# synchronized standard stream "shall not result in a data race" - the characters
+# may interleave, but the object itself is safe. libc++ and libstdc++ implement
+# that without annotating it for TSan, so TSan sees two threads touching the
+# stream's internal state and reports the implementation, not our code.
+#
+# This is the only report the whole probe suite produced, and leaving it in would
+# bury the next real one under it - which is the actual cost of an unsuppressed
+# false positive.
+#
+# The cosmetic half IS real: two log lines can interleave in journalctl. If that
+# ever stops being cosmetic, the fix is one mutex-guarded Log() helper in
+# server_main.cpp, not deleting these lines.
+race:__pad_and_output
+race:__put_character_sequence
+race:std::__1::basic_ostream
+race:std::basic_ostream
