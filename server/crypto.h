@@ -37,6 +37,7 @@
 #include <chrono>
 #include <random>
 #include <string>
+#include <vector>
 
 namespace pz {
 
@@ -157,20 +158,64 @@ inline Mac HmacSha256(const std::string& key, const void* msg, size_t n) {
     return out;
 }
 
+//MARK: Hex
+inline std::string ToHex(const uint8_t* p, size_t n) {
+    static const char* hexDigits = "0123456789abcdef";
+    std::string out;
+    out.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        out += hexDigits[p[i] >> 4];
+        out += hexDigits[p[i] & 0x0f];
+    }
+    return out;
+}
+
+// Strict: rejects odd lengths, any non-hex character, and anything longer than
+// `max`. Strict because every caller is parsing something a client sent, and a
+// lenient decoder there is how you end up comparing a tag against garbage you
+// invented yourself.
+inline bool FromHex(const std::string& hex, std::vector<uint8_t>& out, size_t max) {
+    if (hex.empty() || (hex.size() % 2) != 0 || hex.size() / 2 > max) return false;
+    auto nib = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    out.clear();
+    out.reserve(hex.size() / 2);
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        const int hi = nib(hex[i]), lo = nib(hex[i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out.push_back((uint8_t)((hi << 4) | lo));
+    }
+    return true;
+}
+
 //MARK: Tag encoding + comparison
 // Lowercase hex of the first `bytes` of a MAC. Truncating a MAC is normal and
 // safe (RFC 2104 §5); 12 bytes = 96 bits = the 24 hex chars the cookie carries,
 // which is far past what a remote attacker can search one datagram at a time.
 inline std::string HexPrefix(const Mac& mac, size_t bytes) {
-    static const char* hexDigits = "0123456789abcdef";
     if (bytes > mac.size()) bytes = mac.size();
-    std::string out;
-    out.reserve(bytes * 2);
-    for (size_t i = 0; i < bytes; ++i) {
-        out += hexDigits[mac[i] >> 4];
-        out += hexDigits[mac[i] & 0x0f];
+    return ToHex(mac.data(), bytes);
+}
+
+//MARK: Randomness
+// `n` cryptographically random bytes, as hex.
+//
+// thread_local, because this is called from the io threads and std::random_device
+// is not required to be thread-safe - and a shared one racing would degrade
+// exactly the property the whole file exists to provide, silently.
+inline std::string RandomHex(size_t n) {
+    thread_local std::random_device rd;
+    std::vector<uint8_t> b;
+    b.reserve(n);
+    while (b.size() < n) {
+        const uint32_t r = rd();
+        for (int i = 0; i < 4 && b.size() < n; ++i) b.push_back((uint8_t)(r >> (8 * i)));
     }
-    return out;
+    return ToHex(b.data(), b.size());
 }
 
 // Compare two tags without leaking where they first differ.

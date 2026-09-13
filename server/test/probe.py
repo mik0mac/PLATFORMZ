@@ -53,6 +53,13 @@ class C:
         # E1's UDP handshake cookie, once the server has issued one. See hello().
         self.cookie = ""
         self.challenges = 0        # how many times we were asked to prove our address
+        # D3's identity token: what we PRESENT (set before hello to play a
+        # returning client) and every one the server ISSUED us, in order. A real
+        # client keeps the latest in its profile; a probe keeps the list, because
+        # "how many were issued" is the observable that says whether the server
+        # recognised us.
+        self.token = ""
+        self.identities = []
         self.name, self.slot, self.seq, self.epoch = name, None, 0, 0
         self.phase, self.nplayers, self.alive = "(none)", 0, True
         # Which room the server put us in, and how it is run - straight off the
@@ -95,6 +102,7 @@ class C:
         # same thing it always did (a slot appears a round trip later), which is
         # why no probe but probe_cookie.py had to change.
         if self.cookie:    m["c"]     = self.cookie
+        if self.token:     m["tok"]   = self.token
         self.send(m)
 
     def drop(self, goodbye=False):
@@ -193,7 +201,15 @@ class C:
                 except ValueError:
                     continue
                 t = j.get("type")
-                if t == "challenge":
+                if t == "identity":
+                    # Store it AND present it from now on, which is what the real
+                    # client does - so a reconnect inside one probe run looks like
+                    # a returning player rather than a new one.
+                    tok = j.get("tok", "")
+                    if tok:
+                        self.identities.append(tok)
+                        self.token = tok
+                elif t == "challenge":
                     # Return-routability check (E1): echo the cookie straight
                     # back. Only when it CHANGES, or a server that kept
                     # rejecting us would put this thread in a tight hello loop.

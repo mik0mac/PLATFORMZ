@@ -128,7 +128,7 @@ struct ServerMessage {
     // before the server hung up on you; E2 retired both. Fullness is a JoinFail
     // now (reason `full` or `server_full`) and nobody gets hung up on.
     enum class Type { None, Welcome, State, VersionMismatch, Leaderboard,
-                      MatchList, JoinFail, Created, Challenge, Unknown };
+                      MatchList, JoinFail, Created, Challenge, Identity, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -180,6 +180,13 @@ struct ServerMessage {
 
     // JoinFail only.
     JoinFailure joinFail = JoinFailure::None;
+
+    // Identity only: a server-issued identity token (D3) to store in the profile
+    // and present on every future connection. Arrives when we had none, or when
+    // the one we presented no longer verifies (the operator rotated the secret).
+    // It is a bearer credential - whoever holds it is that player - so it belongs
+    // in the profile and on the wire, and nowhere else.
+    std::string identityToken;
 
     // Challenge only (UDP): the server's handshake cookie. Not a refusal - it is
     // the server saying "prove you can receive this", and the answer is to send
@@ -245,10 +252,17 @@ inline std::string serializeName(const std::string& name) {
 //
 // All are omitted when empty, so this stays wire-compatible with a server that
 // has never heard of them.
+// `token` is the server-issued identity token (D3), echoed back from the profile
+// so the server can recognise us as the same player as last time. Unlike
+// `clientId` - which we mint ourselves and could put anything in - this one is
+// signed by the server, so presenting it PROVES continuity rather than asserting
+// it. Empty until a server has issued one; an invalid or stale one is simply
+// replaced, never a reason to be refused.
 inline std::string serializeHello(const std::string& name, const std::string& key = "",
                                   const std::string& clientId = "",
                                   const std::string& matchCode = "",
-                                  const std::string& cookie = "") {
+                                  const std::string& cookie = "",
+                                  const std::string& token = "") {
     nlohmann::json j = {
         {"type", "hello"},
         {"name", name}
@@ -257,6 +271,7 @@ inline std::string serializeHello(const std::string& name, const std::string& ke
     if (!clientId.empty())  j["cid"]   = clientId;
     if (!matchCode.empty()) j["match"] = matchCode;
     if (!cookie.empty())    j["c"]     = cookie;
+    if (!token.empty())     j["tok"]   = token;
     return j.dump();
 }
 
@@ -760,6 +775,13 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         }
         return msg;
     }
+    // A server-issued identity token (D3). Nothing to answer - store it.
+    if (type == "identity") {
+        msg.type          = ServerMessage::Type::Identity;
+        msg.identityToken = j.value("tok", std::string());
+        return msg;
+    }
+
     // The UDP handshake cookie (E1). Answering it is the client's only job: the
     // server will not hand out a slot until a hello comes back carrying this.
     if (type == "challenge") {

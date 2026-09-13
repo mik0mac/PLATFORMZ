@@ -27,6 +27,7 @@ run() {   # run <name> <source> [extra sources...]
 
 run bucket      server/test/bucket_test.cpp
 run crypto      server/test/crypto_test.cpp
+run identity    server/test/identity_test.cpp
 run reassembly  server/test/reassembly_test.cpp
 run grid_equiv  server/test/grid_equiv_test.cpp collisions.cpp
 run registry    server/test/registry_test.cpp

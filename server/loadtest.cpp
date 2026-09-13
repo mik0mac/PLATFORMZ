@@ -219,54 +219,96 @@ static double Pct(std::vector<double> v, double p) {
 
 //MARK: WebSocket smoke test
 // One connection, over the transport the browser build uses. Asserts the welcome
-// arrives and that state packets follow - which is the whole contract a client
-// depends on, and which had no automated coverage before this.
-static int WsSmoke(const Opts& o) {
-    std::cout << "ws-smoke: " << o.host << ":" << o.port << "\n";
+// arrives, that state packets follow, and that the identity handshake (D3)
+// behaves - which is the whole contract a client depends on, and which had no
+// automated coverage before this.
+struct WsResult {
+    bool        welcome = false;
+    int         states  = 0;
+    std::string identity;     // a token the server issued us, if it did
+    std::string error;
+};
+
+// `token` is presented on the URL, exactly as the real client presents it.
+static WsResult WsConnect(const Opts& o, const std::string& token, double seconds,
+                          int wantStates) {
+    WsResult r;
     try {
         net::io_context ioc;
         tcp::resolver resolver(ioc);
         websocket::stream<tcp::socket> ws(ioc);
         const auto results = resolver.resolve(o.host, o.port);
         net::connect(ws.next_layer(), results.begin(), results.end());
-        // The join key rides the URL on this transport, exactly as the browser
-        // sends it - so this also covers the WS half of the #33 gate.
-        const std::string target = o.key.empty() ? "/" : "/?key=" + o.key;
+        // The join key and the identity token both ride the URL on this
+        // transport - a WS client is welcomed the instant it connects, so the
+        // handshake is the only moment guaranteed to happen.
+        std::string target = "/";
+        const char* sep = "?";
+        if (!o.key.empty()) { target += sep + std::string("key=") + o.key; sep = "&"; }
+        if (!token.empty()) { target += sep + std::string("tok=") + token; }
         ws.handshake(o.host + ":" + o.port, target);
 
-        bool sawWelcome = false;
-        int  states = 0;
-        const double deadline = NowSec() + 10.0;
+        const double deadline = NowSec() + seconds;
         beast::flat_buffer buffer;
-        while (NowSec() < deadline && (!sawWelcome || states < 30)) {
+        while (NowSec() < deadline && (!r.welcome || r.states < wantStates)) {
             buffer.clear();
             ws.read(buffer);
             const std::string msg = beast::buffers_to_string(buffer.data());
             if (msg.find("\"type\":\"welcome\"") != std::string::npos) {
-                sawWelcome = true;
-                std::cout << "  ok   welcome: " << msg.substr(0, 90) << "...\n";
-                // Named, so the roster has something other than a default. Also
-                // exercises serializeName over WS.
+                r.welcome = true;
                 ws.write(net::buffer(serializeName("SMOKE")));
             } else if (msg.find("\"type\":\"state\"") != std::string::npos) {
-                states++;
+                r.states++;
+            } else if (msg.find("\"type\":\"identity\"") != std::string::npos) {
+                const auto k = msg.find("\"tok\":\"");
+                const auto e = k == std::string::npos ? k : msg.find('"', k + 7);
+                if (e != std::string::npos) r.identity = msg.substr(k + 7, e - k - 7);
             }
         }
         ws.close(websocket::close_code::normal);
-
-        if (!sawWelcome) { std::cout << "  FAIL no welcome within 10s\n"; return 1; }
-        if (states < 30) {
-            std::cout << "  FAIL only " << states << " state packets in 10s"
-                      << " (expected a steady stream)\n";
-            return 1;
-        }
-        std::cout << "  ok   " << states << " state packets over WebSocket\n";
-        std::cout << "ws-smoke passed\n";
-        return 0;
     } catch (const std::exception& e) {
-        std::cout << "  FAIL websocket error: " << e.what() << "\n";
-        return 1;
+        r.error = e.what();
     }
+    return r;
+}
+
+static int WsSmoke(const Opts& o) {
+    std::cout << "ws-smoke: " << o.host << ":" << o.port << "\n";
+    int bad = 0;
+    auto check = [&](bool ok, const std::string& what) {
+        std::cout << (ok ? "  ok   " : "  FAIL ") << what << "\n";
+        if (!ok) bad++;
+    };
+
+    const WsResult first = WsConnect(o, /*token*/ "", 10.0, 30);
+    if (!first.error.empty()) { std::cout << "  FAIL websocket error: " << first.error << "\n"; return 1; }
+    check(first.welcome, "a welcome arrived");
+    check(first.states >= 30, "state packets stream (" + std::to_string(first.states) + " in 10s)");
+
+    // D3 over WebSocket. The token rides the upgrade URL here rather than a
+    // hello, so this is the only place that path is exercised at all.
+    check(first.identity.size() == 64 &&
+          first.identity.find_first_not_of("0123456789abcdef") == std::string::npos,
+          "a client with no token was issued one (" +
+          (first.identity.empty() ? std::string("none") : first.identity.substr(0, 12) + "...") + ")");
+
+    if (!first.identity.empty()) {
+        const WsResult again = WsConnect(o, first.identity, 6.0, 5);
+        if (!again.error.empty()) { std::cout << "  FAIL reconnect: " << again.error << "\n"; return 1; }
+        check(again.welcome, "reconnecting with that token still gets a welcome");
+        check(again.identity.empty(),
+              "...and NO new token, so the server recognised it");
+
+        const WsResult bogus = WsConnect(o, std::string(64, 'z'), 6.0, 5);
+        if (!bogus.error.empty()) { std::cout << "  FAIL bad-token connect: " << bogus.error << "\n"; return 1; }
+        check(bogus.welcome, "a bad token is still welcomed - never a hard fail");
+        check(!bogus.identity.empty() && bogus.identity != first.identity,
+              "...and replaced with a fresh one");
+    }
+
+    if (bad) { std::cout << "ws-smoke FAILED\n"; return 1; }
+    std::cout << "ws-smoke passed\n";
+    return 0;
 }
 
 //MARK: Load run
