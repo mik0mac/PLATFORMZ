@@ -91,6 +91,27 @@ only `main.cpp` and `collisions.cpp` as translation units.
 - `WireframeTests/` — **gitignored** scratch dir of prototypes (2D/3D wireframe
   experiments, Godot tests) that much of this code was pulled from. Not built.
 
+## The server, and where its docs are
+`server/` is a second binary: an authoritative headless game server holding up to
+12 independent **rooms**, each a whole match, all ticked on one 60 Hz beat. It
+reuses the game headers (`gamespace.h`, `collisions.h`, `input.h`) against
+math-only raylib shims, so server and client physics are the same code. Clients
+reach it over WebSocket (JSON) or UDP (binary, `netbin.h`); the same server speaks
+both at once on one port.
+
+Four docs, and it is worth reading the right one before changing anything here:
+
+- `docs/matchmaking.md` — **the protocol reference**: rooms, codes, every message
+  in both directions, every rate limit.
+- `docs/multiplayer-testing.md` — running and testing it locally, plus the
+  headless probes and load harness (`server/test/`, `server/loadtest.cpp`).
+- `docs/deploy-vultr.md` — the public box, its env vars, and what it keeps on disk.
+- `docs/matchmaking-plan.md` — the design record for all of it, including the
+  decisions that were *not* taken and why.
+
+`make -C server` builds it; `./server/test/run_all.sh` and `run_probes.sh` are the
+tests, and CI runs both on every push.
+
 ## Collision system (collisions.cpp)
 - `RunCollisionChecks()` runs once per frame (after positions update, before
   active-object cleanup): rebuild grid → rocket-vs-{asteroid,platform,wall,player}

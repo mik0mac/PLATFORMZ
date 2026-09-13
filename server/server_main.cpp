@@ -1704,9 +1704,15 @@ static bool AttachConn(uint64_t connId, const std::string& code,
 }
 
 // Move a connection into `code`, refusing with a reason the client can render.
-// Private rooms need their join code; a wrong one is refused the same way a
-// missing room is, so probing cannot distinguish "no such room" from "wrong code"
-// by timing or reply.
+//
+// Private rooms need their join code. NOTE that a wrong one is NOT refused the
+// same way a missing room is - this comment used to claim it was, and the two
+// lines below plainly send different tokens. `badcode` therefore tells a prober
+// that a private room with that code exists, which makes the reply an existence
+// oracle over the 4-character space; E1's five-guesses-a-minute budget is the
+// only thing bounding it. Slow rather than serious (~1M codes), and worth
+// collapsing into one reason - but that is a deliberate change to a
+// security-relevant answer, not a comment fix. See docs/matchmaking.md.
 //
 // `outWhy`, when given, receives the refusal token (nullptr means it worked).
 // Only the client-driven `join` verb wants it, to charge a wrong guess against
