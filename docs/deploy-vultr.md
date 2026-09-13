@@ -286,12 +286,38 @@ curl http://SERVER_IP:9000/status
 ```
 ```json
 {"uptime":8412,"matches":3,"active":1,"players":5,"maxMatches":12,
- "maxPlayers":8,"stateTag":9,"welcomeTag":2,"egressBytes":91442310}
+ "maxActive":12,"maxPlayers":8,"stateTag":9,"welcomeTag":10,
+ "egressBytes":91442310}
 ```
 
-`stateTag`/`welcomeTag` are the protocol versions the running binary actually
-speaks — the quickest answer to *"is this the build I deployed?"*, which has
-caught a stale server here before. `uptime` answers *"did it restart?"*.
+| Field | Means |
+|---|---|
+| `uptime` | seconds since boot — answers *"did it restart?"* |
+| `matches` | rooms that exist right now |
+| `active` | how many of those are in countdown or playing — **the number that costs bandwidth** |
+| `players` | connected humans across every room |
+| `maxMatches` / `maxActive` | the caps this binary is running with, including any `PLATFORMZ_MAX_ACTIVE` override |
+| `maxPlayers` | slots per room |
+| `stateTag` / `welcomeTag` | the protocol versions the running binary actually speaks |
+| `egressBytes` | bytes this process has put on a socket since boot |
+
+`stateTag`/`welcomeTag` are the quickest answer to *"is this the build I
+deployed?"*, which has caught a stale server here before — CI now asserts them
+against `netbin.h` on every push, but the endpoint is how you check the box.
+
+`egressBytes` is the one to watch over time. Divide the delta by the elapsed
+seconds and compare against the ~325 KB/s a full match costs
+([`perf-measurements.md`](perf-measurements.md)); against a 2 TB/month plan the
+budget is about **770 KB/s sustained**, so `active` is the number that decides
+whether you are inside it:
+
+```bash
+# rough KB/s over a minute, from the outside
+a=$(curl -s "http://SERVER_IP:9000/status" | grep -o '"egressBytes":[0-9]*' | cut -d: -f2)
+sleep 60
+b=$(curl -s "http://SERVER_IP:9000/status" | grep -o '"egressBytes":[0-9]*' | cut -d: -f2)
+echo $(( (b - a) / 60 / 1024 )) KB/s
+```
 
 **It respects the join key.** With `PLATFORMZ_KEY` set the endpoint is as silent
 as everything else, so a scanner still sees a dead port; pass `?key=...` to reach
@@ -307,7 +333,60 @@ it. Nothing from the request is echoed back into the response.
   ./platformz ws://SERVER_IP:9000      # or WebSocket
   ```
 - Watch `journalctl -u platformz -f` — `players` climbs as people join. Browser and
-  native players share one match.
+  native players share one room, on either transport.
+
+### What you are looking at: several rooms, one server
+
+The server holds up to **12 rooms**, each a whole match with its own world,
+roster and options, all ticked on one 60 Hz beat. Two exist from boot:
+
+```
+Match registry: default room 7CGD (cap 12)
+Match registry: official room A6SS preset=DEFAULT (locked, auto-starts at 2 players)
+```
+
+- The **default room** is where a connection with no opinion lands, and is never
+  reaped.
+- An **official room** has locked options and starts itself once two humans are
+  in it — so somebody arriving alone on a quiet server still gets a game. QUICK
+  MATCH aims here, and the server mints another when they are all busy.
+- Players make their own rooms with CUSTOM MATCH. Those are **custom**: the
+  creator owns the options and the START button. Private ones are hidden from the
+  browser, so their 4-character code is the only way in.
+- An empty room is destroyed after a grace — 30 s from a lobby, 60 s if it was
+  mid-match, so a room-wide network blip does not tear down a live game. The
+  default and official rooms are pinned and never reaped.
+
+The heartbeat lists them every ten seconds, which is usually all the monitoring
+you need:
+
+```
+tick 3600  matches 4 (2 active)  players 7  worst 0.31ms
+    7CGD  lobby    slots 1/8  asteroids 0
+    A6SS  playing  slots 4/8  asteroids 18
+```
+
+`worst` is the slowest tick that second across **every** room. On the $6 box a
+full match costs ~0.6 ms against a 10 ms budget, so this stays small long after
+bandwidth has become the real limit — see the capacity note below.
+
+### How many matches this box can actually carry
+
+Measured, not estimated ([`perf-measurements.md`](perf-measurements.md)): a full
+8-player match costs **~325 KB/s** and about **0.6 ms** of tick.
+
+**CPU is not the constraint. Transfer is, by roughly 7×.** Twelve simultaneously
+full matches would be ~10 TB/month against the $6 plan's 2 TB, while the tick
+budget would still be nearly empty. So:
+
+- **12 rooms is fine** — most sit in a lobby costing almost nothing.
+- **~6 simultaneously *playing* matches** is what 2 TB/month actually pays for.
+
+`PLATFORMZ_MAX_ACTIVE=6` caps that, and a start beyond the cap is **held** — the
+room waits in its lobby and begins when a live match ends, so nobody's button
+press is lost. It ships **off**, because the right number depends on your plan
+and on what else shares it. Watch `active` and `egressBytes` on `/status` for a
+week before choosing one.
 
 ---
 

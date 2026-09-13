@@ -22,11 +22,22 @@ cd server && ./gameserver
 ./platformz udp://localhost:9000
 ```
 
-**4. Play.** Both clients land on the title screen, which *is* the lobby. The
-**host** — the lowest-numbered connected player, i.e. whoever joined first — picks
-a map size and presses START. Everyone else waits; they'll see
-*"Waiting for … to start the game."* A 5-second countdown runs, then the match
-begins.
+**4. Play.** Both clients land on the **title screen**, which offers four ways in:
+
+| | Does |
+|---|---|
+| **QUICK MATCH** | drops you into the fullest official room that is still filling, or makes one. One click, no decisions |
+| **FIND A MATCH** | the browser: every public room, its map, phase and 3/8 count. JOIN one, or CREATE / enter a code |
+| **CUSTOM MATCH** | make a room you run — you own the options and the START button |
+| **LOCAL MATCH** | offline, against bots. No server involved |
+
+The quickest two-player test is **QUICK MATCH on both clients** — they land in
+the same official room, which starts itself once two humans are in it.
+
+To test the *host* path instead, press CUSTOM MATCH on one client and JOIN its
+room from the other. In a custom room the **creator** is the host: only they see
+OPTIONS and START, and it migrates if they leave. A 5-second countdown runs, then
+the match begins.
 
 > ### ⚠️ Always pass the URL when testing locally
 > `./platformz` with **no arguments** connects to **`platformz.space`** — the live
@@ -42,21 +53,41 @@ The server prints this on startup:
 
 ```
 PLATFORMZ server | port 9000 (TCP/WebSocket + UDP) | 60 Hz
-Protocol: state tag 0x09, welcome tag 0x0A | qpos +/-2400 | qvel +/-700
+Protocol: state tag 0x09, welcome tag 0x0a | qpos +/-2400 | qvel +/-700
 Join key: none (open server; set PLATFORMZ_KEY to require one)
-[scoreboard] no file at scores - starting empty
+Match caps: 12 rooms, 12 live (no live cap; set PLATFORMZ_MAX_ACTIVE to add one), 3 per address
+UDP handshake cookie: ON (HMAC-SHA256, 30s buckets)
+WARNING: PLATFORMZ_IDENTITY_SECRET unset - using a random per-boot secret (…)
 Scoreboard: 0 names from scores
+Match registry: default room 7CGD (cap 12)
 GameSpace: lobby ready, 8 player slots (waiting for a player to start)
+Match registry: official room A6SS preset=DEFAULT (locked, auto-starts at 2 players)
 ```
 
-Then a heartbeat once per second. Watch `players` climb as clients connect:
+The `PLATFORMZ_IDENTITY_SECRET` warning is **expected locally** — it only matters
+on a deployed server, where a per-boot secret means handshake cookies do not
+survive a restart. See the deploy doc.
+
+Two rooms exist at boot: a **default** room (where a connection with no opinion
+lands) and an **official** one (locked preset, starts itself at two players).
+
+Then a heartbeat once per second:
 
 ```
-tick 60  players 2  asteroids 0
+tick 60  matches 2 (0 active)  players 0  worst 0.01ms
 ```
 
-`asteroids 0` is correct before START — **the server boots with no world at all.**
-It builds one only when the host starts a match.
+`matches` counts rooms, `(N active)` counts the ones actually in countdown or
+playing, and `worst` is the slowest tick in that second across **all** of them.
+Every ten seconds it also lists each room:
+
+```
+    7CGD  lobby    slots 2/8  asteroids 0
+    A6SS  playing  slots 4/8  asteroids 18
+```
+
+`asteroids 0` in a lobby is correct — **a room has no world until its match
+starts.**
 
 ---
 
@@ -149,19 +180,143 @@ make web RAYLIB_WEB_DIR=$HOME/raylib      # -> web/platformz.{html,js,wasm,data}
 
 ---
 
-## The lobby, and who the host is
+## Rooms, lobbies, and who the host is
 
-The title screen doubles as the live lobby in networked play.
+The title screen is a **router**, not the lobby. Picking any of the three online
+destinations puts you in a **room**, and that room has its own lobby.
 
-- **Host** = the lowest connected human slot. Only the host sees OPTIONS and the
-  START buttons; it migrates automatically if that player leaves.
-- **OPTIONS** are match-wide and host-only. They sync live to every client, so you
-  can watch a slider move on the other window.
-- **Map size** is chosen by *which* START button you press (SMALL / MEDIUM /
-  LARGE / XL).
+- **Host** = **the player who created the room**. Only they see OPTIONS and START;
+  it migrates to the lowest remaining slot if they leave.
+- **Official rooms have no host at all.** Their options are locked (the preset is
+  the point) and they start themselves once two humans are present — so START and
+  OPTIONS are absent for everyone, not just for you.
+- **OPTIONS** are match-wide and sync live, so you can watch a slider move in the
+  other window. **Map size lives in OPTIONS**, not on the START button, so the
+  lobby shows everyone which arena is coming before anyone presses anything.
+- **LEAVE** puts you back where you came from, so you can hop rooms without
+  restarting the client.
 - **Joining mid-match** works when the roster has a free slot — set NUMBER OF
-  PLAYERS above the number of humans present and the latecomer takes a bot's slot.
+  PLAYERS above the humans present and a latecomer takes a bot's slot.
 - **`M` ends the match**, host only.
+
+### Invite links and codes
+
+A room's 4-character code is its invite. The lobby shows it and has **COPY
+INVITE** — in a browser that copies the whole link, key and all; natively it
+copies the code, since there is no link to hand out.
+
+```bash
+./platformz udp://localhost:9000 --match 7QK2      # native, straight into a room
+```
+```
+http://localhost:8080/platformz.html?match=7QK2    # browser
+```
+
+A **private** room is hidden from FIND A MATCH entirely, so its code is the only
+way in — which is exactly what makes the code worth something. An empty room is
+destroyed after 30 s (60 s if it was mid-match), so a stale code comes back as a
+refusal on the browse screen, not a hang.
+
+---
+
+## Two matches, four clients, one server
+
+The thing multi-match actually has to survive: rooms that neither know nor affect
+each other, ticked on the same 60 Hz beat.
+
+```bash
+cd server && ./gameserver           # one server, as always
+```
+
+Four clients in four terminals. Two make rooms, two join them:
+
+```bash
+./platformz udp://localhost:9000    # A - CUSTOM MATCH, note the code (say 7QK2)
+./platformz ws://localhost:9000     # B - FIND A MATCH, JOIN 7QK2
+./platformz udp://localhost:9000    # C - CUSTOM MATCH, note the code (say M4XD)
+./platformz ws://localhost:9000     # D - FIND A MATCH, JOIN M4XD
+```
+
+Now start **only** A's match and watch the server:
+
+```
+    7QK2  countdown  slots 2/8  asteroids 0
+    M4XD  lobby      slots 2/8  asteroids 0
+```
+
+What to look for, in rough order of what has actually broken before:
+
+- **C and D stay in their lobby.** A start is a room's own business; if both rooms
+  go to countdown, routing is broken.
+- **A and B see the same countdown, C and D see none.** The state packet carries
+  the phase per room.
+- **`matches 2 (1 active)`** in the heartbeat — one room playing, one not.
+- **Start M4XD too.** Both play at once; `worst` should stay well under a
+  millisecond on a dev machine. This is the case the sim loop exists for.
+- **Mix transports inside one room** (A on UDP, B on WebSocket). They share a
+  world and neither can tell.
+- **Have B LEAVE mid-match.** A's match carries on; B lands back on the browser
+  and can join M4XD instead.
+
+Driving four GUI clients by hand gets old. `server/test/probe_multimatch.py` does
+the same thing headlessly in about twenty seconds, and the harness below does it
+at ten rooms.
+
+---
+
+## Testing without a GUI
+
+Everything below runs against a plain `./gameserver` and needs no client.
+
+```bash
+./server/test/run_all.sh        # standalone C++ tests. Seconds, no server needed
+./server/test/run_probes.sh     # eleven live protocol probes, each on a fresh server
+./server/test/ci_smoke.sh       # protocol tags + WebSocket + a two-match load run
+```
+
+**The probes** (`server/test/probe*.py`) are headless protocol clients, one per
+question — the lobby and host rules, the directory, reconnecting into your own
+slot, join-in-progress, the handshake cookie, the capacity budgets. Each gets its
+own fresh server, because several leave state behind that would fail the next one
+for the wrong reason. Run one on its own while poking at the server:
+
+```bash
+cd server && ./gameserver &
+python3 server/test/probe_capacity.py
+```
+
+**The load harness** (`server/loadtest.cpp`) is the only way to see many rooms
+under real load:
+
+```bash
+make -C server loadtest
+server/loadtest --matches 10 --clients 8 --seconds 30
+server/loadtest --mode ws-smoke          # one WebSocket client, end to end
+```
+
+It reports delivered state rate, worst inter-packet gap, and egress per match —
+and the rate the *generator* itself achieved, because if the harness could not
+keep 60 Hz then none of the other numbers are about the server. **Run it from a
+different machine than the server** whenever the numbers matter; on one box you
+are mostly measuring the two competing. Tick costs come from the server's own
+`PLATFORMZ_PERF=1` output, not from the harness.
+
+Creating ten rooms from one address trips the per-address budget, so:
+
+```bash
+PLATFORMZ_MAX_ROOMS_PER_ADDR=0 ./gameserver
+```
+
+**Under ThreadSanitizer**, when a hang or a corrupted-looking state smells like a
+race:
+
+```bash
+make -C server tsan
+PLATFORMZ_SERVER_BIN=gameserver-tsan ./server/test/run_probes.sh
+```
+
+All three run in CI on every push (`.github/workflows/build.yml`), so a red tick
+on GitHub usually means one of these commands reproduces it locally.
 
 ---
 
@@ -210,6 +365,19 @@ Browser: `http://localhost:8080/platformz.html?key=test123`
 
 Startup logs `Join key: REQUIRED` when it's set. Leave it unset for local testing.
 
+A wrong key gets **no reply at all** — not even the UDP handshake challenge. If a
+client sits on "CONNECTING TO SERVER…" against a server that is definitely up,
+the key is the first thing to check.
+
+### The other secret
+
+`PLATFORMZ_IDENTITY_SECRET` is unrelated and is **never shared with players**. It
+is the key behind the UDP handshake cookie (and, later, the identity token). Unset
+it and the server mints a random one per boot, which is fine locally — the boot
+warning is expected — and not fine on a deployed server, where it means every
+cookie in flight dies on restart. See
+[`deploy-vultr.md`](deploy-vultr.md#the-identity-secret).
+
 ---
 
 ## Controls
@@ -226,7 +394,11 @@ cursor capture · F3 perf overlay · `+`/`-` volume.
 ./platformz local                    # offline single-player, no server
 ./platformz bench 240 256 24 4       # perf run: halfSize platforms asteroids [players]
                                      # skips the title, spawns bots, F3 overlay on
+./platformz udp://localhost:9000 --match 7QK2    # straight into a room, skipping the browser
 ```
+
+`--match` is the native half of an invite link, and it is the fastest way to put
+a second client in a specific room without clicking through FIND A MATCH.
 
 ---
 
@@ -238,8 +410,13 @@ cursor capture · F3 perf overlay · `+`/`-` volume.
 | `bind: Address already in use` | Something already holds 9000. `lsof -nP -iTCP:9000 -sTCP:LISTEN` — often a `gameserver` you left running in a closed terminal. |
 | Browser stuck on "CONNECTING TO SERVER…" | No game server on 9000, or wrong host. Confirm with `lsof -nP -iTCP:9000 -sTCP:LISTEN`. Both terminals must be up. |
 | "SERVER VERSION MISMATCH" | Client and server disagree on the protocol tags. Compare the server's startup `Protocol:` line against `netbin.h` and rebuild both. |
-| Nothing happens after connecting | You're in the lobby. Someone has to press START — and only the host sees the button. |
-| `asteroids 0` in the heartbeat | Correct before START. The server has no world until a match begins. |
+| Nothing happens after connecting | You're in a room's lobby. Someone has to press START — and only the room's **creator** sees it. In an *official* room nobody does: it starts itself at two humans. |
+| `asteroids 0` in the heartbeat | Correct before START. A room has no world until its match begins. |
+| "NO FREE SLOT - WAITING FOR ONE TO OPEN..." | Every slot is taken. You are still connected and can go back and pick another room — or wait, and your client takes the next seat that frees up. |
+| UDP client never gets in, WebSocket does | It cannot echo the handshake cookie — almost always an **old binary** against a new server. Rebuild the client. |
+| "TOO MANY ATTEMPTS - WAIT A MOMENT" | You spent a rate limit: five wrong room codes a minute, or five room moves in quick succession. Both clear within a minute. |
+| Rooms refuse to be created, `server_full` | Either 12 rooms already exist, or you've minted 3 from this address. `PLATFORMZ_MAX_ROOMS_PER_ADDR=0` for testing. |
+| Everything looks right but `matches` never grows | You created rooms with a client that then quit — an empty room is reaped 30 s later. |
 | `make web` fails with `python 3.10 or above` | `EMSDK_PYTHON` unset and a 3.9 venv is shadowing `python3`. Export it, or `deactivate` first. |
 | Browser blank / 404 on `.wasm` | You opened `file://` or served the wrong directory. Serve from `web/`. |
 | Other machine can't reach the server | Different subnet, or macOS firewall is blocking `gameserver`. |
@@ -249,7 +426,9 @@ cursor capture · F3 perf overlay · `+`/`-` volume.
 
 ## See also
 
+- `docs/matchmaking.md` — the directory protocol: rooms, codes, every message, every limit.
 - `docs/deploy-vultr.md` — running the server on a public VPS.
+- `docs/perf-measurements.md` — what the server actually costs, measured.
 - `docs/matchmaking-plan.md` — where multi-match hosting and the match browser are going.
 - `docs/multiplayer-testing-archive.md` — the pre-lobby version of this doc.
 - `server/test_client.html` — poke the protocol from a browser console without a client.

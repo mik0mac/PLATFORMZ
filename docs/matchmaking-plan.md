@@ -1171,7 +1171,7 @@ probe once CI is watching it.
 
 ---
 
-### E4. Docs refresh
+### E4. Docs refresh — **DONE** (#91)
 **Scope:** `docs/deploy-vultr.md` (multi-match section, `/status`, capacity
 numbers from A4, the key-vs-code distinction) and `docs/play-web-via-github.md`.
 
@@ -1188,11 +1188,35 @@ the scoreboard, and the trap that a bare `./platformz` connects to the *live*
 server because `secrets.mk` bakes the host in. The pre-lobby version stays at
 `docs/multiplayer-testing-archive.md` for its Emscripten build record.
 
-**Still owed here:** a "two matches, four clients, one server" section, once
-multi-match actually exists.
+**~~Still owed: a "two matches, four clients, one server" section~~ — DONE.** It
+is in `multiplayer-testing.md`, written as what to *look for* rather than what to
+type: C and D must stay in their lobby while A's match starts, the heartbeat must
+read `matches 2 (1 active)`, and mixing transports inside one room must be
+invisible. Alongside it, a "testing without a GUI" section, because by now the
+fastest way to answer most of these questions is a probe rather than four windows.
 
-Also add a short `docs/matchmaking.md` describing the directory protocol as the
-reference for both ends.
+**~~`docs/matchmaking.md`~~ — DONE.** The directory protocol as the reference for
+both ends: what a room is, the two gates and why they are not the same gate, the
+UDP handshake, every message in both directions with its real field names, every
+`joinfail` reason, every limit, and where each concern lives in the tree.
+
+#### What else was stale, and is not now
+
+`multiplayer-testing.md` had been overtaken by rooms in ways that would have
+actively misled someone: it said the title screen *is* the lobby (it is a router
+now — QUICK / FIND / CUSTOM / LOCAL), that the host is the lowest connected slot
+(it is the room's creator, and an official room has no host at all), and that map
+size is chosen by *which* START button you press (B3 moved it into OPTIONS). Its
+boot transcript and heartbeat format both predated the registry.
+
+`play-web-via-github.md` still advertised **2 player slots**. It is 8 per room and
+up to 12 rooms.
+
+`deploy-vultr.md` gained the multi-match section it was owed — what the two boot
+rooms are for, how to read the rollcall — plus a field-by-field `/status` table
+and, from E3's measurements, the capacity paragraph that says plainly that **CPU
+is not the constraint and ~6 live matches is what 2 TB/month pays for.** The
+key-vs-code distinction and the abuse-limit table landed earlier, with E2.
 
 ---
 
