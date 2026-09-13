@@ -31,6 +31,7 @@
 #include "jsonmin.h"      // jf/ji/ju/jb/js - the shared JSON writers
 #include "crypto.h"       // HMAC-SHA256 + constant-time compare (E1's cookie, later D3's token)
 #include "bucket.h"       // pz::Bucket - the token bucket behind every rate limit (E1, E2)
+#include "identity.h"     // ident::Mint / Verify - the server-issued identity token (D3)
 #include "match.h"        // Match: the world, its roster, and everything that ticks
 #include "registry.h"     // MatchRegistry: which rooms exist, and their lifecycle
 #include "../scoreboard.h" // cumulative all-time score table, persisted between runs
@@ -238,6 +239,50 @@ static bool CookieOk(const std::string& offered, const udp::endpoint& from) {
 // 0.3x is not worth a message type the browser build can never use.
 static std::string buildChallenge(const std::string& cookie) {
     return std::string("{\"type\":\"challenge\",\"c\":") + js(cookie) + "}";
+}
+
+//MARK: Identity token (D3)
+// -------------------------------------------------------------------------
+// The cookie above proves an ADDRESS is real, for the length of one handshake.
+// This proves a CLIENT is the same one as last time, for as long as it keeps the
+// token - which is what anything outliving a match needs, and what `clientId`
+// cannot give (the client mints that itself, in a file the player owns).
+//
+// Same secret, same primitive, no user table: the server signs a random id and
+// checks its own signature when it comes back. See server/identity.h for the
+// scheme and for what it deliberately does not prove.
+//
+// Two different strings, and keeping them apart matters: `id` is what the server
+// keys on and may log, `issue` is a bearer credential that goes to exactly one
+// client and nowhere else. A helper returning "the identity" would eventually
+// have somebody write the token into the score file.
+struct Identity {
+    std::string id;      // proved identity, or empty if identity is off entirely
+    std::string issue;   // a token to hand this client, or empty if theirs is fine
+};
+
+// The whole policy in one place, used by both transports: verify what they
+// presented, and if there is nothing usable, mint. It NEVER fails a connection -
+// nothing, something we did not sign, and something signed before the operator
+// rotated the secret are all the same situation from here, and all of them mean
+// "issue a new one", not "refuse the join".
+static Identity EstablishIdentity(const std::string& presented) {
+    Identity out;
+    if (ident::Verify(g_identitySecret, presented, out.id)) return out;
+
+    const std::string fresh = ident::Mint(g_identitySecret);
+    // No secret configured at all: identity is simply off, and everything
+    // downstream must already cope with an empty id (it is what every client
+    // looked like before D3).
+    if (fresh.empty() || !ident::Verify(g_identitySecret, fresh, out.id)) return Identity{};
+    out.issue = fresh;
+    return out;
+}
+
+// Handed to a client that needs a new one. The client stores it in its profile
+// and presents it from then on.
+static std::string buildIdentity(const std::string& token) {
+    return std::string("{\"type\":\"identity\",\"tok\":") + js(token) + "}";
 }
 
 // Bytes actually put on a socket, for A4's egress budget. Process-wide: the
@@ -1390,10 +1435,17 @@ public:
             // anything.
             const std::string cid =
                 clampClientId(QueryParam(std::string(self->req_.target()), "cid"));
+            // ?tok= is the identity token (D3), on the URL for the same reason
+            // ?cid= is: a WebSocket client is welcomed the instant it connects,
+            // so it may never send a hello at all - the handshake is the only
+            // moment guaranteed to happen on this transport.
+            const Identity ident =
+                EstablishIdentity(QueryParam(std::string(self->req_.target()), "tok"));
 
             self->connId_ = nextConnId++;
             ConnectedClient c;
             c.clientId   = cid;
+            c.identity   = ident.id;
             c.transport  = Transport::WS;
             c.session    = self;
             // Who this connection is, for the per-address creation budget. Taken
@@ -1404,6 +1456,10 @@ public:
             // shared with the UDP path. A full room no longer ends the
             // connection: worst case this client is parked with no slot and told
             // so, and it stays here browsing until one frees up.
+            // Before the welcome, so a client that is about to be parked with no
+            // slot still ends up with an identity for next time.
+            if (!ident.issue.empty()) self->Send(buildIdentity(ident.issue));
+
             SeatOrPark(self->connId_, c, targetCode);
 
             // Read() UNCONDITIONALLY, even unseated. This is E2's actual change
@@ -1689,7 +1745,12 @@ static bool AttachConn(uint64_t connId, const std::string& code,
     std::cout << "conn " << connId << " ("
               << (rec.transport == Transport::UDP ? "udp" : "ws")
               << ") -> slot " << slot << " in " << code
-              << ". Active there: " << seated << "\n";
+              << ". Active there: " << seated
+              // The IDENTITY, never the token: this half is safe to write down,
+              // which is exactly why the two are separate strings. Eight chars is
+              // enough to correlate a session by eye and useless for anything else.
+              << (rec.identity.empty() ? "" : "  id " + rec.identity.substr(0, 8))
+              << "\n";
 
     // Seated, so it is no longer unseated - the two are exclusive by
     // construction, and doing it here rather than at each call site means a new
@@ -2240,13 +2301,31 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
     // just re-welcomes harmlessly. A name may ride the hello. buildWelcome reads
     // gameSpace unlocked exactly as the WS connect-welcome does.
     if (msg.find("\"type\":\"hello\"") != std::string::npos) {
-        std::lock_guard<std::mutex> lock(clientMutex);
-        auto it = clients.find(connId);
-        if (it != clients.end()) {
+        ConnectedClient sink;
+        std::string issue;
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            auto it = clients.find(connId);
+            if (it == clients.end()) return;
             std::string nm = clampName(parseString(msg, "name"));
             if (!nm.empty()) { it->second.name = nm; it->second.nameDirty = true; }
-            SendToClient(it->second, welcomeFor(it->second));
+            // Identity (D3) is settled on the CONNECT paths, but it is settled
+            // over UDP by a single datagram - and a datagram can be lost. A
+            // client that never received the token it was issued would otherwise
+            // carry on without one until its next session, so re-establish it
+            // here too: the client is already re-sending hello for exactly this
+            // reason, and a token that verifies costs one HMAC and changes
+            // nothing.
+            if (it->second.identity.empty() || !parseString(msg, "tok").empty()) {
+                const Identity id = EstablishIdentity(parseString(msg, "tok"));
+                if (!id.id.empty()) it->second.identity = id.id;
+                issue = id.issue;
+            }
+            sink = it->second;
         }
+        // Off the lock, like every other send site here.
+        if (!issue.empty()) SendToClient(sink, buildIdentity(issue));
+        SendToClient(sink, welcomeFor(sink));
         return;
     }
 
@@ -3280,6 +3359,9 @@ private:
         // endpoint - the id is the only thing tying it to the body still drifting
         // in the arena.
         const std::string cid = clampClientId(parseString(helloMsg, "cid"));
+        // "tok" is the identity token (D3). Read here, on the hello, because
+        // that is this transport's handshake - there is no URL on the wire.
+        const Identity identity = EstablishIdentity(parseString(helloMsg, "tok"));
         {
             // Lock order gameMutex->clientMutex, matching Session::Accept.
             std::lock_guard<std::mutex> gg(target->gameMutex);
@@ -3300,6 +3382,7 @@ private:
         const uint64_t connId = nextConnId++;
         ConnectedClient c;
         c.clientId    = cid;
+        c.identity    = identity.id;
         c.transport   = Transport::UDP;
         c.udpEndpoint = from;
         c.remoteAddr  = from.address().to_string();
@@ -3311,6 +3394,12 @@ private:
         // next datagram already finds its connection. The receive loop has a
         // single outstanding read, so nothing can arrive in between.
         { std::lock_guard<std::mutex> cl(g_connMutex); g_udpIndex[from] = connId; }
+
+        // Before the welcome, so a client that is about to be parked with no
+        // slot still ends up with an identity for next time. The address is
+        // already proved by the cookie above, so this is not a reply to a
+        // stranger.
+        if (!identity.issue.empty()) SendToClient(c, buildIdentity(identity.issue));
 
         // Seated, bumped to the default room, or parked with no slot at all -
         // one shared answer with the WS path, and none of them hang up. The old

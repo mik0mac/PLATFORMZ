@@ -787,7 +787,7 @@ teardown.
 
 ---
 
-### D3. Server-issued identity token
+### D3. Server-issued identity token — **DONE** (#97)
 **Why:** `clientId` alone proves nothing — the client generates it and owns the
 file. That is fine for D2's 15-second slot restore, and useless for anything
 persistent. A server-signed token makes "same player as last time" verifiable, and
@@ -821,6 +821,44 @@ Nothing is baked into the web build — browser tokens live in `localStorage`.
 
 **Files:** `server/server_main.cpp`, `wire.h`, `profile.h`, `docs/deploy-vultr.md`.
 **Depends on:** D1.
+
+#### What shipped
+
+`server/identity.h`, on top of E1's `crypto.h` exactly as planned — the secret,
+the HMAC and the constant-time compare were already there and already tested, so
+this was the small half of its own design. `profile.h` needed no change at all:
+D1 put the `token` field in a year of decisions ago, which is the whole argument
+for doing this before the format shipped rather than after.
+
+**Hex, not base64, which is what the scope above says.** The token rides the
+WebSocket upgrade URL as a query parameter, so it has to be URL-safe: base64 is
+not, base64url is, and hex is both without a codec to write or get wrong. 64
+characters instead of 43, in a field no human reads, for identical security —
+it is an encoding, not a cipher.
+
+**Two strings, not one.** `Identity{id, issue}`: the **id** is what the server
+keys on and may log, the **issue** is a bearer credential that goes to one client
+and nowhere else. A single "the identity" value would eventually have somebody
+write the token into the score file. The seat log prints the first 8 chars of the
+id for correlation and never the token.
+
+**The token is established on the CONNECT paths, and re-established on `hello`.**
+Connect is the reliable moment (a WS client is welcomed the instant it connects
+and may never send a hello at all), but over UDP the issued token is a single
+datagram and a datagram can be lost — so a client that never received one asks
+again on its next hello, which it is already sending. A verified token costs one
+HMAC and changes nothing.
+
+**What it deliberately does not do:** nothing consumes the identity yet. It sits
+on `ConnectedClient` waiting for D4, which is the point — the expensive half was
+getting it into a shipped `hello` and a shipped profile format.
+
+Tests: `server/test/identity_test.cpp` spends most of its checks on tokens that
+must FAIL (forged tags, swapped halves, spliced tokens, the wrong secret, and the
+near-misses a lenient hex parser would wave through), because a token that
+verifies when it should not just means somebody else's leaderboard row, silently.
+`probe_identity.py` proves the policy over UDP; `loadtest --mode ws-smoke` proves
+it over WebSocket, which is the only automated coverage that transport has.
 
 ---
 

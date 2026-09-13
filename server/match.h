@@ -102,6 +102,20 @@ struct ConnectedClient {
     // gates only room CREATION, where the abuse is one machine minting rooms
     // until nobody else can, and never joining or playing.
     std::string   remoteAddr;
+
+    // Who this connection has PROVED it is (D3), or empty if it presented no
+    // valid token. Unlike clientId above, this one the server signed itself, so
+    // it cannot be claimed by asserting it - see server/identity.h.
+    //
+    // It proves CONTINUITY, not personhood: the same client as last time. One
+    // player can still copy their token to a second machine, and nothing here
+    // stops them. Anything that outlives a match (the scoreboard, D4) should key
+    // on this rather than on a display name, and nothing should treat it as
+    // proof that a human is who they say.
+    //
+    // Empty is normal and must always work: a client that has never been issued
+    // one, or whose token predates a secret rotation, plays exactly as before.
+    std::string   identity;
 };
 
 //MARK: Slot mask

@@ -580,9 +580,9 @@ format, and before destroying or resizing the instance.
 
 ### The identity secret
 
-`PLATFORMZ_IDENTITY_SECRET` is the key behind every tag the server issues — today
-E1's UDP handshake cookie, and D3's identity token when it lands. It lives in
-`/etc/platformz.env` beside the join key:
+`PLATFORMZ_IDENTITY_SECRET` is the key behind every tag the server issues: E1's
+UDP handshake cookie and D3's identity token. It lives in `/etc/platformz.env`
+beside the join key:
 
 ```bash
 # on the box, as root. 32 random bytes, hex, no shell-special characters.
@@ -597,9 +597,16 @@ this boot and the line above did not take.
 
 **It must survive restarts.** A per-boot secret is harmless for E1 — clients
 whose cookie went stale across the restart just take one extra handshake round
-trip — but it is fatal for D3, where every identity token in every player's
-profile would become invalid on every deploy and each returning player would look
-like somebody new. It is also the reason it belongs in the backup above.
+trip. For D3 it is not: every identity token in every player's profile stops
+verifying, so each returning player is issued a fresh one and looks like somebody
+new. Nothing breaks — a client with a stale token is re-issued and plays exactly
+as before — but continuity is lost, and once the scoreboard is keyed on identity
+(D4) that means everybody's history resets on every deploy. It is also why it
+belongs in the backup above.
+
+**Rotating it deliberately** does the same thing on purpose: every player becomes
+new. That is the reset switch if you ever need one, and the reason not to touch
+the line otherwise.
 
 Unlike `PLATFORMZ_KEY`, this one is **never** shared with players: it does not
 ride in invite links or handout builds, and nothing a client sends should ever

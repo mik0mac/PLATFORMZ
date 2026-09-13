@@ -52,6 +52,25 @@ def exchange(s, payload):
         return None, 0
     return d, len(d)
 
+def exchange_binary(s, payload):
+    """Send one datagram, return the first BINARY reply (or None, 0).
+
+    Deliberately not "the first reply": a successful hello draws several packets
+    - an identity token (D3), the welcome, a leaderboard - and UDP promises
+    nothing about which lands first. Asserting on packet [0] made this probe fail
+    the moment D3 added one, for a reason that was never a bug.
+    """
+    s.send(payload)
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        try:
+            d = s.recv(65536)
+        except socket.timeout:
+            break
+        if d and d[0] != 0x7B:      # not '{' - a binary packet
+            return d, len(d)
+    return None, 0
+
 def as_json(d):
     if not d or d[0] != 0x7B: return None      # not '{' - a binary packet
     try: return json.loads(d.decode("utf-8", "replace"))
@@ -76,7 +95,7 @@ check(jb is not None and jb.get("type") == "challenge",
       "a made-up cookie gets challenged again rather than seated")
 
 print("echoing the cookie completes the handshake")
-welcome, wn = exchange(a, hello_bytes(cookie))
+welcome, wn = exchange_binary(a, hello_bytes(cookie))
 check(welcome is not None and welcome[0] != 0x7B,
       "the cookie buys a binary welcome")
 # Reported, not asserted. The welcome measured here is a LOBBY welcome and is

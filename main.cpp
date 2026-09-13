@@ -268,9 +268,18 @@ int main(int argc, char** argv) {
     // Kept apart from serverUrl deliberately: serverUrl is what the profile
     // records and what gets shown, and neither wants an id glued onto it.
     auto dialUrl = [&](const std::string& base) {
-        const std::string& cid = profile::Get().clientId;
-        if (cid.empty() || !UrlParam(base, "cid").empty()) return base;
-        return base + (base.find('?') == std::string::npos ? "?" : "&") + "cid=" + cid;
+        std::string out = base;
+        auto add = [&out](const char* k, const std::string& v) {
+            if (v.empty() || !UrlParam(out, k).empty()) return;
+            out += (out.find('?') == std::string::npos ? "?" : "&");
+            out += k; out += "="; out += v;
+        };
+        add("cid", profile::Get().clientId);
+        // The identity token (D3) rides here for the same reason: over WebSocket
+        // the server welcomes us the instant we connect, so the hello below may
+        // never be sent at all. Both are hex/UUID, so neither needs escaping.
+        add("tok", profile::Get().token);
+        return out;
     };
 
     // `networked` answers "is the thing I am doing right now networked?", and a
@@ -743,6 +752,22 @@ int main(int argc, char** argv) {
             TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
             return true;
         }
+        if (m.type == ServerMessage::Type::Identity) {
+            // The server has issued us an identity (D3) - because we had none,
+            // or because the one we sent no longer verifies (it rotated its
+            // secret). Either way the new one replaces the old unconditionally:
+            // a token we cannot use is worth nothing, and keeping it would have
+            // us present a dead credential forever.
+            //
+            // Straight into the profile. profile::Autosave notices the change and
+            // writes it out, which is what makes it survive to the next launch -
+            // the entire point of the thing.
+            if (!m.identityToken.empty() && m.identityToken != profile::Get().token) {
+                profile::Get().token = m.identityToken;
+                TraceLog(LOG_INFO, "Server issued an identity token");
+            }
+            return true;
+        }
         if (m.type == ServerMessage::Type::Challenge) {
             // The server wants proof this address really is ours before it
             // spends a welcome on us (E1). Stash the cookie and let the hello go
@@ -1108,7 +1133,7 @@ int main(int argc, char** argv) {
                 // way the slot we are holding can be handed back to us.
                 net.send(serializeHello(shell.namePristine ? std::string() : shell.playerName,
                                         joinKey, profile::Get().clientId, shell.inMatchCode,
-                                        udpCookie));
+                                        udpCookie, profile::Get().token));
                 lastHelloTime = nowT;
             }
             // UDP keepalive: the client only streams input during PLAYING, so on

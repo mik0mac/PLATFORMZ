@@ -119,7 +119,7 @@ take the server's default.
 
 | Type | Fields | Notes |
 |---|---|---|
-| `hello` | `name`, `key`?, `cid`?, `match`?, `c`? | handshake and retry. Re-sent every 0.5 s until welcomed |
+| `hello` | `name`, `key`?, `cid`?, `match`?, `c`?, `tok`? | handshake and retry. Re-sent every 0.5 s until welcomed |
 | `ping` | — | keepalive. UDP has no disconnect event, so silence is how the server notices you left |
 | `goodbye` | — | leaving on purpose; frees the slot at once instead of after the idle timeout |
 | `name` | `name` | display name for your slot |
@@ -150,6 +150,7 @@ cannot land on the new one's spawn state.
 | Type | Shape | Notes |
 |---|---|---|
 | `challenge` | `c` | UDP only. Not a refusal — answer it and hello again |
+| `identity` | `tok` | a token to store and present from now on. Sent when you had none, or yours no longer verifies |
 | **welcome** | slot + room identity + static world | JSON over WS, binary tag `0x0A` over UDP |
 | **state** | phase, countdown, epoch, options, roster | JSON over WS, binary tag `0x09` over UDP, 60 Hz |
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
@@ -197,6 +198,44 @@ you want next is the list of rooms that are not.
 
 ---
 
+## Identity
+
+Three different things get called "who you are", and they are not interchangeable.
+
+| | What it is | Trust |
+|---|---|---|
+| **display name** | what you typed | none — two players can both be `MIKE` |
+| **`cid`** | a UUID the client minted and keeps in its own profile | none — the player owns the file and can put anything in it |
+| **identity token** | a random id the **server** minted and signed | the id is one this server issued, and the holder had it |
+
+The token is `id ‖ HMAC(secret, id)`, 64 hex characters, and the server keeps **no
+record of it** — it re-computes the tag and compares, the same trick as the
+handshake cookie. So there is no user table, nothing to back up beyond the secret,
+and nothing to leak.
+
+```
+client → hello with no "tok"
+server ← {"type":"identity","tok":"<64 hex>"}      store it in the profile
+client → hello with "tok" from then on            (or ?tok= on a WS upgrade URL)
+```
+
+A token that does not verify — made up, truncated, or signed before the operator
+rotated the secret — is **replaced, never refused.** A stale token is a client to
+re-issue, not a player to lock out.
+
+**What it proves is continuity, not personhood.** It says "the same client as last
+time". It does not say a human is who they claim: a player can copy their own
+token to a second machine, or run several clients. That is enough for a
+friends-and-family ranking and not enough for a competitive public one, which
+would want real accounts. Do not let a later feature quietly assume otherwise.
+
+The **id** (the token's first half) is what anything persistent should key on —
+it is safe to log and to write to disk. The **token** is a bearer credential and
+belongs only in the client's profile and on the wire. They are separate strings in
+the code for exactly this reason.
+
+---
+
 ## Limits
 
 Enforced with no configuration. They are listed here so a refusal is
@@ -234,7 +273,8 @@ answers the guess. Mistype a code five times and you wait out the minute.
 | Directory verbs, budgets, seating | `server/server_main.cpp` |
 | Which rooms exist, codes, reaping | `server/registry.h` |
 | One room: world, roster, phase, tick | `server/match.h` |
-| HMAC + constant-time compare (the cookie) | `server/crypto.h` |
+| HMAC + constant-time compare, hex, randomness | `server/crypto.h` |
+| Minting and verifying the identity token | `server/identity.h` |
 | The token bucket every limit is built on | `server/bucket.h` |
 | Browser + lobby screens | `screens.h` |
 
