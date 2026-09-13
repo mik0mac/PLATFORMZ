@@ -30,6 +30,7 @@
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
 #include "jsonmin.h"      // jf/ji/ju/jb/js - the shared JSON writers
 #include "crypto.h"       // HMAC-SHA256 + constant-time compare (E1's cookie, later D3's token)
+#include "bucket.h"       // pz::Bucket - the token bucket behind every rate limit (E1, E2)
 #include "match.h"        // Match: the world, its roster, and everything that ticks
 #include "registry.h"     // MatchRegistry: which rooms exist, and their lifecycle
 #include "../scoreboard.h" // cumulative all-time score table, persisted between runs
@@ -1803,26 +1804,12 @@ static void SeatOrPark(uint64_t connId, const ConnectedClient& rec,
 // abuse there is one machine opening connection after connection and minting a
 // room on each until the registry is full. See g_addrBudgets.
 
-// A token bucket. `burst` tokens to spend, refilled at `perSec`, one per
-// request. Buckets rather than flat intervals throughout, because everything
-// here is something a person does in short bursts and a script does forever: the
-// burst is what keeps the UI honest, the refill rate is what bounds the script.
-struct Bucket {
-    double tokens = 0.0;
-    double filled = 0.0;   // when `tokens` was last topped up
-};
-
-// Spend one token if there is one. A fresh Bucket has filled == 0, so `now - 0`
-// is however long this process has been up - a huge refill that the clamp turns
-// into a full bucket. Exactly right for something we have never seen, and it
-// means no special first-request case to get wrong.
-static bool TakeToken(Bucket& b, double now, double burst, double perSec) {
-    b.tokens = std::min(burst, b.tokens + (now - b.filled) * perSec);
-    b.filled = now;
-    if (b.tokens < 1.0) return false;
-    b.tokens -= 1.0;
-    return true;
-}
+// The token bucket every limit below is built on lives in bucket.h, so it can be
+// unit-tested against a controlled clock (server/test/bucket_test.cpp) - which is
+// how the "a freshly booted server hands out a partial budget" bug was caught,
+// and the only way it could have been.
+using pz::Bucket;
+using pz::TakeToken;
 
 struct ConnBudget {
     Bucket list;                 // match-list replies

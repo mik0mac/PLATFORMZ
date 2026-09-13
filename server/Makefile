@@ -93,6 +93,12 @@ $(TSAN_TARGET): $(SRCS) $(HDRS)
 # translation unit - it is a CLIENT, and linking it against the server's objects
 # would be a category error even though it shares every header.
 #
+# NEEDS nlohmann/json, which the server itself does not: this includes wire.h so
+# it drives the REAL client encoders, and wire.h is built on nlohmann. The server
+# hand-rolls its JSON in jsonmin.h. So `make` works on a box with no nlohmann
+# installed and `make loadtest` does not - deliberately, since only the latter is
+# a client. (brew install nlohmann-json / apt install nlohmann-json3-dev)
+#
 # No ../collisions.cpp: it decodes far enough to count packets and read a slot,
 # never far enough to need a world.
 # No `loadtest: $(LOADTEST)` alias - the binary is already called `loadtest`, so

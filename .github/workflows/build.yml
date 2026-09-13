@@ -55,7 +55,11 @@ jobs:
           sudo apt-get update -qq
           # lsof: run_probes.sh uses it to prove the port is free between probes,
           # which is how it catches a stray server from the previous one.
-          sudo apt-get install -y libboost-dev libboost-system-dev lsof
+          # nlohmann-json3-dev: the LOAD HARNESS needs it, the server does not -
+          # loadtest.cpp includes wire.h to use the real client encoders, and
+          # wire.h is built on nlohmann/json. The server hand-rolls its JSON in
+          # jsonmin.h and has never had this dependency.
+          sudo apt-get install -y libboost-dev libboost-system-dev lsof nlohmann-json3-dev
 
       - name: Build server and load harness
         working-directory: server
