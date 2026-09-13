@@ -156,7 +156,7 @@ cannot land on the new one's spawn state.
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |
-| `leaderboard` | `lb[{n,s}]` | the all-time table, already ranked |
+| `leaderboard` | `lb[{n,s,b}]` | the all-time table, already ranked. `b` marks a bot row; the top rows of both classes are sent together |
 | *(chunk)* | tag `0x03` | transport framing, reassembled below the protocol |
 
 A `matchlist` row is `{c, n, pre, k, map, ph, p, max, j}` — code, name, preset,
@@ -228,6 +228,29 @@ time". It does not say a human is who they claim: a player can copy their own
 token to a second machine, or run several clients. That is enough for a
 friends-and-family ranking and not enough for a competitive public one, which
 would want real accounts. Do not let a later feature quietly assume otherwise.
+
+### What keys the scoreboard
+
+The all-time table is keyed on the identity, not on the display name, which is
+what stops two players called `MIKE` sharing a row and what makes renaming
+yourself keep your history — the name is a **property of the row**.
+
+Bots have no identity (nothing signs for a bot), so a bot's row is keyed on its
+name behind a `-`. That prefix is load-bearing: a human id is 32 hex characters
+and can only begin `[0-9a-f]`, while `-` is 0x2D, below `'0'` at 0x30. So the two
+classes are disjoint by construction, "is this a bot" is one character compare,
+and bots sort ahead of every human for free in both the map and the file.
+
+```
+    3	-GEOFF	GEOFF                              a bot
+    0	13f67c4c8f5b0f8d32d392dee979510a	MIKE    a player
+    0	ec6582d8780b7943bd4d6c720fc007b8	MIKE    a different player, same name
+```
+
+The wire sends the top rows of **both** classes tagged with `b`, so the client's
+LEADERBOARD toggles PLAYERS/BOTS without a round trip. It shows players by
+default: a bot plays every single match, so a combined board is nothing but bots
+within a day.
 
 The **id** (the token's first half) is what anything persistent should key on —
 it is safe to log and to write to disk. The **token** is a bearer credential and

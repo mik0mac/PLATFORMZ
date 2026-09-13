@@ -547,7 +547,7 @@ rebuilt from it.**
 
 | Path | What it is | If you lose it |
 |---|---|---|
-| `/var/lib/platformz/scores` | The all-time scoreboard: one `<score>\t<name>` line per player, rewritten at each match end | Every player's cumulative score is gone. The server starts a fresh board and logs that it loaded nothing; nothing else breaks |
+| `/var/lib/platformz/scores` | The all-time scoreboard: one `<score>\t<id>\t<name>` line per row, flushed a few seconds after each match end and on shutdown | Every player's cumulative score is gone. The server starts a fresh board and logs that it loaded nothing; nothing else breaks |
 | `/etc/platformz.env` | `PLATFORMZ_KEY`, the join gate, and `PLATFORMZ_IDENTITY_SECRET`, the key behind every tag the server issues | Existing invite links and baked handout builds stop working, because the key they carry no longer matches — reissue links and rebuild handouts. Losing the identity secret costs one round of UDP handshakes now, and (once D3 lands) everyone's remembered identity |
 
 Everything else — the binary, the web bundle, the systemd unit, the Caddy config
@@ -613,6 +613,36 @@ ride in invite links or handout builds, and nothing a client sends should ever
 contain it. Losing it costs a restart's worth of handshakes and (later) everyone's
 remembered identity; leaking it lets anyone mint cookies, which puts the
 reflection hole back.
+
+### One-time: the scoreboard format changed (D4)
+
+The table used to be keyed on **display name**, so two players who both typed
+`MIKE` shared a row and anyone could claim someone else's by typing their name.
+It is keyed on the server-issued identity now, and the file grew a column:
+
+```
+before   <score>\t<name>
+after    <score>\t<id>\t<name>
+```
+
+Old lines have two fields, so the loader skips them and says so once at boot.
+**Rename the old file rather than deleting it** — the numbers are then still there
+to look at, and nothing reads them:
+
+```bash
+systemctl stop platformz
+mv /var/lib/platformz/scores /var/lib/platformz/scores.pre-d4
+systemctl start platformz
+journalctl -u platformz | grep scoreboard   # "no file at ... - starting empty"
+```
+
+Skip the rename and nothing breaks either — the loader ignores every line and
+logs `ignored N pre-D4 line(s)`. Renaming just keeps the boot log quiet and makes
+it obvious the old numbers were kept on purpose.
+
+A row belongs to an identity, and identities come from
+`PLATFORMZ_IDENTITY_SECRET`. **Rotate that and every player becomes a new row** —
+see [The identity secret](#the-identity-secret) above.
 
 ## Redeploying after code changes
 

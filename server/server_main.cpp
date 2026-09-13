@@ -46,6 +46,7 @@
 #include <iostream>
 #include <cstdlib>   // getenv (join key)
 #include <cstring>   // strcmp (join refusal tokens)
+#include <csignal>   // SIGTERM/SIGINT - flush the scoreboard before exiting
 #include <memory>
 #include <map>
 #include <set>
@@ -106,6 +107,28 @@ const double         UDP_TWIN_SUPERSEDE_SEC = 2.0;
 // Lock order where both are needed: gameMutex -> clientMutex -> scoreboardMutex.
 Scoreboard    scoreboard;
 std::mutex    scoreboardMutex;
+// Set when a credit changes the table, cleared when the driver loop writes it
+// out. A save rewrites the WHOLE file, and with several matches running their
+// ends bunch together - twelve rooms finishing inside a second used to mean
+// twelve full rewrites. Atomic because the sim thread sets it and the driver
+// loop clears it; it guards nothing, so it needs no mutex of its own.
+std::atomic<bool> scoreboardDirty{false};
+// How long a credit may sit unwritten. The window is what a crash costs, and it
+// is bounded by something else anyway: the match that produced those points took
+// minutes, so five seconds of exposure is not the risk worth optimising.
+const int SCORES_FLUSH_SEC = 5;
+
+// Set by the signal handler, read by the driver loop. `volatile sig_atomic_t` is
+// the only thing a handler is actually allowed to touch - it may not lock a
+// mutex, allocate, or write a file, so all it does here is say "stop", and the
+// saving happens back on the loop where it is safe.
+//
+// This exists BECAUSE of the debounce above. Saving inside the credit lost
+// nothing on a restart; deferring it by up to five seconds would - and
+// `systemctl restart` sends SIGTERM, so those are exactly the seconds an
+// operator would lose, on purpose, every deploy.
+volatile std::sig_atomic_t g_shutdown = 0;
+extern "C" void OnTerminate(int) { g_shutdown = 1; }
 // Join key gate (#33): set PLATFORMZ_KEY in the server's environment and every
 // join attempt must present it - in the ws:// URL query (checked during the
 // HTTP upgrade) or in the UDP hello's "key" field. Wrong/missing key gets NO
@@ -980,27 +1003,34 @@ std::string Match::welcomeFor(const ConnectedClient& c) {
 }
 
 //MARK: Leaderboard packet
-// The all-time table. Sent as entries rather than Scoreboard's preformatted
-// leaderboardString: that string is newline-separated and js() only escapes " and
-// \, so shipping it would emit invalid JSON. The client formats the rows itself.
+// The all-time table, as entries rather than a preformatted string: the client
+// renders the rows itself, and a newline-separated blob could not survive js(),
+// which escapes only " and \.
 //
 // Plain JSON on purpose - it goes out through SendToClient, which ships text over
 // BOTH transports (chunking oversized UDP datagrams), and the client's applyMessage
 // only treats a packet as binary when it leads with a binary tag byte. So this
 // reaches WS and UDP clients alike without touching the binary welcome format.
 //
-// Only the first defaultCount entries are meaningfully ordered: generateLeaderboard
-// uses partial_sort, which sorts exactly that many and leaves the tail unordered.
+// Carries the top rows of BOTH classes, each tagged with `b`. Bots play every
+// single match and would otherwise own the whole board, so the client shows one
+// class at a time - and sending both means switching between them is a keypress
+// rather than a round trip. Twenty-odd rows is nothing on either transport.
 static std::string buildLeaderboard() {
     std::string s = "{\"type\":\"leaderboard\",\"lb\":[";
     {
         std::lock_guard<std::mutex> lk(scoreboardMutex);
-        const auto& lb = scoreboard.leaderboard;
-        const size_t n = std::min(lb.size(), scoreboard.defaultCount);
-        for (size_t i = 0; i < n; ++i) {
-            if (i) s += ",";
-            s += "{\"n\":" + js(lb[i].Name) + ",\"s\":" + ji(lb[i].Score) + "}";
-        }
+        bool first = true;
+        auto emit = [&](const std::vector<rankingByScore>& rows) {
+            for (const rankingByScore& r : rows) {
+                if (!first) s += ",";
+                first = false;
+                s += "{\"n\":" + js(r.Name) + ",\"s\":" + ji(r.Score)
+                   + ",\"b\":" + jb(r.IsBot) + "}";
+            }
+        };
+        emit(scoreboard.top(/*bots*/ false));
+        emit(scoreboard.top(/*bots*/ true));
     }
     s += "]}";
     return s;
@@ -3077,6 +3107,14 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 std::lock_guard<std::mutex> gc(clientMutex);
                 SlotMask claimed = gatherClaimedSlots();
                 auto& ps = gameSpace.getPlayers();
+                // Which identity each slot belongs to. Read from `clients`
+                // (still locked above) rather than from the player, because
+                // identity is a property of the CONNECTION - the body in slot 3
+                // is only whoever is currently sitting in it.
+                std::map<int, std::string> slotIdentity;
+                for (const auto& [cid, c] : clients)
+                    if (c.playerId >= 0) slotIdentity[c.playerId] = c.identity;
+
                 std::lock_guard<std::mutex> sb(scoreboardMutex);
                 for (int i = 0; i < (int)ps.size(); ++i) {
                     // Same "active" rule the state packet uses (see buildState):
@@ -3086,13 +3124,31 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                     // still carry a name and a zero score, and would otherwise
                     // litter the table with 0-point entries every match.
                     if (!SlotSet(claimed, i) && !ps[i].isBot) continue;
-                    scoreboard.addScore(ps[i].name, ps[i].score);
+
+                    // The row's KEY (D4). A bot has no identity to be issued, so
+                    // it is keyed on its name behind a '-'; a human is keyed on
+                    // the identity the server signed for them, which is what
+                    // stops two players called MIKE sharing a row.
+                    std::string id;
+                    if (ps[i].isBot) {
+                        id = BotIdFor(ps[i].name);
+                    } else {
+                        auto it = slotIdentity.find(i);
+                        if (it != slotIdentity.end()) id = it->second;
+                    }
+                    // No identity means no row, and that is deliberate: the
+                    // alternative is inventing a key, which is precisely the
+                    // display-name guess D4 removed. A connection always has one
+                    // by this point (both connect paths establish it), so this
+                    // is a guard rather than a path.
+                    if (id.empty()) continue;
+                    scoreboard.addScore(id, ps[i].name, ps[i].score);
                 }
                 scoreboard.generateLeaderboard();
-                scoreboard.save(); // match end is infrequent and is exactly when
-                                   // the data changes, so this doubles as the
-                                   // periodic flush - and keeps the worst case at
-                                   // a restart to one in-progress match.
+                // NOT saved here. With several matches running, their ends bunch
+                // up - and each save rewrites the whole file. The driver loop
+                // flushes a dirty table on a timer instead (see SCORES_FLUSH_SEC).
+                scoreboardDirty = true;
                 leaderboardDirty = true;
                 std::cout << "Scoreboard: credited match, " << scoreboard.scores.size()
                           << " names total\n";
@@ -3199,6 +3255,7 @@ void SimulationLoop() {
     CollisionGrid scratchGrid;
     int beat = 0;      // ticks since the last registry sweep
     int perfBeat = 0;  // seconds since the last PERF line
+    int scoresBeat = 0; // seconds since the last scoreboard flush
 
     while (true) {
         auto now     = Clock::now();
@@ -3230,11 +3287,36 @@ void SimulationLoop() {
             for (const std::string& code : g_registry.Reap(now))
                 std::cout << "Match " << code << " reaped\n";
             SweepUnseated();
+
+            // Flush the scoreboard if a match credited into it recently. Once,
+            // here, however many matches ended - which is the whole point of
+            // debouncing it rather than saving inside the credit.
+            if (++scoresBeat >= SCORES_FLUSH_SEC) {
+                scoresBeat = 0;
+                if (scoreboardDirty.exchange(false)) {
+                    std::lock_guard<std::mutex> sb(scoreboardMutex);
+                    if (!scoreboard.save())
+                        scoreboardDirty = true;   // try again next flush
+                }
+            }
             ReportHeartbeat(g_defaultMatch->serverTick.load(), g_uptimeSeconds.load());
             if (PerfEnabled() && ++perfBeat >= PERF_REPORT_SECONDS) {
                 perfBeat = 0;
                 ReportPerf(*g_defaultMatch, now);
             }
+        }
+
+        // Asked to stop (SIGTERM from `systemctl restart`, or Ctrl-C). Write out
+        // anything the debounce is still holding, then leave. Checked every tick
+        // rather than every second so a restart is not waiting on this.
+        if (g_shutdown) {
+            if (scoreboardDirty.exchange(false)) {
+                std::lock_guard<std::mutex> sb(scoreboardMutex);
+                std::cout << "Shutting down: flushing the scoreboard\n";
+                scoreboard.save();
+            }
+            std::cout << "Server stopped after " << g_uptimeSeconds.load() << "s\n";
+            std::exit(0);
         }
     }
 }
@@ -3423,6 +3505,12 @@ int main() {
         else std::cerr << "PLATFORMZ_PORT=" << pp << " is not a usable port; keeping "
                        << PORT_DEFAULT << "\n";
     }
+
+    // Catch the stop signals so the sim loop can flush the scoreboard on the way
+    // out. Installed before anything binds, so a server killed during startup
+    // still leaves cleanly.
+    std::signal(SIGTERM, OnTerminate);
+    std::signal(SIGINT,  OnTerminate);
 
     std::cout << "PLATFORMZ server | port " << PORT
               << (PORT == PORT_DEFAULT ? "" : " (PLATFORMZ_PORT override)")

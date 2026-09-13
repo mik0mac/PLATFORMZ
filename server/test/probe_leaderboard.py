@@ -69,7 +69,16 @@ if fresh:
     # after a match, and it arrives already CREDITED. A player who opens the
     # leaderboard the moment a match ends must see that match's scores in it,
     # whichever datagram happened to land first.
-    check(any(n == "SCORER" for n, _ in rows), "our name is in the table")
+    check(any(n == "SCORER" for n, _, _ in rows), "our name is in the table")
+    # D4: our row is a HUMAN row, keyed on this connection's identity rather than
+    # on the name "SCORER". A bot row here would mean the credit path picked the
+    # wrong key.
+    check(any(n == "SCORER" and not bot for n, _, bot in rows),
+          "...as a player, not a bot")
+    # Bots play every match, so by the end of one there are bot rows too - sent in
+    # the same message and tagged, for the client's PLAYERS/BOTS toggle.
+    check(any(bot for _, _, bot in rows),
+          f"bot rows ride along, tagged: {[n for n, _, b in rows if b]}")
 
 a.alive = False
 a.send({"type": "goodbye"})

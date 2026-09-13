@@ -58,6 +58,9 @@ struct ShellState {
     bool showControls = false;
     bool showOptions  = false;
     bool showScores   = false;   // leaderboard popup (networked only)
+    bool scoresShowBots = false; // that popup's PLAYERS/BOTS tab - players by default,
+                                 // because a bot plays every match and the board
+                                 // would otherwise be nothing else
 
     // ---- Slider drag latches --------------------------------------------
     // A slider being dragged must not be stomped by the server's echo of the
@@ -189,28 +192,51 @@ inline void DrawControlsModal(ShellState& s, bool wasOpen) {
 
 // Read-only: the server owns the table and pushes it on join and after every
 // credited match, so there is nothing to refresh from here.
+//
+// PLAYERS or BOTS, one at a time. The server sends the top rows of both in the
+// same message, so this toggle is free - and it has to be a toggle rather than a
+// mixed list, because a bot plays every match and a combined board would be
+// nothing but bots within a day.
 inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen) {
     Rectangle m = {250, 140, 500, 420};
-    UiModalChrome(m, "LEADERBOARD");
-    if (s.leaderboard.empty()) {
-        // Distinguish "nothing recorded yet" from a broken panel -
-        // a fresh server with no score file lands here.
-        UiTextCentered("No scores recorded yet.", screenWidth,
-                       (int)m.y + 120, 20, GRAY);
+    UiModalChrome(m, s.scoresShowBots ? "LEADERBOARD - BOTS" : "LEADERBOARD");
+
+    // Rows of the class being shown. Built each frame: it is at most twenty
+    // entries and doing it here keeps the toggle from needing any state beyond
+    // the bool.
+    std::vector<const LeaderboardEntry*> rows;
+    for (const LeaderboardEntry& e : s.leaderboard)
+        if (e.isBot == s.scoresShowBots) rows.push_back(&e);
+
+    if (rows.empty()) {
+        // Distinguish "nothing recorded yet" from a broken panel - a fresh
+        // server with no score file lands here, and so does the bot tab before
+        // anyone has played a match.
+        UiTextCentered(s.scoresShowBots ? "No bot scores recorded yet."
+                                        : "No scores recorded yet.",
+                       screenWidth, (int)m.y + 120, 20, GRAY);
     } else {
         int ly = (int)m.y + 60;
-        for (size_t i = 0; i < s.leaderboard.size(); ++i) {
+        for (size_t i = 0; i < rows.size(); ++i) {
             // Rank and name left, score right-aligned inside the panel
             // so the numbers line up regardless of name length.
-            const char* rank = TextFormat("%d. %s", (int)i + 1,
-                                          s.leaderboard[i].name.c_str());
-            const char* val  = TextFormat("%d", s.leaderboard[i].score);
+            const char* rank = TextFormat("%d. %s", (int)i + 1, rows[i]->name.c_str());
+            const char* val  = TextFormat("%d", rows[i]->score);
             DrawText(rank, (int)m.x + 40, ly, 18, RAYWHITE);
             DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)),
                      ly, 18, ui::OUTLINE);
             ly += 30;
         }
     }
+
+    // Left of CLOSE, with room to spare. UiModalClose centres its button on the
+    // SCREEN rather than on the modal (x 430..570 here), so a tab button placed
+    // by eye off m.x overlaps it - which it did, by ten pixels, and the click
+    // went to whichever was tested first.
+    if (UiButton({m.x + 30, m.y + m.height - 60, 120, 40},
+                 s.scoresShowBots ? "PLAYERS" : "BOTS", 16))
+        s.scoresShowBots = !s.scoresShowBots;
+
     if (UiModalClose(m, wasOpen)) s.showScores = false;
 }
 

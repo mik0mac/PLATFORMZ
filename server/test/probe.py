@@ -219,7 +219,11 @@ class C:
                         self.cookie = c
                         self.hello()
                 elif t == "leaderboard":
-                    rows = [(e.get("n", ""), e.get("s", 0)) for e in j.get("lb", [])]
+                    # (name, score, isBot). The bot flag arrived with D4, when the
+                    # table was re-keyed on identity and bots - which have none -
+                    # got their own class rather than being dropped.
+                    rows = [(e.get("n", ""), e.get("s", 0), e.get("b", False))
+                            for e in j.get("lb", [])]
                     self.leaderboards.append((self.phase, rows))
                 elif t == "matchlist":
                     self.matchlists.append(j)
