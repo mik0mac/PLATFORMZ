@@ -932,7 +932,7 @@ before any hello could arrive. It rides the *dial* URL, kept apart from the
 
 ---
 
-### D4. Re-key the `high-score` scoreboard onto the identity token
+### D4. Re-key the `high-score` scoreboard onto the identity token — **DONE** (#98)
 **Why:** the leaderboard is already built on the **`high-score`** branch, but its
 table is `std::map<std::string /*display name*/, int>`. Display names are neither
 unique nor owned — two players typing `MIKE` share a row, and anyone can claim
@@ -959,6 +959,70 @@ someone else's row by typing their name. D3 supplies the identity that fixes it.
 **Files:** `scoreboard.h`, `server/server_main.cpp`, `constants.h`,
 `docs/deploy-vultr.md`.
 **Depends on:** D3, and merging `high-score`.
+
+
+#### What shipped, and the two decisions that were Mike's
+
+**Migration: a clean reset, with the old file kept.** Every line of the old
+`<score>\t<name>` format has two fields, so the tolerant loader already skips it -
+the format change *is* the migration, and it announces itself once at boot rather
+than per line. The alternative was carrying names forward as provisional ids,
+which either leaves a dead ghost row beside every returning player or re-opens
+the very "type someone's name to take their row" hole D4 closes. Of the 102 rows
+in the local file, most were bot names and the human ones were exactly the
+collided rows; carrying that forward would have preserved the bug's output.
+**Rename `scores` to `scores.pre-d4` on the box rather than deleting it** — the
+numbers are then still there to look at, and nothing reads them.
+
+**Bots stay on the board, in their own class.** They have no identity to be
+issued - nothing signs for a bot - so a bot's row is keyed on its name behind a
+`-`. That prefix is doing real work: a human id is 32 hex characters and can only
+start with `[0-9a-f]`, while `-` is 0x2D, below `'0'` at 0x30. The two classes
+are therefore **disjoint by construction**, "is this a bot" is a single character
+compare, and bots sort ahead of every human for free in both the map and the file
+— the ergonomics of a negative number without turning a 128-bit id into an
+integer, which was the shape originally suggested and would have meant re-issuing
+every D3 token to buy `< 0` over `[0] == '-'`.
+
+The wire carries the top rows of **both** classes, tagged, so the client's
+LEADERBOARD modal toggles PLAYERS/BOTS without a round trip. It shows players by
+default: a bot plays every single match, so a combined board is nothing but bots
+within a day.
+
+**One regression repaired on the way.** Debouncing `save()` - which the issue
+asked for, because N match-ends each rewrote the whole file - meant up to five
+seconds of credits could be lost on a restart, where the synchronous save lost
+nothing. And `systemctl restart` sends SIGTERM, so those were exactly the seconds
+an operator would lose on every deploy. The server now catches SIGTERM/SIGINT,
+flushes on the way out, and has a graceful shutdown it did not have before.
+
+---
+
+### D5. The leaderboard as an arcade board — *not started*
+**Why:** the all-time table answers "who has the most points ever", which is a
+career stat. An arcade cabinet answers something better: **what were the best
+runs**. One player can hold slots 1, 3 and 7, and beating your own third-place
+score is a thing that happens on a Tuesday rather than a milestone.
+
+**The shape:** a row becomes a MATCH RESULT rather than a player total —
+`{identity, name, score, when, map}` — ranked by score, capped at the top N, and
+the same player may appear as many times as they earned it. D4's keying still
+does the work: the identity is what makes the *name* on an old row follow a
+rename, and what lets "my runs" be filtered out of the board.
+
+**Worth deciding when it is picked up:**
+- Does the all-time total survive alongside it, as a second tab next to
+  PLAYERS/BOTS? Two boards answering two questions is defensible; two boards
+  nobody reads is not.
+- Per-match or per-life? An arcade score is one run; a PLATFORMZ match is one
+  round with several deaths in it.
+- The board wants a date, which is the first thing in this file the server has
+  ever needed a wall clock for (everything else is the steady clock on purpose).
+- Bots: almost certainly excluded here, where D4 kept them. A bot's best run is
+  not a record anybody is chasing.
+
+**Files:** `scoreboard.h`, `server/server_main.cpp`, `screens.h`, `wire.h`.
+**Depends on:** D4.
 
 ---
 
@@ -1354,6 +1418,7 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
 | D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |
 | D4 | #98 | Re-key the scoreboard onto the identity token (display names collide today) | server, security | D3 |
+| D5 | — | Leaderboard as an arcade board: rank RUNS, not career totals | client, server | D4 |
 | E1 | #88 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
 | E2 | #89 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
 | E3 | #90 | Load harness + CI smoke test for multi-match | testing | A3 |

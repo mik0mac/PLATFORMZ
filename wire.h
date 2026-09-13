@@ -57,6 +57,11 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 struct LeaderboardEntry {
     std::string name;
     int         score = 0;
+    // Whether this row is a bot's. The server sends the top rows of BOTH classes
+    // in one message, because a bot plays every single match and would otherwise
+    // own the whole board - so the client shows one class at a time and switching
+    // is a keypress rather than a round trip.
+    bool        isBot = false;
 };
 
 //MARK: Directory
@@ -806,6 +811,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 LeaderboardEntry e;
                 e.name  = jo.value("n", std::string());
                 e.score = jo.value("s", 0);
+                e.isBot = jo.value("b", false);
                 msg.leaderboard.push_back(e);
             }
         }
