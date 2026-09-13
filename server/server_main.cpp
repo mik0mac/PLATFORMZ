@@ -118,17 +118,28 @@ std::atomic<bool> scoreboardDirty{false};
 // minutes, so five seconds of exposure is not the risk worth optimising.
 const int SCORES_FLUSH_SEC = 5;
 
-// Set by the signal handler, read by the driver loop. `volatile sig_atomic_t` is
-// the only thing a handler is actually allowed to touch - it may not lock a
-// mutex, allocate, or write a file, so all it does here is say "stop", and the
+// Set by the signal handler, read by the driver loop. A handler may not lock a
+// mutex, allocate, or write a file, so all it does here is say "stop"; the
 // saving happens back on the loop where it is safe.
+//
+// A LOCK-FREE std::atomic, not `volatile sig_atomic_t`. The latter is what the C
+// standard blesses for a handler - but only for talking to the thread it
+// interrupted, and this is not that: the signal is delivered on whichever io
+// thread happens to be running, while the SIM thread reads it. That is ordinary
+// cross-thread communication, `volatile` gives it no happens-before edge, and
+// ThreadSanitizer called it a data race the moment it was written. C++ permits a
+// handler to touch an always-lock-free atomic, which this is on every platform
+// the server builds for - asserted below rather than assumed.
 //
 // This exists BECAUSE of the debounce above. Saving inside the credit lost
 // nothing on a restart; deferring it by up to five seconds would - and
 // `systemctl restart` sends SIGTERM, so those are exactly the seconds an
 // operator would lose, on purpose, every deploy.
-volatile std::sig_atomic_t g_shutdown = 0;
-extern "C" void OnTerminate(int) { g_shutdown = 1; }
+static_assert(std::atomic<bool>::is_always_lock_free,
+              "the shutdown flag is written from a signal handler, which may only "
+              "touch a lock-free atomic");
+std::atomic<bool> g_shutdown{false};
+extern "C" void OnTerminate(int) { g_shutdown.store(true, std::memory_order_relaxed); }
 // Join key gate (#33): set PLATFORMZ_KEY in the server's environment and every
 // join attempt must present it - in the ws:// URL query (checked during the
 // HTTP upgrade) or in the UDP hello's "key" field. Wrong/missing key gets NO
@@ -3309,7 +3320,7 @@ void SimulationLoop() {
         // Asked to stop (SIGTERM from `systemctl restart`, or Ctrl-C). Write out
         // anything the debounce is still holding, then leave. Checked every tick
         // rather than every second so a restart is not waiting on this.
-        if (g_shutdown) {
+        if (g_shutdown.load(std::memory_order_relaxed)) {
             if (scoreboardDirty.exchange(false)) {
                 std::lock_guard<std::mutex> sb(scoreboardMutex);
                 std::cout << "Shutting down: flushing the scoreboard\n";
