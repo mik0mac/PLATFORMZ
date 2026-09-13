@@ -71,7 +71,38 @@ all: $(TARGET)
 $(TARGET): $(SRCS) $(HDRS)
 	$(CXX) $(CXXFLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 
-clean:
-	rm -f $(TARGET)
+# ThreadSanitizer build, for CI (E3) and for reproducing a suspected race by hand.
+#
+# A separate binary rather than a flag on the normal one: TSan costs ~5-15x in
+# speed and ~5x in memory, so it is never what you want to deploy or to measure
+# perf with, and having both on disk at once means you can run the probes against
+# either without a rebuild.
+#
+# -O1, not -O2: TSan's reports are only as good as the frames it can name, and
+# -O2 inlines away the ones you actually want to read. -g for the same reason.
+# -fno-omit-frame-pointer because TSan's own docs ask for it.
+TSAN_TARGET := $(TARGET)-tsan
 
-.PHONY: all clean
+tsan: $(TSAN_TARGET)
+
+$(TSAN_TARGET): $(SRCS) $(HDRS)
+	$(CXX) $(CXXFLAGS) -fsanitize=thread -O1 -g -fno-omit-frame-pointer \
+	    $(SRCS) -o $(TSAN_TARGET) $(LDFLAGS)
+
+# Load generator + WebSocket smoke test (E3). Its own binary and its own single
+# translation unit - it is a CLIENT, and linking it against the server's objects
+# would be a category error even though it shares every header.
+#
+# No ../collisions.cpp: it decodes far enough to count packets and read a slot,
+# never far enough to need a world.
+# No `loadtest: $(LOADTEST)` alias - the binary is already called `loadtest`, so
+# that would be a rule depending on itself and make says so.
+LOADTEST := loadtest
+
+$(LOADTEST): loadtest.cpp $(HDRS)
+	$(CXX) $(CXXFLAGS) loadtest.cpp -o $(LOADTEST) $(LDFLAGS)
+
+clean:
+	rm -f $(TARGET) $(TSAN_TARGET) $(LOADTEST)
+
+.PHONY: all clean tsan

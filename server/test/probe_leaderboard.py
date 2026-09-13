@@ -55,9 +55,20 @@ check(len(fresh) > 0, f"a leaderboard arrived after the match ({len(fresh)})")
 if fresh:
     phase_at, rows = fresh[-1]
     print(f"    arrived while phase={phase_at!r}, {len(rows)} rows: {rows[:4]}")
-    # THE point: it lands before the client is told the match ended.
-    check(phase_at == "playing",
-          "arrived while the client still believed it was PLAYING")
+    # THE point is that the server SENDS the table before it broadcasts
+    # GAMEOVER, so a correct client has to handle one while still believing the
+    # match is on. Reported, not asserted: what a client can observe is the
+    # ARRIVAL order of two datagrams, and UDP does not promise that the one sent
+    # first lands first. Asserting it failed about one run in five for a reason
+    # that was never a bug - and a probe that cries wolf is worse than no probe,
+    # which matters now that CI runs these.
+    if phase_at != "playing":
+        print("    (note: the gameover packet overtook it - UDP reordering on the"
+              " way here, not the server sending them the wrong way round)")
+    # What IS guaranteed, and what the feature is actually for: the table arrives
+    # after a match, and it arrives already CREDITED. A player who opens the
+    # leaderboard the moment a match ends must see that match's scores in it,
+    # whichever datagram happened to land first.
     check(any(n == "SCORER" for n, _ in rows), "our name is in the table")
 
 a.alive = False

@@ -3,6 +3,14 @@ platformz
 build/
 net_smoke
 server/gameserver
+# E3's two extra server-side binaries: the ThreadSanitizer build (make -C server
+# tsan) and the load generator / smoke tester (make -C server loadtest). Built on
+# demand, never deployed. The .dSYM is the debug bundle clang leaves beside a -g
+# build on macOS.
+server/gameserver-tsan
+server/gameserver-tsan.dSYM/
+server/loadtest
+server/loadtest.dSYM/
 .DS_Store
 # Audio working material (audio-src/ is never built or deployed; only notes/ is
 # tracked). Masters + WIP are large and live in Dropbox, not git history.

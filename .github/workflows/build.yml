@@ -1,13 +1,20 @@
 name: Build
 
-# Compile-only CI check. Verifies the headless game server still builds on every
-# push / PR. Separate from gameserver.yml (which is manual-only and runs the
-# server behind a cloudflared tunnel) so a tunnel isn't spun up on each push.
+# CI for the headless game server. Three jobs, in increasing order of how long
+# they take and how much they prove:
+#
+#   build-server  compile check on every push (seconds)
+#   test-server   the unit tests and the live protocol probes (minutes)
+#   race-server   the same probes under ThreadSanitizer (slower still)
 #
 # Server only: the native client Makefile is macOS-only (Apple frameworks,
 # /opt/homebrew) and the web client needs emsdk + a prebuilt web raylib, neither
 # of which runs on ubuntu-latest as-is. The server builds against the
-# raylib_server_stub.h shims, so it compiles cleanly on Linux.
+# raylib_server_stub.h shims, so it compiles cleanly on Linux. Keeping the web
+# client green in CI is F5 (#96).
+#
+# Separate from gameserver.yml (manual-only, runs the server behind a cloudflared
+# tunnel) so a tunnel isn't spun up on each push.
 
 on:
   push:
@@ -16,6 +23,7 @@ on:
 
 jobs:
   build-server:
+    name: Compile
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -29,3 +37,109 @@ jobs:
       - name: Build server
         working-directory: server
         run: make
+
+  test-server:
+    name: Tests
+    runs-on: ubuntu-latest
+    # Generous but bounded: the probe suite is mostly deliberate sleeps (the
+    # reconnect probe alone waits out a 15s mid-match grace), so it takes minutes
+    # of wall clock and almost no CPU. A hang should still fail rather than burn
+    # the runner's hour.
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          # lsof: run_probes.sh uses it to prove the port is free between probes,
+          # which is how it catches a stray server from the previous one.
+          sudo apt-get install -y libboost-dev libboost-system-dev lsof
+
+      - name: Build server and load harness
+        working-directory: server
+        run: make && make loadtest
+
+      # The standalone C++ tests: HMAC/SHA-256 against the published vectors,
+      # chunk reassembly, registry lifecycle, and the collision-grid split
+      # equivalence. Seconds, and they need no server.
+      - name: Unit tests
+        run: ./server/test/run_all.sh
+
+      # The live protocol probes. Each gets its own fresh gameserver (see the
+      # script) because several mutate registry state that outlives them.
+      - name: Protocol probes
+        run: ./server/test/run_probes.sh
+
+      # The question this job exists to answer for a DEPLOY: does the binary that
+      # just built actually serve clients, over both transports, speaking the
+      # protocol they expect? /status reports the tags the running server was
+      # compiled with; netbin.h is what the client will be compiled with. A
+      # mismatch there is the "stale server binary" class of bug that made
+      # `server/Makefile` wildcard ../*.h in the first place. It also runs the
+      # WebSocket smoke test - the browser build's transport had no automated
+      # coverage at all before E3 - and a two-match run of the load harness.
+      - name: Smoke test (protocol tags, WebSocket, load harness)
+        run: ./server/test/ci_smoke.sh
+
+      - name: Server logs on failure
+        if: failure()
+        run: |
+          for f in "${TMPDIR:-/tmp}"/platformz-probes/*.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            tail -n 120 "$f"
+            echo "::endgroup::"
+          done
+
+  race-server:
+    name: ThreadSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libboost-dev libboost-system-dev lsof
+
+      # A3 established a lock order (g_connMutex > gameMutex > clientMutex >
+      # udpSendMutex) that nothing but care has been enforcing. The server runs a
+      # sim thread and a pool of io threads over shared maps, which is exactly
+      # the shape TSan is good at, and exactly the shape where a race shows up in
+      # production as "it went weird once and we never reproduced it".
+      - name: Build server with ThreadSanitizer
+        working-directory: server
+        run: make tsan
+
+      # halt_on_error=0 so one report does not stop the run and hide the rest;
+      # the exitcode still fails the job. second_deadlock_stack gives both sides
+      # of a lock-order inversion, which is the whole point of running this.
+      - name: Protocol probes under TSan
+        env:
+          # No suppressions= here: run_probes.sh adds it, because the path has to
+          # be copied somewhere without spaces first (TSAN_OPTIONS cannot quote).
+          # See server/test/tsan.supp for what is suppressed and why it is only
+          # four lines.
+          TSAN_OPTIONS: halt_on_error=0 second_deadlock_stack=1 history_size=4
+          PLATFORMZ_SERVER_BIN: gameserver-tsan
+          # TSan slows the server by ~5-15x. The probes' sleeps are wall-clock, so
+          # they mostly absorb it, but the idle reaper's 3s lobby timeout does not
+          # - give it room rather than watching live clients get culled.
+          PLATFORMZ_PROBE_SET: probe probe_cookie probe_capacity probe_directory probe_multimatch
+        run: ./server/test/run_probes.sh
+
+      - name: TSan reports on failure
+        if: failure()
+        run: |
+          for f in "${TMPDIR:-/tmp}"/platformz-probes/*.log; do
+            [ -f "$f" ] || continue
+            if grep -q "WARNING: ThreadSanitizer" "$f"; then
+              echo "::group::$f"
+              cat "$f"
+              echo "::endgroup::"
+            fi
+          done
