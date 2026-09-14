@@ -625,20 +625,30 @@ before   <score>\t<name>
 after    <score>\t<id>\t<name>
 ```
 
-Old lines have two fields, so the loader skips them and says so once at boot.
-**Rename the old file rather than deleting it** — the numbers are then still there
-to look at, and nothing reads them:
+**Nothing is required.** Old lines have two fields, so the loader skips them and
+says so once at boot, and the first match to credit rewrites the file wholesale in
+the new format. The old rows go away on their own.
+
+Deleting it just skips that, and keeps the boot log quiet in the meantime:
 
 ```bash
 systemctl stop platformz
-mv /var/lib/platformz/scores /var/lib/platformz/scores.pre-d4
+rm -f /var/lib/platformz/scores /var/lib/platformz/scores.tmp
 systemctl start platformz
 journalctl -u platformz | grep scoreboard   # "no file at ... - starting empty"
 ```
 
-Skip the rename and nothing breaks either — the loader ignores every line and
-logs `ignored N pre-D4 line(s)`. Renaming just keeps the boot log quiet and makes
-it obvious the old numbers were kept on purpose.
+**Stop the server first.** A running server holds the table in memory and rewrites
+the file at the next match end, so deleting it underneath a live process achieves
+nothing. (`mv` instead of `rm` if you want to keep the old numbers to look at —
+nothing reads them either way.)
+
+Leave the file alone and you will see this on every restart until a match
+credits, which is the only cost:
+
+```
+[scoreboard] ignored 102 pre-D4 line(s) from /var/lib/platformz/scores - ...
+```
 
 A row belongs to an identity, and identities come from
 `PLATFORMZ_IDENTITY_SECRET`. **Rotate that and every player becomes a new row** —
