@@ -1039,10 +1039,10 @@ inconsistency and somebody will otherwise "fix" one to match the other.
 
 **Rules:** 3 rows per player, so one great night cannot take every slot and
 "beat your own third place" stays alive. The personal best pinned below the top N,
-because a global top N is invisible to everyone not in it. **Bots are IN** - they
-compete on the same board, as the factory high scores an arcade cabinet ships with,
-there to be knocked off; no filter and no toggle. Map stored but not displayed;
-ranking stays global rather than splitting a small player base four ways.
+because a global top N is invisible to everyone not in it. **Bots are IN, capped at
+one row** - the factory high score an arcade cabinet ships with, there to be
+knocked off; no filter and no toggle. Map stored but not displayed; ranking stays
+global rather than splitting a small player base four ways.
 
 **Official-only must filter on READ, not on record.** Filtering at record time
 throws the custom runs away forever, so flipping the switch back shows an empty
@@ -1082,8 +1082,8 @@ than a crack in the rule. **Store `to_time_t` from day one even though nothing
 displays it** — it is the one field that cannot be retrofitted, since a row
 written without a timestamp can never acquire one.
 
-**N = 10, and a player sees exactly one thing:** a top 10 with bots in it, and
-their own best run appended below. No tabs, no toggle, no filter. Displaying
+**N = 10** - nine human slots and one bot row - **and a player sees exactly one
+thing:** that board, with their own best run appended below. No tabs, no toggle, no filter. Displaying
 career totals is a **future upgrade**, and D4's PLAYERS/BOTS toggle goes with it.
 
 The C table is still written and maintained regardless. Nothing renders it, which
@@ -1095,14 +1095,24 @@ that cannot be retrofitted. `matches` keeps counting too.
 Two rules for the pinned row: do not show it twice if that run is already in the
 top 10, and a player with no recorded runs has nothing to pin.
 
-**Bots may own the whole board, and that is a known risk taken on purpose.**
-There are 9 bot names, each its own identity, so the 3-per-player cap allows up to
-27 bot rows against a board of 10 - it holds no space for humans - and bots play
-every single match. That may be exactly right. If it is not, the fix is already
-free: key every bot to a single `-BOT` identity so the cap applies to bots
-COLLECTIVELY (leaving at least 7 human slots) while still displaying `GEOFF` on
-the row. R rows already store the display name apart from the identity, for the
-rename rule, which happens to make this a one-line change.
+**Bots hold exactly one row.** Left alone they would own the board: there are 9
+bot names, and if each were its own identity the 3-per-player cap would allow up
+to 27 bot rows against a board of 10 - reserving no space for humans at all - and
+bots play every single match where a person plays some of them. So every bot
+shares one identity, `-BOT`, capped at 1 row where a human gets 3. The board is
+nine human slots and one line reading *the best a bot has ever managed*, which is
+a better thing to chase than ten of them.
+
+That works because R rows already store the display name APART from the identity:
+the row is keyed `-BOT` for capping but still displays `GEOFF`, whichever bot set
+it. The decoupling exists for the rename rule and happens to pay for this too -
+worth knowing before somebody tidies up the apparent duplication.
+
+Cap it per KIND in storage, not once globally. A single best-bot row overall may
+be from a custom match, and flipping the official-only switch would then leave
+ZERO bot rows despite plenty of official ones to choose from. Within each kind,
+`-BOT` keeps its best 1 and humans keep their best 3 - the same shape as the
+per-kind trim, and the same trap.
 
 **The modal has to grow.** It is `{250, 140, 500, 420}` today, which fits nine
 rows (420 less a 60px header and ~70px of buttons, at 30px per row). Ten plus a
