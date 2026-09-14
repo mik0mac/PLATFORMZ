@@ -180,6 +180,16 @@ struct Match {
 
     // ---- Phase ----------------------------------------------------------
     std::atomic<Phase> gamePhase{Phase::LOBBY};
+    // Which bot name each slot gets, as an order into BOT_NAME_STRINGS. Per
+    // MATCH, and per ROOM: shared globally, every room on the box would field the
+    // same "random" lineup, which is the samey-ness this exists to remove.
+    //
+    // Re-rolled when the room returns to its lobby after a match, not at match
+    // start - because the lobby PREVIEWS the bots that will fill the next match,
+    // and re-rolling at start would make that preview a lie by exactly one match.
+    // Same point the client re-rolls at (main.cpp, returning to the title).
+    std::vector<int>   botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
+
     std::atomic<bool>  startRequested{false};
     // Sim-thread only. True while a pending start is being held back by the
     // live-match cap (E2), purely so the log says so once rather than 60 times a

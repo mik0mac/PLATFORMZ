@@ -52,7 +52,7 @@ case "$SERVER_BIN" in
 esac
 
 # Every probe, in an order chosen so the cheap ones fail first.
-ALL_PROBES="probe probe_cookie probe_identity probe_scoreboard probe_capacity probe_leaderboard probe_directory \
+ALL_PROBES="probe probe_cookie probe_identity probe_scoreboard probe_botnames probe_capacity probe_leaderboard probe_directory \
 probe_official probe_host probe_mapsize probe_multimatch probe_joinprogress probe_reconnect"
 PROBES="${PLATFORMZ_PROBE_SET:-$ALL_PROBES}"
 
