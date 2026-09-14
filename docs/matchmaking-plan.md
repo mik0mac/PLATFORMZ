@@ -490,17 +490,16 @@ and the GH Actions idle-watchdog greps it. With N matches that's meaningless, an
 
 **Scope:**
 - Heartbeat becomes one summary line (matches, total players, worst tick) plus a
-  per-match line at a lower cadence. **Update `.github/workflows/gameserver.yml`'s
-  idle watchdog** — it greps `players [0-9]+`, which the new format must keep
-  satisfying or the watchdog silently stops working.
+  per-match line at a lower cadence. *(This also had to keep
+  `.github/workflows/gameserver.yml`'s idle watchdog working, which grepped
+  `players [0-9]+`. That workflow has since been retired.)*
 - `Session::Start` already reads the raw HTTP request; a **non-upgrade `GET
   /status`** returns JSON (uptime, match count, player count, version tags) and
   closes. Free monitoring, and a "N players online" badge for the site later.
   Guard it so it can't be used as an amplifier (small fixed response, no query
   echo).
 
-**Files:** `server/server_main.cpp`, `.github/workflows/gameserver.yml`,
-`docs/deploy-vultr.md`.
+**Files:** `server/server_main.cpp`, `docs/deploy-vultr.md`.
 
 ---
 
@@ -1374,7 +1373,8 @@ probe once CI is watching it.
 
 ### E4. Docs refresh — **DONE** (#91)
 **Scope:** `docs/deploy-vultr.md` (multi-match section, `/status`, capacity
-numbers from A4, the key-vs-code distinction) and `docs/play-web-via-github.md`.
+numbers from A4, the key-vs-code distinction) and `docs/play-web-via-github.md`
+(since retired).
 
 **~~Correct the "stateless server" claim~~ — DONE 2026-09-10.** The doc asserted
 "reads no files, writes no files" twice; the scoreboard made that false. Those
@@ -1410,8 +1410,8 @@ now — QUICK / FIND / CUSTOM / LOCAL), that the host is the lowest connected sl
 size is chosen by *which* START button you press (B3 moved it into OPTIONS). Its
 boot transcript and heartbeat format both predated the registry.
 
-`play-web-via-github.md` still advertised **2 player slots**. It is 8 per room and
-up to 12 rooms.
+`play-web-via-github.md` still advertised **2 player slots** (8 per room, up to
+12 rooms). That doc and its workflow have since been retired entirely.
 
 `deploy-vultr.md` gained the multi-match section it was owed — what the two boot
 rooms are for, how to read the rollcall — plus a field-by-field `/status` table

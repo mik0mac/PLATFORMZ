@@ -1,9 +1,13 @@
 # Deploy PLATFORMZ on a Vultr VPS (IP-only)
 
-A persistent, self-hosted alternative to the GitHub Actions + cloudflared tunnel
-(`docs/play-web-via-github.md`). Runs the authoritative server on a Vultr VPS with
-a stable public IP, reachable over **both** WebSocket (TCP) and UDP, and serves the
+How PLATFORMZ is hosted. Runs the authoritative server on a Vultr VPS with a
+stable public IP, reachable over **both** WebSocket (TCP) and UDP, and serves the
 browser client from the same box over plain HTTP.
+
+(There was once a throwaway alternative — a server on a GitHub Actions runner
+behind a cloudflared tunnel, with the client on GitHub Pages. It was retired: the
+tunnel URL changed every run, the job died after a few hours, and it had none of
+the join key, identity secret or persistence this has. Nothing references it now.)
 
 This guide is **IP-only** (no domain, no TLS) — the quickest thing that works while
 testing. The [HTTPS upgrade](#https-upgrade-later) at the bottom is the "proper"
@@ -747,6 +751,5 @@ Remember the web bundle must be rebuilt (`make web`) whenever `main.cpp`
 changes — the scheme-aware default is baked into the wasm.
 
 ## See also
-- `docs/play-web-via-github.md` — the GitHub Actions + cloudflared tunnel setup.
 - `docs/multiplayer-testing.md` — local/LAN testing (native + browser).
 - `server/Makefile` — the Linux server build (Boost + stub, no raylib).
