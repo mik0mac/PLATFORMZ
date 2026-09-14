@@ -12,9 +12,6 @@ name: Build
 # of which runs on ubuntu-latest as-is. The server builds against the
 # raylib_server_stub.h shims, so it compiles cleanly on Linux. Keeping the web
 # client green in CI is F5 (#96).
-#
-# Separate from gameserver.yml (manual-only, runs the server behind a cloudflared
-# tunnel) so a tunnel isn't spun up on each push.
 
 on:
   push:
