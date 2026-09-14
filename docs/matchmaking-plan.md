@@ -999,28 +999,71 @@ flushes on the way out, and has a graceful shutdown it did not have before.
 
 ---
 
-### D5. The leaderboard as an arcade board — *not started* (#132)
+### D5. The leaderboard as an arcade board — *designed, not started* (#132)
 **Why:** the all-time table answers "who has the most points ever", which is a
-career stat. An arcade cabinet answers something better: **what were the best
-runs**. One player can hold slots 1, 3 and 7, and beating your own third-place
-score is a thing that happens on a Tuesday rather than a milestone.
+career stat — it only goes up, the same person sits at the top for months, and
+there is nothing to chase on a Tuesday night. An arcade cabinet answers something
+better: **what were the best runs.**
 
-**The shape:** a row becomes a MATCH RESULT rather than a player total —
-`{identity, name, score, when, map}` — ranked by score, capped at the top N, and
-the same player may appear as many times as they earned it. D4's keying still
-does the work: the identity is what makes the *name* on an old row follow a
-rename, and what lets "my runs" be filtered out of the board.
+**Two tables, because neither derives from the other.** A capped run list has
+thrown away everybody's non-top runs, so you cannot sum it back into a career
+total; a career total has no idea which matches made it up.
 
-**Worth deciding when it is picked up:**
-- Does the all-time total survive alongside it, as a second tab next to
-  PLAYERS/BOTS? Two boards answering two questions is defensible; two boards
-  nobody reads is not.
-- Per-match or per-life? An arcade score is one run; a PLATFORMZ match is one
-  round with several deaths in it.
-- The board wants a date, which is the first thing in this file the server has
-  ever needed a wall clock for (everything else is the steady clock on purpose).
-- Bots: almost certainly excluded here, where D4 kept them. A bot's best run is
-  not a record anybody is chasing.
+```
+C  <score>  <matches>  <id>  <name>                          career totals
+R  <score>  <when>  <map>  <kind>  <matchName>  <id>  <name>  one run
+```
+
+`matches` on C is the one int that lets that board be ranked by **average per
+match** rather than by volume. Without it, it permanently rewards whoever has
+played most and no newcomer can catch up — the duller question it currently looks
+like it is answering.
+
+**One file, with a line-type column.** A match end writes both a run row and a
+career credit; two files means two saves, and a crash between them leaves a run
+that no career total reflects. One file is one `rename()`, so it is both or
+neither — and the existing atomic-save and skip-the-bad-line loader carry over
+untouched. Old-format lines fail on the first field and are skipped, the same
+free migration D4 got.
+
+The format holds only because every text field goes through `clampName`, which
+strips tabs. `matchName` and `name` are both user-chosen free text, so "everything
+past the last tab is the name" stops being true; tab-separated fields work, but
+any future field that is not clamped breaks it.
+
+**The name rule differs between the tables, deliberately.** R freezes the name at
+record time (a run is a historical event: *MIKE scored 999 that Tuesday*, and
+renaming yourself does not rewrite what happened); C follows renames, because a
+career total belongs to a person. Written down because it reads as an
+inconsistency and somebody will otherwise "fix" one to match the other.
+
+**Rules:** 3 rows per player, so one great night cannot take every slot and
+"beat your own third place" stays alive. The personal best pinned below the top N,
+because a global top N is invisible to everyone not in it. Bots excluded from R —
+they play every match and nobody is chasing a bot's record — while keeping their
+own class on the career board. Map stored but not displayed; ranking stays global
+rather than splitting a small player base four ways.
+
+**Official-only must filter on READ, not on record.** Filtering at record time
+throws the custom runs away forever, so flipping the switch back shows an empty
+board; filtering on read makes the switch free in both directions and retroactive
+on rows already on disk — which is the whole reason `kind` is stored now rather
+than later. Shape it like the other operator knobs
+(`PLATFORMZ_SCORES_OFFICIAL_ONLY=1` decides what goes on the wire).
+
+That decides the trim too: **top N of each kind, not top N overall.** Keep the
+top N overall and a run of high-scoring custom matches evicts the official rows,
+so the switch reveals a near-empty board months later. Cheap now, unfixable then.
+
+`kind` and `matchName` are not redundant: names are user-chosen and somebody can
+call their custom room `OFFICIAL MATCH`. The kind is server-assigned truth and is
+the only thing the filter can key on safely.
+
+**Still open:** per-match or per-life (an arcade score is one run; a PLATFORMZ
+match is one round with several deaths in it); what N is; whether the career board
+survives in the UI as a third tab; and the wall clock, which `when` would be the
+first use of — everything else here is on the steady clock deliberately, because
+steady cannot jump when NTP steps the box.
 
 **Files:** `scoreboard.h`, `server/server_main.cpp`, `screens.h`, `wire.h`.
 **Depends on:** D4.
