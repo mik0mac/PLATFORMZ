@@ -971,8 +971,9 @@ which either leaves a dead ghost row beside every returning player or re-opens
 the very "type someone's name to take their row" hole D4 closes. Of the 102 rows
 in the local file, most were bot names and the human ones were exactly the
 collided rows; carrying that forward would have preserved the bug's output.
-**Rename `scores` to `scores.pre-d4` on the box rather than deleting it** — the
-numbers are then still there to look at, and nothing reads them.
+Nothing is actually required on the box: the loader skips the old lines and the
+first credited match rewrites the file. Deleting it (server stopped, or a live one
+rewrites it straight back) only skips the `ignored N pre-D4 line(s)` boot line.
 
 **Bots stay on the board, in their own class.** They have no identity to be
 issued - nothing signs for a bot - so a bot's row is keyed on its name behind a
@@ -998,7 +999,7 @@ flushes on the way out, and has a graceful shutdown it did not have before.
 
 ---
 
-### D5. The leaderboard as an arcade board — *not started*
+### D5. The leaderboard as an arcade board — *not started* (#132)
 **Why:** the all-time table answers "who has the most points ever", which is a
 career stat. An arcade cabinet answers something better: **what were the best
 runs**. One player can hold slots 1, 3 and 7, and beating your own third-place
@@ -1418,7 +1419,7 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
 | D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |
 | D4 | #98 | Re-key the scoreboard onto the identity token (display names collide today) | server, security | D3 |
-| D5 | — | Leaderboard as an arcade board: rank RUNS, not career totals | client, server | D4 |
+| D5 | #132 | Leaderboard as an arcade board: rank RUNS, not career totals | client, server | D4 |
 | E1 | #88 | Server: UDP handshake cookie — anti-spoofing / anti-amplification | security | B1 |
 | E2 | #89 | Server: caps and rate limits; separate `PLATFORMZ_KEY` from per-match codes | security | A2 |
 | E3 | #90 | Load harness + CI smoke test for multi-match | testing | A3 |
