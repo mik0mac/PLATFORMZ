@@ -1039,10 +1039,10 @@ inconsistency and somebody will otherwise "fix" one to match the other.
 
 **Rules:** 3 rows per player, so one great night cannot take every slot and
 "beat your own third place" stays alive. The personal best pinned below the top N,
-because a global top N is invisible to everyone not in it. Bots excluded from R —
-they play every match and nobody is chasing a bot's record — while keeping their
-own class on the career board. Map stored but not displayed; ranking stays global
-rather than splitting a small player base four ways.
+because a global top N is invisible to everyone not in it. **Bots are IN** - they
+compete on the same board, as the factory high scores an arcade cabinet ships with,
+there to be knocked off; no filter and no toggle. Map stored but not displayed;
+ranking stays global rather than splitting a small player base four ways.
 
 **Official-only must filter on READ, not on record.** Filtering at record time
 throws the custom runs away forever, so flipping the switch back shows an empty
@@ -1082,10 +1082,9 @@ than a crack in the rule. **Store `to_time_t` from day one even though nothing
 displays it** — it is the one field that cannot be retrofitted, since a row
 written without a timestamp can never acquire one.
 
-**N = 10, and the UI shows RUNS only.** With the 3-per-player cap the board needs
-four distinct players before it can fill - fine for a friends server, and worth
-knowing rather than discovering. Displaying career totals is a **future upgrade**,
-so the LEADERBOARD modal shows the runs board and nothing else.
+**N = 10, and a player sees exactly one thing:** a top 10 with bots in it, and
+their own best run appended below. No tabs, no toggle, no filter. Displaying
+career totals is a **future upgrade**, and D4's PLAYERS/BOTS toggle goes with it.
 
 The C table is still written and maintained regardless. Nothing renders it, which
 is fine - but stop RECORDING it and the future upgrade has no history to show,
@@ -1093,16 +1092,23 @@ because a career total cannot be reconstructed from a capped run list. Same
 reasoning as the timestamp: the cheap half is keeping the data, and it is the half
 that cannot be retrofitted. `matches` keeps counting too.
 
-That also defers the **BOTS view**: PLAYERS/BOTS is a career-board toggle (D4) and
-bots are excluded from runs, so when D5 lands bots leave the UI entirely. They
-keep accruing career totals unseen and return whenever the career tab does. A
-consequence of deferring the career display, not a separate decision.
+Two rules for the pinned row: do not show it twice if that run is already in the
+top 10, and a player with no recorded runs has nothing to pin.
+
+**Bots may own the whole board, and that is a known risk taken on purpose.**
+There are 9 bot names, each its own identity, so the 3-per-player cap allows up to
+27 bot rows against a board of 10 - it holds no space for humans - and bots play
+every single match. That may be exactly right. If it is not, the fix is already
+free: key every bot to a single `-BOT` identity so the cap applies to bots
+COLLECTIVELY (leaving at least 7 human slots) while still displaying `GEOFF` on
+the row. R rows already store the display name apart from the identity, for the
+rename rule, which happens to make this a one-line change.
 
 **The modal has to grow.** It is `{250, 140, 500, 420}` today, which fits nine
 rows (420 less a 60px header and ~70px of buttons, at 30px per row). Ten plus a
 pinned personal best needs eleven, plus a gap separating the pin from the ranked
 rows - about 500 tall, which still ends inside the 700px screen. A real change,
-not a drop-in.
+not a drop-in, though the button row shrinks back to just CLOSE.
 
 **Files:** `scoreboard.h`, `server/server_main.cpp`, `screens.h`, `wire.h`.
 **Depends on:** D4.
