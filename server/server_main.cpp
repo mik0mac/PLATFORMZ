@@ -623,9 +623,18 @@ void Match::refreshBotSlots(SlotMask claimed, bool allowBotify) {
         if (!bot) { players[i].isBot = false; continue; }
         if (!allowBotify) continue; // mid-match leaver: leave the slot open
         players[i].isBot = true;
-        // Same NATO label local mode shows (slot 1 -> first name). Guarded
-        // modulo so a bot at slot 0 (all humans gone) still names cleanly.
-        int nameIdx = ((i - 1) % BOT_NAME_COUNT + BOT_NAME_COUNT) % BOT_NAME_COUNT;
+        // Through THIS MATCH's shuffled order, so a room does not field the same
+        // lineup in the same slots every time (#102). Local mode has always done
+        // this; the naming moved server-side and the shuffle did not come with it.
+        // Guarded modulo so a bot at slot 0 (all humans gone) still names cleanly.
+        const int slotIdx = ((i - 1) % BOT_NAME_COUNT + BOT_NAME_COUNT) % BOT_NAME_COUNT;
+        // Defensive: an order that is somehow the wrong length falls back to the
+        // slot itself rather than reading off the end. Never happens - it is
+        // built once at construction and only ever replaced wholesale - but this
+        // runs every tick for every slot in every room, and a bad index here
+        // would be a crash rather than a cosmetic bug.
+        const int nameIdx = (slotIdx < (int)botNameOrder.size())
+                          ? botNameOrder[slotIdx] : slotIdx;
         players[i].name          = BOT_NAME_STRINGS[nameIdx];
         players[i].color_outline = BOT_OUTLINE_COLOR;
         players[i].color_fill    = BOT_FILL_COLOR;
@@ -3003,6 +3012,13 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 gameSpace.clear();
                 gameSpace.spawnPlayers();
                 rosterSize.store((int)gameSpace.getPlayers().size());
+                // A fresh lineup for the next match (#102). HERE rather than at
+                // match start, because the lobby previews the bots that will fill
+                // it - re-rolling at start would make that preview wrong by
+                // exactly one match. The names then hold steady for the whole of
+                // the next one, which matters because refreshBotSlots runs sixty
+                // times a second.
+                botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
                 rebuildWelcomeStatic();
                 gamePhase       = Phase::LOBBY;
                 gameOverStamped = false;
