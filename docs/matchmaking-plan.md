@@ -1059,11 +1059,31 @@ so the switch reveals a near-empty board months later. Cheap now, unfixable then
 call their custom room `OFFICIAL MATCH`. The kind is server-assigned truth and is
 the only thing the filter can key on safely.
 
-**Still open:** per-match or per-life (an arcade score is one run; a PLATFORMZ
-match is one round with several deaths in it); what N is; whether the career board
-survives in the UI as a third tab; and the wall clock, which `when` would be the
-first use of — everything else here is on the steady clock deliberately, because
-steady cannot jump when NTP steps the box.
+**A run IS a match — settled by construction.** In an arcade game a run is one
+*life*: die, score goes up, next player. PLATFORMZ has no respawn — `isAlive =
+true` happens only in `resetPlayersForMatch` at match start and in
+`TakeOverSlot` when a NEW player claims a slot. You die once, spectate, and the
+match ends when every human is dead or one player is left standing. So `score` is
+simply the player's score at match end. Written down rather than dropped, because
+it stops being true the day a lives or respawn mode appears — and R rows written
+either side of that would mean different things. Two edges survive and neither is
+a blocker: a mid-match joiner starts at 0 and plays a partial match, and a leaver
+has their score frozen when the grace expires.
+
+**The clock: wall time for display, steady time for behaviour.** `NowSec()` is
+`steady_clock`, whose zero is arbitrary (boot, in practice, and different every
+restart) — a steady timestamp cannot be turned into a date at all, because there
+is no anchor to pick. `system_clock` has one, the Unix epoch, which is what makes
+it displayable and equally what makes it jumpy when NTP steps the box. A wrong
+wall clock puts a wrong date on a leaderboard row, which is cosmetic; a wrong
+clock in the reap timer or the mid-match grace would tear down live matches. That
+is why everything else here is steady, and why this is a safe exception rather
+than a crack in the rule. **Store `to_time_t` from day one even though nothing
+displays it** — it is the one field that cannot be retrofitted, since a row
+written without a timestamp can never acquire one.
+
+**Still open:** what N is, and whether the career board survives in the UI as a
+third tab.
 
 **Files:** `scoreboard.h`, `server/server_main.cpp`, `screens.h`, `wire.h`.
 **Depends on:** D4.
