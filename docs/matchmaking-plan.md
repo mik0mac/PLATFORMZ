@@ -998,7 +998,7 @@ flushes on the way out, and has a graceful shutdown it did not have before.
 
 ---
 
-### D5. The leaderboard as an arcade board — *designed, not started* (#132)
+### D5. The leaderboard as an arcade board — **DONE** (#132)
 **Why:** the all-time table answers "who has the most points ever", which is a
 career stat — it only goes up, the same person sits at the top for months, and
 there is nothing to chase on a Tuesday night. An arcade cabinet answers something
@@ -1121,6 +1121,45 @@ not a drop-in, though the button row shrinks back to just CLOSE.
 
 **Files:** `scoreboard.h`, `server/server_main.cpp`, `screens.h`, `wire.h`.
 **Depends on:** D4.
+
+#### What shipped
+
+Built to the design above with one addition the design had missed, found on
+writing the trim.
+
+**The trim had to keep everyone's personal best, not the global top ten.** The
+board pins a player's own best run underneath it - and a global top-N trim throws
+away the personal best of everybody outside the top ten, which is most people,
+which is exactly who the pin is for. So the cap is purely per identity per kind
+(3 human, 1 for the bots between them) with no global N at all. That also
+subsumes the per-kind concern the design DID call out, and more safely: nothing
+can evict an official row, because rows only ever compete with others sharing
+their identity and kind. The file then grows with distinct players rather than
+with matches played - at most three rows each per kind, which is the same shape
+the career table already had.
+
+**The pinned row is decided server-side.** `buildLeaderboard` takes the client's
+identity, and omits `best` when they have no runs OR when their best is already on
+the board. "Do not show it twice" therefore has one implementation rather than one
+per platform, and the leaderboard message became per-client - eleven rows apiece,
+sent on join and at match end, not per tick.
+
+**The modal grew to 500 and lost its button row**, as predicted; it is titled HIGH
+SCORES, ranks ten, rules a line, and pins YOUR BEST below. Bot rows draw in the
+dimmer outline colour so the one line they hold reads as furniture rather than as
+a rival.
+
+Two smaller things: `Match` gained `matchName` (copied in at creation beside the
+code and kind, since a run row records which room it happened in), and the boot
+log now reports careers AND runs - it counted only `scores.size()`, so a file with
+ten runs and no careers announced itself as "0 names".
+
+Tests: `scoreboard_test.cpp` covers the cap, the shared bot identity, the read-time
+filter, the per-kind independence, the frozen-vs-following name rule, and a
+round trip with two free-text fields on one line. `probe_scoreboard.py` proves it
+over a socket. Verified in the client too, including the pin - by fixing
+`PLATFORMZ_IDENTITY_SECRET`, reconnecting with a stored token, and watching the
+server recognise it and pin the matching run.
 
 ---
 

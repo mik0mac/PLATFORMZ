@@ -54,13 +54,14 @@ inline std::string serializeInput(uint32_t seq, const PlayerInput& in,
 // preformatted string: the server hand-rolls its JSON and its escaper only handles
 // " and \, so a newline-separated block would emit invalid JSON. The client renders
 // these itself (see the LEADERBOARD modal in main.cpp).
+// One row of the arcade board (D5): a single finished match from one player's
+// side, not a career total. The same player can hold several rows.
 struct LeaderboardEntry {
-    std::string name;
+    std::string name;      // frozen as it was when the run was recorded
     int         score = 0;
-    // Whether this row is a bot's. The server sends the top rows of BOTH classes
-    // in one message, because a bot plays every single match and would otherwise
-    // own the whole board - so the client shows one class at a time and switching
-    // is a keypress rather than a round trip.
+    // Whether a bot set this row. Every bot shares one identity server-side and
+    // they hold at most ONE row between them, so this is at most a single line on
+    // the board - the factory high score, there to be knocked off.
     bool        isBot = false;
 };
 
@@ -166,10 +167,18 @@ struct ServerMessage {
     bool         hasOptions = false;
     MatchOptions opt;
 
-    // Leaderboard only: the server's all-time table, best-first. Sent once just
-    // behind the welcome (so a fresh client can open the modal immediately) and
-    // again to everyone whenever a finished match is credited.
+    // Leaderboard only: the best runs, best first. Sent once just behind the
+    // welcome (so a fresh client can open the modal immediately) and again
+    // whenever a finished match is credited.
     std::vector<LeaderboardEntry> leaderboard;
+
+    // Leaderboard only: THIS client's best run, to pin under the board - because
+    // a top ten is invisible to everyone not in it, which is most people most of
+    // the time. Absent when they have never recorded one AND when their best is
+    // already on the board above: the server decides that, so "do not show it
+    // twice" has one implementation rather than one per platform.
+    bool             hasPersonalBest = false;
+    LeaderboardEntry personalBest;
 
     // MatchList only. `listCursor`/`listNext` page the browser: the reply is
     // capped so it stays a single datagram over UDP, and listNext < 0 means this
@@ -806,14 +815,18 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     }
     if (type == "leaderboard") {
         msg.type = ServerMessage::Type::Leaderboard;
-        if (j.contains("lb") && j["lb"].is_array()) {
-            for (const auto& jo : j["lb"]) {
-                LeaderboardEntry e;
-                e.name  = jo.value("n", std::string());
-                e.score = jo.value("s", 0);
-                e.isBot = jo.value("b", false);
-                msg.leaderboard.push_back(e);
-            }
+        auto entry = [](const nlohmann::json& jo) {
+            LeaderboardEntry e;
+            e.name  = jo.value("n", std::string());
+            e.score = jo.value("s", 0);
+            e.isBot = jo.value("b", false);
+            return e;
+        };
+        if (j.contains("lb") && j["lb"].is_array())
+            for (const auto& jo : j["lb"]) msg.leaderboard.push_back(entry(jo));
+        if (j.contains("best") && j["best"].is_object()) {
+            msg.personalBest    = entry(j["best"]);
+            msg.hasPersonalBest = true;
         }
         return msg;
     }

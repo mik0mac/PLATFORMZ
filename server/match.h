@@ -283,6 +283,12 @@ struct Match {
     // how a room it is already standing in is governed.
     std::string matchCode;
     MatchKind   matchKind = MatchKind::Custom;
+    // The room's display name, copied in at creation for the same reason. Stamped
+    // onto every run recorded here (D5) so a leaderboard row can say which room it
+    // happened in. Kept ALONGSIDE matchKind rather than derived from it: the name
+    // is whatever a player typed, and somebody can call their custom room
+    // "OFFICIAL MATCH", so only the kind is safe to filter on.
+    std::string matchName;
 
     // Auto-start countdown, LOBBY only. Armed once connectedCount reaches
     // PUBLIC_MIN_PLAYERS, disarmed if the room empties back below it.

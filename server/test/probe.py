@@ -75,7 +75,8 @@ class C:
         # Leaderboard arrivals, and the phase we believed we were in at the time.
         # The server sends the table BEFORE the state packet announcing GAMEOVER,
         # so a correct client must handle it while still in "playing".
-        self.leaderboards = []     # list of (phase_when_received, [(name, score)])
+        self.leaderboards = []     # list of (phase_when_received, [(name, score, isBot)])
+        self.personalBest = None   # (name, score) from the last leaderboard, or None
         self.matchlists   = []     # directory replies: dicts as sent
         self.joinfails    = []     # refusal reasons, in order
         self.created      = []     # codes of rooms we made
@@ -225,6 +226,11 @@ class C:
                     rows = [(e.get("n", ""), e.get("s", 0), e.get("b", False))
                             for e in j.get("lb", [])]
                     self.leaderboards.append((self.phase, rows))
+                    # D5: our own best run, pinned under the board. The server
+                    # omits it when there is nothing to pin (no runs, or it is
+                    # already up there), so None is a meaningful value here.
+                    b = j.get("best")
+                    self.personalBest = (b.get("n", ""), b.get("s", 0)) if b else None
                 elif t == "matchlist":
                     self.matchlists.append(j)
                 elif t == "created":

@@ -618,20 +618,23 @@ contain it. Losing it costs a restart's worth of handshakes and (later) everyone
 remembered identity; leaking it lets anyone mint cookies, which puts the
 reflection hole back.
 
-### One-time: the scoreboard format changed (D4)
+### One-time: the scoreboard format changed (D4, then D5)
 
 The table used to be keyed on **display name**, so two players who both typed
 `MIKE` shared a row and anyone could claim someone else's by typing their name.
-It is keyed on the server-issued identity now, and the file grew a column:
+It is keyed on the server-issued identity now — and since D5 the file holds two
+tables, told apart by a line-type column:
 
 ```
-before   <score>\t<name>
-after    <score>\t<id>\t<name>
+C  <score>  <matches>  <id>  <name>                             career totals
+R  <score>  <when>  <map>  <kind>  <matchName>  <id>  <name>    one finished run
 ```
 
-**Nothing is required.** Old lines have two fields, so the loader skips them and
-says so once at boot, and the first match to credit rewrites the file wholesale in
-the new format. The old rows go away on their own.
+One file, because a match end writes both and two files could tear apart in a
+crash — one `rename()` is both or neither.
+
+**Nothing is required.** Lines in any older shape are skipped, said once at boot,
+and the first match to credit rewrites the file. The old rows go away on their own.
 
 Deleting it just skips that, and keeps the boot log quiet in the meantime:
 
@@ -639,20 +642,34 @@ Deleting it just skips that, and keeps the boot log quiet in the meantime:
 systemctl stop platformz
 rm -f /var/lib/platformz/scores /var/lib/platformz/scores.tmp
 systemctl start platformz
-journalctl -u platformz | grep scoreboard   # "no file at ... - starting empty"
+journalctl -u platformz | grep scoreboard   # "0 careers, 0 runs"
 ```
 
-**Stop the server first.** A running server holds the table in memory and rewrites
-the file at the next match end, so deleting it underneath a live process achieves
-nothing. (`mv` instead of `rm` if you want to keep the old numbers to look at —
-nothing reads them either way.)
+**Stop the server first.** A running server holds the tables in memory and
+rewrites the file at the next match end, so deleting it underneath a live process
+achieves nothing.
 
-Leave the file alone and you will see this on every restart until a match
-credits, which is the only cost:
+### What players see, and the one knob
 
+The LEADERBOARD shows the best **runs** — a single finished match from one
+player's side, not a career total — so one player can hold several rows, and
+beating your own third place is a normal evening rather than a milestone. Bots
+are on it, sharing a single line between them: the factory high score, there to be
+knocked off. Below the board, that player's own best run is pinned, because a top
+ten is invisible to everyone not in it.
+
+Career totals are still recorded (with a match count, for ranking by average
+later) but nothing displays them yet.
+
+```bash
+# Only count runs from OFFICIAL rooms - rooms the server minted, with locked
+# rules - rather than from rooms players set up themselves.
+PLATFORMZ_SCORES_OFFICIAL_ONLY=1
 ```
-[scoreboard] ignored 102 pre-D4 line(s) from /var/lib/platformz/scores - ...
-```
+
+It filters on **read**, so turning it on or off is free in both directions and
+applies retroactively to rows already on disk. Custom runs are never discarded,
+only hidden.
 
 A row belongs to an identity, and identities come from
 `PLATFORMZ_IDENTITY_SECRET`. **Rotate that and every player becomes a new row** —

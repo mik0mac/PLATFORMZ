@@ -135,6 +135,7 @@ public:
         e.match->autoStart     = e.autoStart;
         e.match->matchCode     = e.code;
         e.match->matchKind     = kind;
+        e.match->matchName     = e.name;
         e.match->ApplyPreset(MatchPresetByName(presetName));
 
         codeOut = e.code;
