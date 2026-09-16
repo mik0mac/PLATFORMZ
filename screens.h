@@ -58,9 +58,11 @@ struct ShellState {
     bool showControls = false;
     bool showOptions  = false;
     bool showScores   = false;   // leaderboard popup (networked only)
-    bool scoresShowBots = false; // that popup's PLAYERS/BOTS tab - players by default,
-                                 // because a bot plays every match and the board
-                                 // would otherwise be nothing else
+    // This client's own best run, pinned under the board. The server omits it
+    // when there is nothing to pin - no runs yet, or it is already up there - so
+    // the client never has to decide.
+    bool             hasPersonalBest = false;
+    LeaderboardEntry personalBest;
 
     // ---- Slider drag latches --------------------------------------------
     // A slider being dragged must not be stomped by the server's echo of the
@@ -193,49 +195,53 @@ inline void DrawControlsModal(ShellState& s, bool wasOpen) {
 // Read-only: the server owns the table and pushes it on join and after every
 // credited match, so there is nothing to refresh from here.
 //
-// PLAYERS or BOTS, one at a time. The server sends the top rows of both in the
-// same message, so this toggle is free - and it has to be a toggle rather than a
-// mixed list, because a bot plays every match and a combined board would be
-// nothing but bots within a day.
+// The arcade board (D5): the best RUNS, not career totals. One player can hold
+// several rows - that is the point, and it is why beating your own third place is
+// a normal evening rather than a milestone. Bots are on it too, sharing a single
+// row between them: the factory high score, there to be knocked off.
+//
+// Below the board, this player's own best run. A top ten is invisible to everyone
+// not in it, which is most people most of the time. The SERVER decides whether to
+// send it - absent when they have no runs, and absent when their best is already
+// on the board - so there is nothing to work out here.
 inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen) {
-    Rectangle m = {250, 140, 500, 420};
-    UiModalChrome(m, s.scoresShowBots ? "LEADERBOARD - BOTS" : "LEADERBOARD");
+    // 500, not the 420 every other modal uses: ten rows plus a pinned eleventh
+    // plus the gap between them does not fit in 420, and silently clipping the
+    // bottom of the board would be a strange way to find that out.
+    Rectangle m = {250, 110, 500, 500};
+    UiModalChrome(m, "HIGH SCORES");
 
-    // Rows of the class being shown. Built each frame: it is at most twenty
-    // entries and doing it here keeps the toggle from needing any state beyond
-    // the bool.
-    std::vector<const LeaderboardEntry*> rows;
-    for (const LeaderboardEntry& e : s.leaderboard)
-        if (e.isBot == s.scoresShowBots) rows.push_back(&e);
+    const int rowH = 30;
+    int ly = (int)m.y + 60;
 
-    if (rows.empty()) {
-        // Distinguish "nothing recorded yet" from a broken panel - a fresh
-        // server with no score file lands here, and so does the bot tab before
-        // anyone has played a match.
-        UiTextCentered(s.scoresShowBots ? "No bot scores recorded yet."
-                                        : "No scores recorded yet.",
-                       screenWidth, (int)m.y + 120, 20, GRAY);
+    auto drawRow = [&](const char* label, const LeaderboardEntry& e, Color c) {
+        const char* val = TextFormat("%d", e.score);
+        DrawText(label, (int)m.x + 40, ly, 18, c);
+        DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)), ly, 18, ui::OUTLINE);
+        ly += rowH;
+    };
+
+    if (s.leaderboard.empty()) {
+        // Distinguish "nothing recorded yet" from a broken panel - a fresh server
+        // with no score file lands here.
+        UiTextCentered("No runs recorded yet.", screenWidth, (int)m.y + 120, 20, GRAY);
     } else {
-        int ly = (int)m.y + 60;
-        for (size_t i = 0; i < rows.size(); ++i) {
-            // Rank and name left, score right-aligned inside the panel
-            // so the numbers line up regardless of name length.
-            const char* rank = TextFormat("%d. %s", (int)i + 1, rows[i]->name.c_str());
-            const char* val  = TextFormat("%d", rows[i]->score);
-            DrawText(rank, (int)m.x + 40, ly, 18, RAYWHITE);
-            DrawText(val, (int)(m.x + m.width - 40 - MeasureText(val, 18)),
-                     ly, 18, ui::OUTLINE);
-            ly += 30;
+        for (size_t i = 0; i < s.leaderboard.size(); ++i) {
+            const LeaderboardEntry& e = s.leaderboard[i];
+            drawRow(TextFormat("%d. %s", (int)i + 1, e.name.c_str()), e,
+                    e.isBot ? ui::OUTLINE : RAYWHITE);
         }
     }
 
-    // Left of CLOSE, with room to spare. UiModalClose centres its button on the
-    // SCREEN rather than on the modal (x 430..570 here), so a tab button placed
-    // by eye off m.x overlaps it - which it did, by ten pixels, and the click
-    // went to whichever was tested first.
-    if (UiButton({m.x + 30, m.y + m.height - 60, 120, 40},
-                 s.scoresShowBots ? "PLAYERS" : "BOTS", 16))
-        s.scoresShowBots = !s.scoresShowBots;
+    if (s.hasPersonalBest) {
+        // A gap and a rule, so the pin reads as "and yours" rather than as an
+        // eleventh place.
+        ly += 10;
+        DrawLine((int)m.x + 40, ly, (int)(m.x + m.width - 40), ly, ui::OUTLINE);
+        ly += 12;
+        drawRow(TextFormat("YOUR BEST  %s", s.personalBest.name.c_str()),
+                s.personalBest, RAYWHITE);
+    }
 
     if (UiModalClose(m, wasOpen)) s.showScores = false;
 }

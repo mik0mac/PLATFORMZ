@@ -107,6 +107,16 @@ const double         UDP_TWIN_SUPERSEDE_SEC = 2.0;
 // Lock order where both are needed: gameMutex -> clientMutex -> scoreboardMutex.
 Scoreboard    scoreboard;
 std::mutex    scoreboardMutex;
+// Rows on the board. Nine human slots and one bot line, in practice - the bots
+// share a single identity and are capped at one row between them.
+const size_t  SCORES_BOARD_ROWS = 10;
+// PLATFORMZ_SCORES_OFFICIAL_ONLY: show only runs from official rooms.
+//
+// Filters on READ, never on record. Filtering at record time would throw the
+// custom runs away for good, so turning it back off would reveal an empty board;
+// filtering here makes the switch free in both directions and retroactive on rows
+// already on disk. Set once at boot, then only read.
+bool          g_scoresOfficialOnly = false;
 // Set when a credit changes the table, cleared when the driver loop writes it
 // out. A save rewrites the WHOLE file, and with several matches running their
 // ends bunch together - twelve rooms finishing inside a second used to mean
@@ -1023,36 +1033,46 @@ std::string Match::welcomeFor(const ConnectedClient& c) {
 }
 
 //MARK: Leaderboard packet
-// The all-time table, as entries rather than a preformatted string: the client
-// renders the rows itself, and a newline-separated blob could not survive js(),
-// which escapes only " and \.
+// The arcade board (D5): the best RUNS, not career totals. A run is one finished
+// match from one player's side, so the same person can hold several rows - which
+// is the point, and what makes beating your own third place a normal evening.
 //
 // Plain JSON on purpose - it goes out through SendToClient, which ships text over
 // BOTH transports (chunking oversized UDP datagrams), and the client's applyMessage
 // only treats a packet as binary when it leads with a binary tag byte. So this
 // reaches WS and UDP clients alike without touching the binary welcome format.
 //
-// Carries the top rows of BOTH classes, each tagged with `b`. Bots play every
-// single match and would otherwise own the whole board, so the client shows one
-// class at a time - and sending both means switching between them is a keypress
-// rather than a round trip. Twenty-odd rows is nothing on either transport.
-static std::string buildLeaderboard() {
+// Built PER CLIENT, because `best` is that client's own best run pinned under the
+// board. Cheap: eleven rows, sent on join and at match end, not per tick.
+static std::string buildLeaderboard(const std::string& identity) {
     std::string s = "{\"type\":\"leaderboard\",\"lb\":[";
     {
         std::lock_guard<std::mutex> lk(scoreboardMutex);
-        bool first = true;
-        auto emit = [&](const std::vector<rankingByScore>& rows) {
-            for (const rankingByScore& r : rows) {
-                if (!first) s += ",";
-                first = false;
-                s += "{\"n\":" + js(r.Name) + ",\"s\":" + ji(r.Score)
-                   + ",\"b\":" + jb(r.IsBot) + "}";
-            }
+        const auto rows = scoreboard.topRuns(g_scoresOfficialOnly, SCORES_BOARD_ROWS);
+        auto row = [](const RunRow& r) {
+            return "{\"n\":" + js(r.name) + ",\"s\":" + ji(r.score)
+                 + ",\"b\":" + jb(r.isBot()) + "}";
         };
-        emit(scoreboard.top(/*bots*/ false));
-        emit(scoreboard.top(/*bots*/ true));
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (i) s += ",";
+            s += row(rows[i]);
+        }
+        s += "]";
+
+        // The pin. Omitted when they have never recorded a run, and ALSO when
+        // their best is already up there - deciding that here rather than in the
+        // client means "do not show it twice" has one implementation instead of
+        // one per platform.
+        RunRow best;
+        if (scoreboard.bestRunFor(identity, g_scoresOfficialOnly, best)) {
+            bool onBoard = false;
+            for (const RunRow& r : rows)
+                if (r.id == best.id && r.score == best.score && r.when == best.when)
+                    onBoard = true;
+            if (!onBoard) s += ",\"best\":" + row(best);
+        }
     }
-    s += "]}";
+    s += "}";
     return s;
 }
 
@@ -1810,7 +1830,7 @@ static bool AttachConn(uint64_t connId, const std::string& code,
       g_unseated.erase(connId); }
     // Off every match lock, like every other send site.
     SendToClient(rec, m->welcomeFor(rec));
-    SendToClient(rec, buildLeaderboard());
+    SendToClient(rec, buildLeaderboard(rec.identity));
     return true;
 }
 
@@ -3170,6 +3190,37 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                     // is a guard rather than a path.
                     if (id.empty()) continue;
                     scoreboard.addScore(id, ps[i].name, ps[i].score);
+
+                    // And the RUN (D5). Same credit, a different question: the
+                    // career row is a running total that belongs to a person,
+                    // this is one historical event.
+                    RunRow r;
+                    r.score     = ps[i].score;
+                    // WALL time, and the only wall clock in the server. Steady
+                    // time has no anchor to a calendar - its zero is boot - so a
+                    // date is the one thing it cannot give. Safe because this is
+                    // display-only: a stepped clock puts a wrong date on a
+                    // leaderboard row, where the same mistake in the reap timer
+                    // would tear down live matches. Stored from day one even
+                    // though nothing shows it, because a row written without one
+                    // can never acquire it.
+                    r.when      = (long long)std::chrono::system_clock::to_time_t(
+                                      std::chrono::system_clock::now());
+                    r.map       = MapSizeName(pendingMap.load());
+                    r.official  = (matchKind == MatchKind::Official);
+                    r.matchName = matchName;
+                    // Every bot shares ONE identity here, unlike the career table
+                    // where each keeps its own row. Nine bot names at three rows
+                    // each would be 27 entries competing for a board of ten and
+                    // would leave no room for humans at all; shared and capped at
+                    // one, they contribute a single line - the best a bot has
+                    // managed. The row still displays the bot that set it.
+                    r.id        = ps[i].isBot ? RUN_BOT_ID : id;
+                    // FROZEN. Renaming yourself does not rewrite what happened
+                    // that Tuesday - the opposite of the career row above, which
+                    // follows renames because a total belongs to a person.
+                    r.name      = ps[i].name;
+                    scoreboard.addRun(std::move(r));
                 }
                 scoreboard.generateLeaderboard();
                 // NOT saved here. With several matches running, their ends bunch
@@ -3178,7 +3229,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 scoreboardDirty = true;
                 leaderboardDirty = true;
                 std::cout << "Scoreboard: credited match, " << scoreboard.scores.size()
-                          << " names total\n";
+                          << " careers / " << scoreboard.runs.size() << " runs total\n";
             }
             prevPhase = nowPhase;
         }
@@ -3200,9 +3251,11 @@ void Match::Tick(CollisionGrid& scratchGrid) {
     // taking clientMutex so scoreboardMutex is already released (lock order).
     // Off gameMutex, like the welcome resend above and BroadcastState below.
     if (leaderboardDirty) {
-        std::string lb = buildLeaderboard();
+        // One message each now, not one broadcast: every client's pinned row is
+        // its own. Eleven rows apiece, once per match end.
         std::lock_guard<std::mutex> gc(clientMutex);
-        for (auto& [cid, client] : clients) SendToClient(client, lb);
+        for (auto& [cid, client] : clients)
+            SendToClient(client, buildLeaderboard(client.identity));
     }
 
     if (gridMs > 0.0) statGrid.Add(gridMs);
@@ -3588,6 +3641,13 @@ int main() {
                        << MATCH_MAX_CONCURRENT << "; keeping "
                        << g_maxRoomsPerAddr << "\n";
     }
+    if (const char* oo = std::getenv("PLATFORMZ_SCORES_OFFICIAL_ONLY");
+        oo && *oo && std::string(oo) != "0") {
+        g_scoresOfficialOnly = true;
+        std::cout << "Leaderboard: official matches only"
+                  << " (PLATFORMZ_SCORES_OFFICIAL_ONLY)\n";
+    }
+
     std::cout << "Match caps: " << MATCH_MAX_CONCURRENT << " rooms, "
               << g_maxActiveMatches << " live"
               << (g_maxActiveMatches >= MATCH_MAX_CONCURRENT
@@ -3620,7 +3680,8 @@ int main() {
         scoreboard.setFilePath((sp && *sp) ? sp : SCOREBOARD_FILEPATH);
         scoreboard.load();
         scoreboard.generateLeaderboard(); // seed the table sent to clients on join
-        std::cout << "Scoreboard: " << scoreboard.scores.size() << " names from "
+        std::cout << "Scoreboard: " << scoreboard.scores.size() << " careers, "
+                  << scoreboard.runs.size() << " runs from "
                   << scoreboard.filePath << "\n";
     }
 

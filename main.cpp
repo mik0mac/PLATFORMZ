@@ -823,9 +823,14 @@ int main(int argc, char** argv) {
             return true;
         }
         if (m.type == ServerMessage::Type::Leaderboard) {
-            // Server-owned all-time table, already ranked. Replace wholesale -
-            // each message is the complete top-N, not a delta.
+            // Server-owned board, already ranked. Replace wholesale - each
+            // message is the complete top-N, not a delta.
             shell.leaderboard = std::move(m.leaderboard);
+            // And our own best run, to pin under it. Replaced wholesale too,
+            // INCLUDING the absent case: the server drops it once that run makes
+            // the board, and a stale pin would then show the same run twice.
+            shell.hasPersonalBest = m.hasPersonalBest;
+            shell.personalBest    = m.personalBest;
             return true;
         }
         if (m.type == ServerMessage::Type::VersionMismatch) {

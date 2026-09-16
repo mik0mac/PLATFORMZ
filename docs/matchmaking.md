@@ -156,7 +156,7 @@ cannot land on the new one's spawn state.
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |
-| `leaderboard` | `lb[{n,s,b}]` | the all-time table, already ranked. `b` marks a bot row; the top rows of both classes are sent together |
+| `leaderboard` | `lb[{n,s,b}]`, optional `best` | the best RUNS, already ranked. `b` marks the bot row. `best` is this client's own best run, pinned under the board — absent when they have none, and absent when it is already up there |
 | *(chunk)* | tag `0x03` | transport framing, reassembled below the protocol |
 
 A `matchlist` row is `{c, n, pre, k, map, ph, p, max, j}` — code, name, preset,
@@ -231,28 +231,43 @@ would want real accounts. Do not let a later feature quietly assume otherwise.
 
 ### What keys the scoreboard
 
-The all-time table is keyed on the identity, not on the display name, which is
-what stops two players called `MIKE` sharing a row and what makes renaming
-yourself keep your history — the name is a **property of the row**.
+Rows are keyed on the identity, not on the display name — which is what stops two
+players called `MIKE` sharing a row.
 
-Bots have no identity (nothing signs for a bot), so a bot's row is keyed on its
-name behind a `-`. That prefix is load-bearing: a human id is 32 hex characters
-and can only begin `[0-9a-f]`, while `-` is 0x2D, below `'0'` at 0x30. So the two
-classes are disjoint by construction, "is this a bot" is one character compare,
-and bots sort ahead of every human for free in both the map and the file.
+There are two tables in one file, told apart by a line-type column:
 
 ```
-    3	-GEOFF	GEOFF                              a bot
+C  <score>  <matches>  <id>  <name>                             career totals
+R  <score>  <when>  <map>  <kind>  <matchName>  <id>  <name>    one finished run
+```
+
+**R is what players see** — the best runs, so one player can hold several rows.
+**C is recorded but not displayed**; a capped run list cannot be summed back into
+a career total, so it has to be kept from the start or the history is gone.
+
+**The name rule differs between them, deliberately.** An R row freezes the name as
+it was: a run is a historical event, and renaming yourself does not rewrite what
+happened that Tuesday. A C row follows renames, because a total belongs to a
+person. They look inconsistent and are not.
+
+Bots have no identity. On C each keeps its own row (`-GEOFF`); on R they share one
+(`-BOT`) and hold a single line between them, because nine bot names at three rows
+each would leave no room for humans on a board of ten. The `-` prefix makes both
+work: a human id is 32 hex characters and can only begin `[0-9a-f]`, while `-` is
+0x2D — disjoint by construction, one character to test, and bots sort first for
+free.
+
+```
+    3	-GEOFF	GEOFF                              a bot's career row
     0	13f67c4c8f5b0f8d32d392dee979510a	MIKE    a player
     0	ec6582d8780b7943bd4d6c720fc007b8	MIKE    a different player, same name
 ```
 
-The wire sends the top rows of **both** classes tagged with `b`, so the client's
-LEADERBOARD toggles PLAYERS/BOTS without a round trip. It shows players by
-default: a bot plays every single match, so a combined board is nothing but bots
-within a day.
+`PLATFORMZ_SCORES_OFFICIAL_ONLY=1` limits the board to runs from official rooms.
+It filters on **read**, so it is free in both directions and retroactive — custom
+runs are hidden, never discarded.
 
-The **id** (the token's first half) is what anything persistent should key on —
+The **id** (the token's first half) is what anything persistent should key on —The **id** (the token's first half) is what anything persistent should key on —
 it is safe to log and to write to disk. The **token** is a bearer credential and
 belongs only in the client's profile and on the wire. They are separate strings in
 the code for exactly this reason.
