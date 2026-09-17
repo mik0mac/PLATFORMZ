@@ -22,7 +22,7 @@ GLUE = os.path.join(ROOT, "web", "platformz.js")
 # `var x = <arrow fn>` statements, so a use before its assignment is a TypeError.
 HELPERS = ["UTF8Decoder", "findStringEnd", "UTF8ArrayToString", "UTF8ToString",
            "lengthBytesUTF8", "stringToUTF8Array", "stringToUTF8"]
-EM_JS = ["PlatformzProfileRead", "PlatformzProfileWrite"]
+EM_JS = ["PlatformzStorageRead", "PlatformzStorageWrite"]
 
 
 def grab_var(src, name):
@@ -61,58 +61,72 @@ global.window = { localStorage: {
     setItem: (k, v) => { if (throwing) throw new Error('QuotaExceededError'); store[k] = String(v); }
 }};
 
-// profile.h's ReadRaw()/WriteRaw(), transcribed - so the C-side buffer handling
-// (notably the grow-and-retry when the stored value outgrows the first guess) is
-// under test too, not just the JavaScript.
+// profile.h's ReadRawFrom()/WriteRawTo(), transcribed - so the C-side buffer
+// handling (notably the grow-and-retry when the stored value outgrows the first
+// guess) is under test too, not just the JavaScript.
 //
-// base is deliberately NOT 0: UTF8ToString treats a null pointer as the empty
-// string, and a real std::string's data() never is one.
-function ReadRaw() {
+// The key is a pointer now, not baked into the JS: one storage layer backs both
+// the profile and the local score board. base/keyp are deliberately NOT 0 -
+// UTF8ToString treats a null pointer as the empty string, and a real
+// std::string's data() never is one.
+var PROFILE = 'platformz.profile', SCORES = 'platformz.scores';
+function keyPtr(key) { var p = 512; stringToUTF8(key, p, 256); return p; }
+function ReadRaw(key) {
     var cap = 4096, base = 1024;
-    var need = PlatformzProfileRead(base, cap);
+    var need = PlatformzStorageRead(keyPtr(key), base, cap);
     if (need < 0) return "";
     if (need > cap) {
         cap = need;
-        need = PlatformzProfileRead(base, cap);
+        need = PlatformzStorageRead(keyPtr(key), base, cap);
         if (need < 0 || need > cap) return "";
     }
     return UTF8ToString(base);
 }
-function WriteRaw(str) {
+function WriteRaw(key, str) {
     var p = 65536;
     stringToUTF8(str, p, 65536);
-    return PlatformzProfileWrite(p) !== 0;
+    return PlatformzStorageWrite(keyPtr(key), p) !== 0;
 }
 
 var fails = 0;
 const check = (c, w) => { console.log((c ? '  ok:   ' : '  FAIL: ') + w); if (!c) fails++; };
 
 console.log('empty store');
-check(ReadRaw() === "", 'absent key reads as empty (first launch)');
+check(ReadRaw(PROFILE) === "", 'absent key reads as empty (first launch)');
 
 console.log('\nround trip');
 var payload = JSON.stringify({version:1, name:"MIKE",
                               clientId:"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
                               token:"", volumeDb:-12.5, options:{map:"XL", players:6}});
-check(WriteRaw(payload), 'write succeeds');
-check(store['platformz.profile'] === payload, 'localStorage holds exactly what was written');
-check(ReadRaw() === payload, 'read returns exactly what was written');
+check(WriteRaw(PROFILE, payload), 'write succeeds');
+check(store[PROFILE] === payload, 'localStorage holds exactly what was written');
+check(ReadRaw(PROFILE) === payload, 'read returns exactly what was written');
+
+console.log('\ntwo keys are two drawers');
+// What local_scores.h rests on: the score board shares this storage layer with
+// the profile but must never be able to overwrite it. Natively that is obvious -
+// they are two files - so the web side is the only place it can go wrong.
+var scores = JSON.stringify({version:1, runs:[{s:900, w:7, id:"you", n:"MIKE"}]});
+check(WriteRaw(SCORES, scores), 'the score board writes');
+check(ReadRaw(SCORES) === scores, 'and reads back');
+check(ReadRaw(PROFILE) === payload, 'writing scores did NOT disturb the profile');
+check(store[SCORES] !== store[PROFILE], 'the two keys hold different values');
 
 console.log('\nvalue larger than the first buffer guess');
 var big = JSON.stringify({name:"X".repeat(6000)});
-store['platformz.profile'] = big;
-check(ReadRaw() === big, 'grow-and-retry returns the full value (>4096 bytes)');
-check(ReadRaw().length === big.length, 'nothing is truncated');
+store[PROFILE] = big;
+check(ReadRaw(PROFILE) === big, 'grow-and-retry returns the full value (>4096 bytes)');
+check(ReadRaw(PROFILE).length === big.length, 'nothing is truncated');
 
 console.log('\nmulti-byte content (UTF-8 bytes != JS string length)');
 var uni = JSON.stringify({name:"MIKÉÉÉÉ"});
-store['platformz.profile'] = uni;
-check(ReadRaw() === uni, 'lengthBytesUTF8 sizes in bytes, not characters');
+store[PROFILE] = uni;
+check(ReadRaw(PROFILE) === uni, 'lengthBytesUTF8 sizes in bytes, not characters');
 
 console.log('\nstorage disabled (Safari private window throws on both calls)');
 throwing = true;
-check(ReadRaw() === "", 'a throwing getItem reads as empty; the exception never escapes');
-check(WriteRaw(payload) === false, 'a throwing setItem reports failure; the exception never escapes');
+check(ReadRaw(PROFILE) === "", 'a throwing getItem reads as empty; the exception never escapes');
+check(WriteRaw(PROFILE, payload) === false, 'a throwing setItem reports failure; the exception never escapes');
 throwing = false;
 
 console.log('\n' + (fails ? 'FAILURES' : 'all web-storage checks passed'));

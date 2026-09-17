@@ -43,6 +43,12 @@ int main() {
     // the string getenv() just handed back.
     const std::string sandbox = env;
     setenv("HOME", sandbox.c_str(), 1);
+    // HOME alone is NOT enough to sandbox this on Linux: StorageDir() prefers
+    // XDG_CONFIG_HOME, and a desktop session (and a GitHub runner) sets it - so
+    // redirecting only HOME left the test writing into the REAL config directory,
+    // which is exactly what the sandbox exists to prevent. Pointed INTO the
+    // sandbox rather than unset, so the XDG branch is still the one under test.
+    setenv("XDG_CONFIG_HOME", (sandbox + "/.config").c_str(), 1);
 
     const std::string path = profile::StoragePath();
     std::printf("storage path: %s\n", path.c_str());

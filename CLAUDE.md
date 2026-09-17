@@ -68,7 +68,8 @@ only `main.cpp` and `collisions.cpp` as translation units.
 - `camera.h` — `CameraFromPlayer(player)` builds the first-person `Camera3D`
   from player state each frame (eye at the player-sphere center).
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
-- `profile.h` — the client's **only** persistence: display name, a stable
+- `profile.h` — the client's **only** persistence LAYER (two things now sit on
+  it: the profile below and `local_scores.h`): display name, a stable
   per-install `clientId`, master volume, and two remembered rule sets — the last
   LOCAL match's and the last CUSTOM room the player **hosted** — as small JSON.
   Two bundles, not one, for the same reason `main.cpp` keeps `localOpt` and
@@ -87,7 +88,25 @@ only `main.cpp` and `collisions.cpp` as translation units.
   hand-edited file lands on defaults and a fresh `clientId`. `main.cpp` samples
   the live values into it each frame and lets `profile::Autosave` decide whether
   that is worth a write — the browser never runs teardown, so an on-exit-only
-  save would never happen there. Tests: `test/run.sh`.
+  save would never happen there. `ReadRawFrom`/`WriteRawTo` take the filename and
+  the `localStorage` key, so a second store reuses the atomic replace and the
+  caught-exception web path instead of copying them. Tests: `test/run.sh`.
+- `runboard.h` — what an arcade high-score board **is**, with no opinion about
+  where it is stored: `RunRow`, the `'-'` bot-id convention, and the rules
+  (`TrimRuns` caps each identity at 3 rows and all bots at 1 between them;
+  `TopRuns`; `BestRunFor`). Shared by the server's board and the client's, so the
+  two cannot drift into different tie-breaks or a different answer to "does a bot
+  get its own row". Includes nothing that touches a filesystem — the web client
+  compiles it.
+- `local_scores.h` — the **LOCAL** high-score board: the same arcade table as the
+  server's, kept on this machine, fed only by LOCAL matches, never mixed with the
+  online one (a local match is unrefereed — the client hosts its own sim). Its own
+  file in profile.h's drawer (`scores.json` / `platformz.scores`), so clearing
+  your scores can't cost you your name or identity token. The human is keyed on a
+  constant, **not** `clientId`: a reset profile would otherwise orphan every row
+  already on disk. Written by `endLocalMatch()` in `main.cpp` — the one place all
+  three local endings (M, solo clear/die, last-man-standing) go through; BENCH is
+  excluded. Read by the HIGH SCORES modal's LOCAL tab. Tests: `test/run.sh`.
 - `WireframeTests/` — **gitignored** scratch dir of prototypes (2D/3D wireframe
   experiments, Godot tests) that much of this code was pulled from. Not built.
 

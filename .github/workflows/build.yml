@@ -68,6 +68,16 @@ jobs:
       - name: Unit tests
         run: ./server/test/run_all.sh
 
+      # The CLIENT's own suite, which nothing in CI ran until there was client
+      # logic worth failing over: profile.h's two storage backends and the LOCAL
+      # score board. It needs no raylib - both native tests build against the
+      # server's headless stub (-I../server) - and its web half lifts the real
+      # EM_JS out of the committed bundle and runs it under node, so a rename in
+      # profile.h that was never rebuilt into web/ fails HERE rather than in
+      # somebody's browser.
+      - name: Client tests
+        run: ./test/run.sh
+
       # The live protocol probes. Each gets its own fresh gameserver (see the
       # script) because several mutate registry state that outlives them.
       - name: Protocol probes

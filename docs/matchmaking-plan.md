@@ -1163,6 +1163,88 @@ server recognise it and pin the matching run.
 
 ---
 
+### D6. A LOCAL high-score board — **DONE**
+**Why:** the SCORES button was networked-only, because the only table was the
+server's. So an offline player - which is every player before they type a server
+URL, and every player whose connection is down - had no high-score table at all,
+and the bots they had just lost to had no record of having won. LOCAL MATCH was
+the one mode where a score went nowhere.
+
+**Scope:** a second arcade board, kept on the client, fed only by local matches
+and never mixed with the online one.
+
+**Files:** new `runboard.h`, new `local_scores.h`, `scoreboard.h`, `profile.h`,
+`screens.h`, `main.cpp`, new `test/local_scores_test.cpp`.
+**Depends on:** D1 (storage), D5 (the rules).
+
+#### What shipped
+**Two boards, not one board with a flag.** Nothing about a local match is
+refereed: the client hosts its own sim, so the score is whatever the client says
+it is, and the rules are whatever the player set them to. Five bots on EASY in an
+XL arena is not the same game as an official room. Merging the two tables would
+either corrupt the shared one or force the local one to pretend it was earned.
+They answer different questions - *how do I compare to everyone* versus *how do I
+compare to my own best evening, and to the bots* - so they are a tab apart in one
+modal rather than one table with a source column.
+
+**The RULES were extracted rather than reimplemented.** `runboard.h` now holds
+`RunRow`, the bot-id convention, and `TrimRuns`/`TopRuns`/`BestRunFor` as free
+functions over a vector; `scoreboard.h` keeps the career table and the file on the
+box and delegates the rest, and `local_scores.h` adds only its own persistence.
+The alternative - a second, simpler implementation for the local case - is how the
+two boards would have quietly grown different tie-breaks, a different cap, and a
+different answer to "does a bot get its own row", so that a player would have had
+to learn the same table twice.
+
+**The bot cap matters more here, not less.** All bots share `RUN_BOT_ID` and hold
+one row between them, exactly as they do online. Online that keeps nine bots from
+crowding out the humans; locally there is exactly **one** human on the board, so
+per-bot rows would have left them a single line on their own machine.
+
+**Keyed on a constant, deliberately NOT on `clientId`.** There is one person at
+this keyboard. Keying the board on the profile's id means a corrupt or deleted
+profile mints a fresh `clientId` and every run already on disk silently becomes
+somebody else's - the rows would still be listed, but YOUR BEST would go blank and
+no new score could ever match them. `LOCAL_PLAYER_ID` cannot do that. Renaming
+yourself still behaves as it does online: `name` is frozen per row, so old runs
+keep the name they were set under.
+
+**Its own file, in the profile's drawer.** `scores.json` beside `profile.json`
+(and `platformz.scores` beside `platformz.profile` in `localStorage`), through
+profile.h's storage layer - which had the two hard parts solved already on both
+platforms: write-then-`rename` so a crash cannot truncate, and localStorage with
+its exceptions caught. Generalising `ReadRaw`/`WriteRaw` to take a key was
+cheaper than a second copy of either. **Not** a key inside `profile.json`, so
+clearing your scores cannot cost you your name or your identity token, and a
+parse failure in one cannot take the other down. It needs no size cap: `TrimRuns`
+bounds it at three player rows plus one bot row, forever.
+
+**The board is shown at the moment it is earned.** The local game-over screen
+prints where the run landed (`LOCAL HIGH SCORE #3`), because a high-score table
+nobody is shown at the instant they set a score is a table nobody knows exists.
+The rank is read off the trimmed board rather than computed by counting better
+scores - those two disagree exactly where it matters, at a fourth personal best,
+which beats nothing above it AND is trimmed away on arrival. Counting would call
+that "#4"; looking says it is not on the board, which is the truth.
+
+**All three local endings credit the run** - the manual `M`, the solo
+clear-or-die, and last-man-standing - through one `endLocalMatch()`. They were
+three separate `screen = GAME_OVER` assignments, which is precisely the shape
+that ends up crediting two of three. BENCH mode is excluded: its map numbers come
+off the command line, well outside any preset, so its scores are not comparable to
+anything.
+
+Tests: `test/local_scores_test.cpp` (33 checks) spends most of its time on the two
+things that can actually hurt - the per-identity cap, which is the only thing
+bounding the file on a machine nobody is watching, and hand-edited files, because
+the player owns this one and it will get edited. `test/web_profile_test.py` gained
+a check that two keys are two drawers, which is the property the whole arrangement
+rests on and the only place it could go wrong (natively they are two files).
+Verified in the client end to end: a local match with three bots wrote two rows -
+one human, one shared bot row - and the modal ranked them.
+
+---
+
 # Epic E — Ops, abuse, and proof it scales
 
 ### E1. UDP handshake token (anti-spoof / anti-amplification) — **DONE** (#88)
