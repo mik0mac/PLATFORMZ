@@ -1,17 +1,17 @@
 name: Build
 
-# CI for the headless game server. Three jobs, in increasing order of how long
-# they take and how much they prove:
+# CI, in increasing order of how long each job takes and how much it proves:
 #
 #   build-server  compile check on every push (seconds)
 #   test-server   the unit tests and the live protocol probes (minutes)
 #   race-server   the same probes under ThreadSanitizer (slower still)
+#   build-web     the browser client, under emsdk (minutes, mostly cached)
 #
-# Server only: the native client Makefile is macOS-only (Apple frameworks,
-# /opt/homebrew) and the web client needs emsdk + a prebuilt web raylib, neither
-# of which runs on ubuntu-latest as-is. The server builds against the
-# raylib_server_stub.h shims, so it compiles cleanly on Linux. Keeping the web
-# client green in CI is F5 (#96).
+# The NATIVE client is still not built here, and cannot be: its Makefile is
+# macOS-only (Apple frameworks, /opt/homebrew). A macOS runner would use the same
+# compiler and OS as the machine that writes the code, so it would add little
+# beyond a clean-checkout check while going red whenever Homebrew bumps raylib.
+# The web client is the opposite case - see build-web.
 
 on:
   push:
@@ -144,3 +144,66 @@ jobs:
               echo "::endgroup::"
             fi
           done
+
+  build-web:
+    name: Web client
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Full history: the freshness check below compares commit dates, and a
+      # shallow clone has none to compare.
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # WHY THIS JOB EXISTS, given the server is already covered.
+      #
+      # Not for toolchain coverage - it is for the build nobody runs. `make web`
+      # needs emsdk on PATH, EMSDK_PYTHON pointed at a >=3.10 interpreter, and a
+      # separate raylib compiled for PLATFORM_WEB, so it is an easy step to skip
+      # for weeks. Meanwhile the browser client is a first-class target: the
+      # web/ artifacts are committed and the box serves them straight off the
+      # checkout. A protocol change that breaks it breaks it for real users, and
+      # nothing else in CI would notice.
+      - name: Install emsdk
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.64
+          actions-cache-folder: emsdk-cache
+
+      # nlohmann/json, which wire.h is built on. It has to be fetched rather than
+      # apt-installed: emcc has its own sysroot and does not search /usr/include,
+      # so the distro package would be invisible to it. Hence the Makefile's
+      # JSON_INC.
+      - name: Fetch nlohmann/json
+        run: |
+          mkdir -p .ci-include/nlohmann
+          curl -fsSL -o .ci-include/nlohmann/json.hpp \
+            https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp
+
+      # raylib built for the web, which takes minutes and changes only when the
+      # pinned version does - so it is cached on that version plus the emsdk one,
+      # since the artifacts are emcc output.
+      - name: Cache web raylib
+        id: raylib-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/raylib
+          key: raylib-web-5.5-emsdk-3.1.64
+
+      - name: Build raylib for web
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git ~/raylib
+          make -C ~/raylib/src PLATFORM=PLATFORM_WEB -B
+
+      - name: Build the web client
+        run: |
+          make web RAYLIB_WEB_DIR=$HOME/raylib JSON_INC="$PWD/.ci-include"
+          ls -la web/
+
+      # Compiling proves the SOURCE is buildable. It does not prove the committed
+      # web/ artifacts match it - and those are what ship. See the script.
+      - name: Committed bundle is newer than the protocol
+        run: ./scripts/check-web-bundle-fresh.sh

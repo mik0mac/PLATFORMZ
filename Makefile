@@ -233,13 +233,20 @@ dist-pack: notarize
 # uses the JS WebSocket API (-lwebsocket.js), and emcc auto-defines __EMSCRIPTEN__
 # which selects that backend + the query-string server URL in main.cpp.
 # nlohmann/json is header-only, so the same brew include path works under emcc.
+#
+# JSON_INC is where nlohmann/json.hpp lives, and it is a variable rather than the
+# hardcoded brew prefix because emcc does NOT search /usr/include - it has its own
+# sysroot. So on Linux (CI) the distro package is invisible to it and the path has
+# to be passed in:
+#   make web RAYLIB_WEB_DIR=... JSON_INC=/somewhere/containing/nlohmann
 EMCC           := emcc
 RAYLIB_WEB_DIR ?= $(HOME)/raylib
 RAYLIB_WEB_INC ?= $(RAYLIB_WEB_DIR)/src
 RAYLIB_WEB_LIB ?= $(RAYLIB_WEB_DIR)/src/libraylib.a
+JSON_INC       ?= /opt/homebrew/include
 WEB_OUT        := web/platformz.html
 
-WEB_CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(RAYLIB_WEB_INC)
+WEB_CXXFLAGS := -std=c++17 -O2 -I$(JSON_INC) -I$(RAYLIB_WEB_INC)
 # -sASYNCIFY lets the existing blocking while(!WindowShouldClose()) loop yield to
 # the browser. It can be dropped once the loop uses emscripten_set_main_loop().
 # -sEXPORTED_RUNTIME_METHODS=HEAPF32: raylib 5.5's bundled miniaudio reads
