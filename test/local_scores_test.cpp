@@ -57,6 +57,9 @@ int main() {
     if (!env || !*env) { std::printf("PROFILE_TEST_HOME not set\n"); return 2; }
     const std::string sandbox = env;
     setenv("HOME", sandbox.c_str(), 1);
+    // See profile_test.cpp: on Linux StorageDir() prefers XDG_CONFIG_HOME, so
+    // redirecting HOME alone does not sandbox anything.
+    setenv("XDG_CONFIG_HOME", (sandbox + "/.config").c_str(), 1);
 
     const std::string path = profile::StoragePathFor(localscores::STORAGE_LEAF);
     std::printf("storage path: %s\n", path.c_str());
