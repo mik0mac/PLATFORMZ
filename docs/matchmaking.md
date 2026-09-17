@@ -156,7 +156,7 @@ cannot land on the new one's spawn state.
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |
-| `leaderboard` | `lb[{n,s,b}]`, optional `best` | the best RUNS, already ranked. `b` marks the bot row. `best` is this client's own best run, pinned under the board — absent when they have none, and absent when it is already up there |
+| `leaderboard` | `lb[{n,s,b}]`, optional `best` | the best RUNS, already ranked. `b` marks the bot row. `best` is this client's own best run, pinned under the board — absent when they have none, and absent when it is already up there. This is the **ONLINE** tab of the client's HIGH SCORES modal; the LOCAL tab is a second board the client keeps itself (`local_scores.h`, fed only by offline matches) and never reaches the wire |
 | *(chunk)* | tag `0x03` | transport framing, reassembled below the protocol |
 
 A `matchlist` row is `{c, n, pre, k, map, ph, p, max, j}` — code, name, preset,

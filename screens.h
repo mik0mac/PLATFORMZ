@@ -20,6 +20,7 @@
 #include "options.h"
 #include "random.h"
 #include "wire.h"        // LeaderboardEntry, MatchSummary
+#include "local_scores.h"// the LOCAL half of the HIGH SCORES modal
 #include "ui.h"          // the immediate-mode widgets the screens are built from
 #include "audio.h"       // MasterVolumeAmpToDb/DbToAmp (the volume slider)
 
@@ -57,7 +58,14 @@ struct ShellState {
     // ---- Modals ---------------------------------------------------------
     bool showControls = false;
     bool showOptions  = false;
-    bool showScores   = false;   // leaderboard popup (networked only)
+    bool showScores   = false;   // leaderboard popup
+    // Which board the popup is showing. There are two - the server's, shared by
+    // everyone, and this machine's own LOCAL one - and they answer different
+    // questions, so they are a tab apart rather than merged. Defaults to LOCAL
+    // because that one always has something behind it; main() flips it to ONLINE
+    // on open when there is a server, since that is the more interesting board
+    // when it exists.
+    bool scoresShowLocal = true;
     // This client's own best run, pinned under the board. The server omits it
     // when there is nothing to pin - no runs yet, or it is already up there - so
     // the client never has to decide.
@@ -192,8 +200,7 @@ inline void DrawControlsModal(ShellState& s, bool wasOpen) {
     if (UiModalClose(m, wasOpen)) s.showControls = false;
 }
 
-// Read-only: the server owns the table and pushes it on join and after every
-// credited match, so there is nothing to refresh from here.
+// Two boards behind one modal, a tab apart.
 //
 // The arcade board (D5): the best RUNS, not career totals. One player can hold
 // several rows - that is the point, and it is why beating your own third place is
@@ -201,18 +208,80 @@ inline void DrawControlsModal(ShellState& s, bool wasOpen) {
 // row between them: the factory high score, there to be knocked off.
 //
 // Below the board, this player's own best run. A top ten is invisible to everyone
-// not in it, which is most people most of the time. The SERVER decides whether to
-// send it - absent when they have no runs, and absent when their best is already
-// on the board - so there is nothing to work out here.
-inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen) {
+// not in it, which is most people most of the time.
+//
+//MARK: ONLINE vs LOCAL
+// ONLINE is read-only and server-owned: it pushes the table on join and after
+// every credited match, so there is nothing to refresh from here, and IT decides
+// whether to send the pin (absent when they have no runs, and absent when their
+// best is already up there) - so the client never has to work that out.
+//
+// LOCAL is this machine's own, built here from local_scores.h, and fed only by
+// offline matches. A local match is not refereed - the client hosts its own sim -
+// so its scores can never join the shared table; see local_scores.h for the long
+// version. Same rules, same shape, same modal: only the source differs, which is
+// why both paths below collapse into one row renderer.
+inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen,
+                                 bool onlineAvailable) {
     // 500, not the 420 every other modal uses: ten rows plus a pinned eleventh
     // plus the gap between them does not fit in 420, and silently clipping the
     // bottom of the board would be a strange way to find that out.
     Rectangle m = {250, 110, 500, 500};
     UiModalChrome(m, "HIGH SCORES");
 
+    //MARK: Tabs
+    // Offline, ONLINE is greyed rather than hidden - the same rule the title
+    // screen's match buttons and the browser's unjoinable rows follow: a button
+    // that vanishes reads as a bug, a greyed one reads as "not right now".
+    const float tabW = 120.0f, tabH = 28.0f;
+    const float tabY = m.y + 52.0f;
+    auto tab = [&](float x, const char* label, bool selected, bool enabled) {
+        Rectangle r = {x, tabY, tabW, tabH};
+        if (selected) UiPanel(r, ui::OUTLINE, Fade(ui::FILL, 0.9f));
+        int tw = MeasureText(label, 16);
+        if (!enabled) {
+            if (!selected) UiPanel(r, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));
+            DrawText(label, (int)(r.x + (r.width - tw) / 2), (int)(r.y + 7), 16, GRAY);
+            return false;
+        }
+        if (selected) {
+            DrawText(label, (int)(r.x + (r.width - tw) / 2), (int)(r.y + 7), 16, RAYWHITE);
+            return false;   // already here; clicking it changes nothing
+        }
+        return wasOpen && UiButton(r, label, 16);
+    };
+    const float tabGap = 10.0f;
+    const float tabLeft = m.x + m.width / 2.0f - tabW - tabGap / 2.0f;
+    if (tab(tabLeft, "LOCAL", s.scoresShowLocal, true)) s.scoresShowLocal = true;
+    if (tab(tabLeft + tabW + tabGap, "ONLINE", !s.scoresShowLocal, onlineAvailable))
+        s.scoresShowLocal = false;
+    // An open modal can outlive the connection that justified its tab (the socket
+    // drops while you are reading). Fall back rather than showing a stale board
+    // under a tab that is now greyed out.
+    if (!onlineAvailable) s.scoresShowLocal = true;
+
+    //MARK: The rows
+    // Both sources reduced to the same two things - a list and an optional pin -
+    // so the drawing below has no idea which board it is rendering.
+    std::vector<LeaderboardEntry> rows;
+    bool             hasPin = false;
+    LeaderboardEntry pin;
+    if (s.scoresShowLocal) {
+        const localscores::Board& b = localscores::Get();
+        for (const RunRow& r : b.top()) rows.push_back({r.name, r.score, r.isBot()});
+        RunRow best;
+        if (b.bestForPlayer(best) && !RunIsOnBoard(b.top(), best)) {
+            hasPin = true;
+            pin = {best.name, best.score, false};
+        }
+    } else {
+        rows   = s.leaderboard;
+        hasPin = s.hasPersonalBest;
+        pin    = s.personalBest;
+    }
+
     const int rowH = 30;
-    int ly = (int)m.y + 60;
+    int ly = (int)tabY + (int)tabH + 14;
 
     auto drawRow = [&](const char* label, const LeaderboardEntry& e, Color c) {
         const char* val = TextFormat("%d", e.score);
@@ -221,26 +290,26 @@ inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen) {
         ly += rowH;
     };
 
-    if (s.leaderboard.empty()) {
+    if (rows.empty()) {
         // Distinguish "nothing recorded yet" from a broken panel - a fresh server
-        // with no score file lands here.
-        UiTextCentered("No runs recorded yet.", screenWidth, (int)m.y + 120, 20, GRAY);
+        // with no score file, and a first launch offline, both land here.
+        UiTextCentered(s.scoresShowLocal ? "No local runs yet. Play a LOCAL MATCH."
+                                         : "No runs recorded yet.",
+                       screenWidth, (int)m.y + 150, 20, GRAY);
     } else {
-        for (size_t i = 0; i < s.leaderboard.size(); ++i) {
-            const LeaderboardEntry& e = s.leaderboard[i];
-            drawRow(TextFormat("%d. %s", (int)i + 1, e.name.c_str()), e,
-                    e.isBot ? ui::OUTLINE : RAYWHITE);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            drawRow(TextFormat("%d. %s", (int)i + 1, rows[i].name.c_str()), rows[i],
+                    rows[i].isBot ? ui::OUTLINE : RAYWHITE);
         }
     }
 
-    if (s.hasPersonalBest) {
+    if (hasPin) {
         // A gap and a rule, so the pin reads as "and yours" rather than as an
         // eleventh place.
         ly += 10;
         DrawLine((int)m.x + 40, ly, (int)(m.x + m.width - 40), ly, ui::OUTLINE);
         ly += 12;
-        drawRow(TextFormat("YOUR BEST  %s", s.personalBest.name.c_str()),
-                s.personalBest, RAYWHITE);
+        drawRow(TextFormat("YOUR BEST  %s", pin.name.c_str()), pin, RAYWHITE);
     }
 
     if (UiModalClose(m, wasOpen)) s.showScores = false;
@@ -718,20 +787,23 @@ inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
     }
 
     // One bottom row rather than a stacked LEADERBOARD: the fourth destination
-    // (QUICK MATCH) took the vertical space that used to sit in. SCORES is
-    // networked-only - the table is owned and persisted by the server, so offline
-    // there is nothing behind it. It is not a match option, it is a place to look,
-    // so the router is allowed to offer it.
+    // (QUICK MATCH) took the vertical space that used to sit in. It is not a
+    // match option, it is a place to look, so the router is allowed to offer it.
+    //
+    // It used to be networked-only, because the only table was the server's.
+    // There is a LOCAL board now, so there is always something behind it - and
+    // the offline player, who has no other high-score display at all, is the one
+    // who benefits most.
     float by = screenHeight - 100.0f;
 #if defined(__EMSCRIPTEN__)
     // No QUIT in a browser tab: breaking the loop would leave a dead canvas with
     // no way back. Closing the tab is the platform's own quit.
     if (uiEnabled && UiButton({325, by, 160, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
-    if (online && uiEnabled && UiButton({515, by, 160, 44}, "SCORES", 16))
+    if (uiEnabled && UiButton({515, by, 160, 44}, "SCORES", 16))
         action = TitleAction::Leaderboard;
 #else
     if (uiEnabled && UiButton({325, by, 110, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
-    if (online && uiEnabled && UiButton({445, by, 110, 44}, "SCORES", 16))
+    if (uiEnabled && UiButton({445, by, 110, 44}, "SCORES", 16))
         action = TitleAction::Leaderboard;
     if (uiEnabled && UiButton({565, by, 110, 44}, "QUIT", 16))     action = TitleAction::Quit;
 #endif

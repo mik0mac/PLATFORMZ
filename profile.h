@@ -187,26 +187,37 @@ inline std::string StorageDir() {
     return dir;
 }
 
-inline std::string StoragePath() {
+// A file in the game's own directory, by leaf name. Takes the leaf rather than
+// hardcoding profile.json because this is the client's ONE persistence layer and
+// there is now a second thing to keep (local_scores.h) - the atomic replace
+// below is the part worth having once rather than twice.
+inline std::string StoragePathFor(const char* leaf) {
     const std::string dir = StorageDir();
     if (dir.empty()) return std::string();
 #if defined(_WIN32)
-    return dir + "\\profile.json";
+    return dir + "\\" + leaf;
 #else
-    return dir + "/profile.json";
+    return dir + "/" + leaf;
 #endif
 }
+
+inline std::string StoragePath() { return StoragePathFor("profile.json"); }
 #endif // !__EMSCRIPTEN__
 
 //MARK: Raw read / write
+// Keyed by (leaf filename, localStorage key) so the same machinery backs every
+// small thing the client keeps - the profile, and the local score board. The two
+// names travel together because they are the same drawer under two platforms'
+// spellings; passing one without the other is how a web build ends up silently
+// storing nothing.
 #if defined(__EMSCRIPTEN__)
 // Returns the byte length needed (including the NUL) and fills `out` when it
 // fits; -1 when there is nothing stored or storage is unavailable. Safari in a
 // private window THROWS on both of these rather than returning null, so both are
 // wrapped - an uncaught exception here would take the frame down.
-EM_JS(int, PlatformzProfileRead, (char* out, int cap), {
+EM_JS(int, PlatformzStorageRead, (const char* key, char* out, int cap), {
     try {
-        var s = window.localStorage.getItem('platformz.profile');
+        var s = window.localStorage.getItem(UTF8ToString(key));
         if (s === null || s === undefined) return -1;
         var need = lengthBytesUTF8(s) + 1;
         if (need <= cap) stringToUTF8(s, out, cap);
@@ -214,25 +225,27 @@ EM_JS(int, PlatformzProfileRead, (char* out, int cap), {
     } catch (e) { return -1; }
 });
 
-EM_JS(int, PlatformzProfileWrite, (const char* json), {
-    try { window.localStorage.setItem('platformz.profile', UTF8ToString(json)); return 1; }
+EM_JS(int, PlatformzStorageWrite, (const char* key, const char* json), {
+    try { window.localStorage.setItem(UTF8ToString(key), UTF8ToString(json)); return 1; }
     catch (e) { return 0; }   // quota exceeded, or storage disabled entirely
 });
 #endif
 
-inline std::string ReadRaw() {
+inline std::string ReadRawFrom(const char* leaf, const char* webKey) {
 #if defined(__EMSCRIPTEN__)
+    (void)leaf;
     std::string buf(4096, '\0');
-    int need = PlatformzProfileRead(&buf[0], (int)buf.size());
+    int need = PlatformzStorageRead(webKey, &buf[0], (int)buf.size());
     if (need < 0) return std::string();
     if (need > (int)buf.size()) {          // grew past the first guess - retry exactly
         buf.assign((size_t)need, '\0');
-        need = PlatformzProfileRead(&buf[0], (int)buf.size());
+        need = PlatformzStorageRead(webKey, &buf[0], (int)buf.size());
         if (need < 0 || need > (int)buf.size()) return std::string();
     }
     return std::string(buf.c_str());
 #else
-    const std::string path = StoragePath();
+    (void)webKey;
+    const std::string path = StoragePathFor(leaf);
     if (path.empty()) return std::string();
     std::FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return std::string();
@@ -245,11 +258,13 @@ inline std::string ReadRaw() {
 #endif
 }
 
-inline bool WriteRaw(const std::string& json) {
+inline bool WriteRawTo(const char* leaf, const char* webKey, const std::string& json) {
 #if defined(__EMSCRIPTEN__)
-    return PlatformzProfileWrite(json.c_str()) != 0;
+    (void)leaf;
+    return PlatformzStorageWrite(webKey, json.c_str()) != 0;
 #else
-    const std::string path = StoragePath();
+    (void)webKey;
+    const std::string path = StoragePathFor(leaf);
     if (path.empty()) return false;
     // Write-then-rename, so a crash or a full disk mid-write leaves the previous
     // profile intact instead of a half-written file that parses as garbage and
@@ -271,6 +286,12 @@ inline bool WriteRaw(const std::string& json) {
 #endif
     return true;
 #endif
+}
+
+// The profile itself, in the spelling the rest of the file already used.
+inline std::string ReadRaw() { return ReadRawFrom("profile.json", "platformz.profile"); }
+inline bool WriteRaw(const std::string& json) {
+    return WriteRawTo("profile.json", "platformz.profile", json);
 }
 
 //MARK: Serialize

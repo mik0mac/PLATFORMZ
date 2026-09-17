@@ -19,10 +19,12 @@
 #include "bot_controller.h" // shared bot orchestration (tree + per-slot state + drive)
 #include "messages.h"    // transient on-screen message queue (kill-feed HUD)
 #include "profile.h"     // persistent local profile: name, clientId, volume, last LOCAL rules
+#include "local_scores.h" // the LOCAL high-score board, fed by offline matches only
 
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <chrono>      // system_clock - the wall time stamped onto a local run
 #include <csignal>
 
 #if defined(__EMSCRIPTEN__)
@@ -305,6 +307,10 @@ int main(int argc, char** argv) {
     // needs raylib, and because the restored name has to be in place for the
     // first title frame - a name that appears a beat late reads as a bug.
     profile::Load();
+    // The local high-score table, from the same drawer (its own file though - see
+    // local_scores.h). Before the window for the same reason: the SCORES button is
+    // live on the very first title frame.
+    localscores::Load();
 
     const int screenWidth = 1000;
     const int screenHeight = 700;
@@ -675,6 +681,57 @@ int main(int argc, char** argv) {
         }
         const mapSizePreset& m = mapSizePresets.at(localOpt.mapSize);
         startLocalWorld(m.halfSize, m.numPlatforms, m.numAsteroids);
+    };
+
+    //MARK: End of a LOCAL match
+    // Credit the run to the local board and enter GAME_OVER. Every local exit from
+    // PLAYING goes through here - the manual M, the solo clear/death, and
+    // last-man-standing - because a high-score table that quietly skips one of
+    // three endings is worse than none.
+    //
+    // This is the client-side twin of the server's credit at the PLAYING ->
+    // GAMEOVER edge, and it mirrors it deliberately: a row per participating
+    // slot, bots sharing one identity so they hold a single line between them,
+    // and the display name FROZEN onto the row as it was when the run happened.
+    //
+    // `localRunRank` is what the game-over screen shows. 0 means the run missed
+    // the board.
+    int localRunRank = 0;
+    auto endLocalMatch = [&]() {
+        EnableCursor();                    // free the cursor for the game-over menu
+        screen = GameScreen::GAME_OVER;
+        localRunRank = 0;
+        // BENCH is a perf harness with map numbers picked off the command line,
+        // well outside any preset - scores from it are not comparable to anything
+        // and have no business on the board.
+        if (benchMode) return;
+
+        std::vector<Player>& ps = gameSpace.getPlayers();
+        const long long now = (long long)std::chrono::system_clock::to_time_t(
+                                  std::chrono::system_clock::now());
+        for (const Player& p : ps) {
+            RunRow r;
+            r.score     = p.score;
+            // WALL time, for the same reason and with the same caveat as the
+            // server's: it is the only clock that can name a date, and this is
+            // display-only. Recorded from day one even though nothing shows it,
+            // because a row written without one can never acquire it.
+            r.when      = now;
+            r.map       = localOpt.mapSize;
+            r.official  = false;           // nothing local is refereed - see local_scores.h
+            r.matchName = "LOCAL MATCH";
+            r.id        = p.isBot ? RUN_BOT_ID : localscores::LOCAL_PLAYER_ID;
+            r.name      = p.name;
+            localscores::Get().addRun(std::move(r));
+        }
+        // AFTER recording, so this is where the run actually landed rather than
+        // where it would have - the two differ when the player already holds the
+        // three rows a single identity is allowed and the new run is trimmed away.
+        localRunRank = localscores::Get().rankOf(localscores::LOCAL_PLAYER_ID, now);
+        // Written now rather than left to the autosave: the browser runs no
+        // teardown, and a player who closes the tab on the game-over screen would
+        // otherwise lose the score they just set.
+        localscores::Save();
     };
 
     // Networked: the server's phase just went PLAYING (we started, a peer started,
@@ -1301,7 +1358,14 @@ int main(int argc, char** argv) {
                         screen = GameScreen::LOCAL;
                         break;
                     case TitleAction::Controls:    shell.showControls = true; break;
-                    case TitleAction::Leaderboard: shell.showScores   = true; break;
+                    case TitleAction::Leaderboard:
+                        shell.showScores = true;
+                        // Open on the board with the most to say. Online when
+                        // there is one - it is the shared table and the one the
+                        // player is competing on - and LOCAL otherwise, which is
+                        // also the only one an offline player can reach.
+                        shell.scoresShowLocal = !(networked && net.isOpen());
+                        break;
                     // Same exit the window's close button takes; the loop
                     // condition already watches this flag. Native only - the flag
                     // is signal-handler state that does not exist under Emscripten,
@@ -1314,7 +1378,9 @@ int main(int argc, char** argv) {
                     case TitleAction::None: break;
                 }
                 if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
-                if (shell.showScores)   DrawLeaderboardModal(shell, screenWidth, scoresWasOpen);
+                if (shell.showScores)
+                    DrawLeaderboardModal(shell, screenWidth, scoresWasOpen,
+                                         networked && net.isOpen());
             EndDrawing();
 #if !defined(__EMSCRIPTEN__)
             if (g_quitRequested) break;
@@ -1444,7 +1510,13 @@ int main(int argc, char** argv) {
                     }
                     case LobbyAction::Options:     shell.showOptions  = true; break;
                     case LobbyAction::Controls:    shell.showControls = true; break;
-                    case LobbyAction::Leaderboard: shell.showScores   = true; break;
+                    case LobbyAction::Leaderboard:
+                        // Standing in a lobby means there IS a server, so this
+                        // one opens on the online board; the tab is still there
+                        // for a look at your offline best.
+                        shell.showScores = true;
+                        shell.scoresShowLocal = false;
+                        break;
                     case LobbyAction::Leave:
                         // The server puts us back in its default room and welcomes
                         // us there; joinPending stays false so that welcome cannot
@@ -1465,7 +1537,8 @@ int main(int argc, char** argv) {
                     && net.isOpen())
                     net.send(serializeOptions(onlineOpt));
                 if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
-                if (shell.showScores)   DrawLeaderboardModal(shell, screenWidth, scoresWasOpen);
+                if (shell.showScores)
+                    DrawLeaderboardModal(shell, screenWidth, scoresWasOpen, net.isOpen());
             EndDrawing();
             continue;
         }
@@ -1657,8 +1730,19 @@ int main(int argc, char** argv) {
                                 440 + scoreRow * 20, 20, scoreColor);
                 ++scoreRow;
             }
-            DrawCentered("Press any key to return to title.", 440 + scoreRow * 20 + 10, 20, pressKeyColor);
-            
+            // Local only: where that run landed on this machine's board. A
+            // high-score table nobody is shown at the moment they set a score is
+            // a table nobody knows exists - and this is the one moment it is
+            // interesting. Networked play has no equivalent line because the
+            // server owns that ranking and does not send a placement back.
+            int noticeY = 440 + scoreRow * 20 + 10;
+            if (!networked && localRunRank > 0) {
+                DrawCentered(TextFormat("LOCAL HIGH SCORE  #%d", localRunRank),
+                             noticeY, 20, {0, 255, 200, 255});   // platform color
+                noticeY += 30;
+            }
+            DrawCentered("Press any key to return to title.", noticeY, 20, pressKeyColor);
+
             EndDrawing();
             continue;
         }
@@ -2178,8 +2262,7 @@ int main(int argc, char** argv) {
             // other game input. Chosen key is far from the WASD cluster so it
             // can't be fat-fingered mid-flight.
             if (IsCursorHidden() && IsKeyPressed(KEY_M)) {
-                EnableCursor(); // free the cursor for the game-over menu
-                screen = GameScreen::GAME_OVER;
+                endLocalMatch();
             }
 
             int remaining_players = 0;
@@ -2191,10 +2274,7 @@ int main(int argc, char** argv) {
                 // specal case.  Solo player, no bots.  Game only end when player dies or all asteroids are gone.
                 if (remaining_asteroids <= 0 || !gameSpace.getPlayers()[0].isAlive) {
                     gameOverTimer -= dt;
-                    if (gameOverTimer <= 0.0f) {
-                        EnableCursor(); // free the cursor for the game-over menu
-                        screen = GameScreen::GAME_OVER;
-                    }
+                    if (gameOverTimer <= 0.0f) endLocalMatch();
                 }
             } else {
                 // main case.  Multiple players (bots and humans).  Game ends when only one player is left or all humans are dead.
@@ -2211,10 +2291,7 @@ int main(int argc, char** argv) {
                 // only a solo game (handled above) ends on clearing all asteroids.
                 if (remaining_players <= 1 || remaining_humans <= 0) {
                     gameOverTimer -= dt;
-                    if (gameOverTimer <= 0.0f) {
-                        EnableCursor(); // free the cursor for the game-over menu
-                        screen = GameScreen::GAME_OVER;
-                    }
+                    if (gameOverTimer <= 0.0f) endLocalMatch();
                 }
             }
         }
@@ -2233,6 +2310,10 @@ int main(int argc, char** argv) {
     // practice - a closed browser tab never reaches here, which is why the
     // autosave above exists.)
     profile::Save();
+    // A no-op in practice - endLocalMatch saves the moment a run is credited,
+    // because the web build never reaches this line at all. Cheap insurance for
+    // any future path that touches the board without going through there.
+    localscores::Save();
     for (audioFX& fx : fxTable) fx.unload();
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();
