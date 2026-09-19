@@ -264,6 +264,40 @@ at ten rooms.
 
 ---
 
+## Starting from a clean slate
+
+The client remembers your name, volume, the rules you last played with, an
+install id, the server-issued identity token, and the local high-score board —
+so the second launch never shows you what the first one does. To test defaults
+as a new player meets them:
+
+```bash
+scripts/reset-prefs.sh --list            # what's stored now; changes nothing
+scripts/reset-prefs.sh                   # back up and clear the lot
+scripts/reset-prefs.sh --keep-identity   # reset the RULES, keep who you are
+scripts/reset-prefs.sh --restore         # put the newest backup back
+```
+
+Two things worth knowing before you reach for it:
+
+**It refuses while a client is running**, and that guard is the point. The
+client samples its live values into the profile every frame and writes them at
+most every two seconds (`profile::Autosave`), plus once more on exit — so files
+cleared under a running game are rewritten from memory seconds later, and you
+end up testing the very preferences you thought you had just cleared.
+`--force` overrides it for a wedged process.
+
+**A full reset costs you your online leaderboard rows.** `profile.json` carries
+the D3 identity token, which is how the server knows a run was yours. Clear it
+and the rows stay on the board under an identity you no longer hold — you can't
+beat your own score, because the server no longer believes it was you. Use
+`--keep-identity` when you only want the rules back at their defaults. Nothing
+is ever deleted outright; every file is copied to a timestamped `.bak-` first.
+
+The **web** build keeps the same two blobs in `localStorage`, which no shell
+script can reach — the script prints the console one-liners. They're per origin
+and per browser, so clearing Chrome leaves Safari's copy alone.
+
 ## Testing without a GUI
 
 Everything below runs against a plain `./gameserver` and needs no client.

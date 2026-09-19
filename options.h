@@ -130,7 +130,7 @@ const bool WALLS_ENABLED = true; // if true, the boundary walls are drawn and ev
 // GameSpace::rocketsObeyPhysics). The per-rocket defaults it overrides,
 // ROCKET_GRAVITY_ENABLED and ROCKET_VELOCITY_INHERITANCE_ENABLED, stayed in
 // constants.h.
-const bool ROCKETS_OBEY_PHYSICS = false; // default OFF: rockets fly straight, no inherited velocity (current behavior)
+const bool ROCKETS_OBEY_PHYSICS = true; // default ON. OFF: rockets fly straight, no inherited velocity (current behavior)
 
 // friendlyFire. When OFF, a player takes no splash DAMAGE from their own blast
 // (self-knockback still applies, so rocket-jumping survives). Default ON keeps
