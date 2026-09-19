@@ -2303,12 +2303,29 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         // dropping someone into a stranger's public custom room hands their
         // experience to a host who chose the rules and may never press START.
         // Someone who wants that room can still pick it out of the browser.
+        //
+        // Ties break on the PRESET ORDER in options.h, which runs from typical
+        // gameplay to niche. On a quiet server every official room is equally
+        // empty, so the tie IS the common case - and without this the winner was
+        // whichever room List() happened to sort first, i.e. its randomly minted
+        // 4-character code. That made a stranger's first game a coin flip
+        // between the standard match and the one with no walls.
         std::string best;
-        int bestPlayers = -1;
+        int    bestPlayers = -1;
+        size_t bestRank    = matchOptionPresets.size();   // worse than any real preset
         for (const MatchListing& r : g_registry.List(/*includePrivate*/ false)) {
             if (r.kind != MatchKind::Official) continue;
             if (r.phase != Phase::LOBBY || !r.joinable) continue;
-            if (r.players > bestPlayers) { bestPlayers = r.players; best = r.code; }
+            const size_t rank = MatchPresetRank(r.presetName);
+            // Fuller wins outright; equally full falls back to the ramp. Strictly
+            // less-than on the rank so the first of two identical presets keeps
+            // it, which makes the choice stable rather than last-one-wins.
+            if (r.players > bestPlayers ||
+                (r.players == bestPlayers && rank < bestRank)) {
+                bestPlayers = r.players;
+                bestRank    = rank;
+                best        = r.code;
+            }
         }
         if (best.empty()) {
             // The resident official rooms are pinned, so reaching here means they
