@@ -37,7 +37,7 @@
 
 #include "../wire.h"      // serializeHello / serializeInput / serializeStart - the REAL encoders
 #include "../netbin.h"    // packet tags
-#include "../constants.h" // map presets, MATCH_MAX_CONCURRENT
+#include "../constants.h" // MATCH_MAX_CONCURRENT (map presets moved to options.h)
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>

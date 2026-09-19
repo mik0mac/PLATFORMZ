@@ -344,8 +344,8 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     DrawText("NUMBER OF PLAYERS", (int)lxL, y1, 18, RAYWHITE);
     valueAt(TextFormat("%d", (int)s.optNumPlayersF), lxL, y1);
     if (UiSlider({lxL, (float)(y1 + 26), colW, 22}, s.optNumPlayersF,
-             1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS,
-             s.sliderPlayersActive, 1.0f)) {
+             OPT_RANGE_NUM_PLAYERS.min, OPT_RANGE_NUM_PLAYERS.max,
+             s.sliderPlayersActive, OPT_RANGE_NUM_PLAYERS.step)) {
         opt.numPlayers = (int)s.optNumPlayersF; optChanged = true;
     }
 
@@ -353,44 +353,51 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     DrawText("BOT DIFFICULTY", (int)lxL, y2, 18, RAYWHITE);
     valueAt(TextFormat("%.2f", opt.botDifficulty), lxL, y2);
     if (UiSlider({lxL, (float)(y2 + 26), colW, 22}, opt.botDifficulty,
-             0.0f, BOT_DIFFICULTY, s.sliderDiffActive)) optChanged = true;
+             OPT_RANGE_BOT_DIFFICULTY.min, OPT_RANGE_BOT_DIFFICULTY.max,
+             s.sliderDiffActive, OPT_RANGE_BOT_DIFFICULTY.step)) optChanged = true;
 
     // WALL ELASTICITY (players only; asteroids keep their constant).
     DrawText("WALL ELASTICITY", (int)lxL, y3, 18, RAYWHITE);
     valueAt(TextFormat("%.2f", opt.wallElasticity), lxL, y3);
     if (UiSlider({lxL, (float)(y3 + 26), colW, 22}, opt.wallElasticity,
-             0.0f, 1.0f, s.sliderWElastActive)) optChanged = true;
+             OPT_RANGE_WALL_ELASTICITY.min, OPT_RANGE_WALL_ELASTICITY.max,
+             s.sliderWElastActive, OPT_RANGE_WALL_ELASTICITY.step)) optChanged = true;
 
     // PLATFORM ELASTICITY (players only; asteroids keep their constant).
     DrawText("PLATFORM ELASTICITY", (int)lxL, y4, 18, RAYWHITE);
     valueAt(TextFormat("%.2f", opt.platformElasticity), lxL, y4);
     if (UiSlider({lxL, (float)(y4 + 26), colW, 22}, opt.platformElasticity,
-             0.0f, 1.0f, s.sliderPElastActive)) optChanged = true;
+             OPT_RANGE_PLATFORM_ELASTICITY.min, OPT_RANGE_PLATFORM_ELASTICITY.max,
+             s.sliderPElastActive, OPT_RANGE_PLATFORM_ELASTICITY.step)) optChanged = true;
 
     // SPEED BOOST (walk + jetpack speed/accel, and rocket speed).
     DrawText("SPEED BOOST", (int)lxL, y5, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.speedBoost), lxL, y5);
     if (UiSlider({lxL, (float)(y5 + 26), colW, 22}, opt.speedBoost,
-             1.0f, 2.0f, s.sliderBoostActive)) optChanged = true;
+             OPT_RANGE_SPEED_BOOST.min, OPT_RANGE_SPEED_BOOST.max,
+             s.sliderBoostActive, OPT_RANGE_SPEED_BOOST.step)) optChanged = true;
 
     // --- Right column ---
     // ROCKET VELOCITY (on top of SPEED BOOST).
     DrawText("ROCKET VELOCITY", (int)lxR, y1, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.rocketSpeedScale), lxR, y1);
     if (UiSlider({lxR, (float)(y1 + 26), colW, 22}, opt.rocketSpeedScale,
-             1.0f, 2.0f, s.sliderRSpeedActive)) optChanged = true;
+             OPT_RANGE_ROCKET_SPEED.min, OPT_RANGE_ROCKET_SPEED.max,
+             s.sliderRSpeedActive, OPT_RANGE_ROCKET_SPEED.step)) optChanged = true;
 
     // JETPACK THRUST (on top of SPEED BOOST; jetpack only).
     DrawText("JETPACK THRUST", (int)lxR, y2, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.jetpackThrust), lxR, y2);
     if (UiSlider({lxR, (float)(y2 + 26), colW, 22}, opt.jetpackThrust,
-             1.0f, 2.0f, s.sliderJThrustActive)) optChanged = true;
+             OPT_RANGE_JETPACK_THRUST.min, OPT_RANGE_JETPACK_THRUST.max,
+             s.sliderJThrustActive, OPT_RANGE_JETPACK_THRUST.step)) optChanged = true;
 
     // FUEL CONSUMPTION (direct units/sec out of the 100-unit tank).
     DrawText("FUEL CONSUMPTION (%)", (int)lxR, y3, 18, RAYWHITE);
     valueAt(TextFormat("%d/sec", (int)s.optFuelBurnF), lxR, y3);
     if (UiSlider({lxR, (float)(y3 + 26), colW, 22}, s.optFuelBurnF,
-             0.0f, 100.0f, s.sliderFBurnActive, 1.0f)) {
+             OPT_RANGE_FUEL_CONSUMPTION.min, OPT_RANGE_FUEL_CONSUMPTION.max,
+             s.sliderFBurnActive, OPT_RANGE_FUEL_CONSUMPTION.step)) {
         opt.fuelConsumption = (int)s.optFuelBurnF; optChanged = true;
     }
 
@@ -398,7 +405,8 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     DrawText("FUEL REGEN (% of consmpt.)", (int)lxR, y4, 18, RAYWHITE);
     valueAt(TextFormat("%d/sec", (int)s.optFuelRegenF), lxR, y4);
     if (UiSlider({lxR, (float)(y4 + 26), colW, 22}, s.optFuelRegenF,
-             0.0f, 100.0f, s.sliderFRegenActive, 1.0f)) {
+             OPT_RANGE_FUEL_REGEN.min, OPT_RANGE_FUEL_REGEN.max,
+             s.sliderFRegenActive, OPT_RANGE_FUEL_REGEN.step)) {
         opt.fuelRegenPct = (int)s.optFuelRegenF; optChanged = true;
     }
 
@@ -407,11 +415,12 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     DrawText("EXPLOSION RADIUS", (int)lxR, y5, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.explosionRadiusScale), lxR, y5);
     if (UiSlider({lxR, (float)(y5 + 26), colW, 22}, opt.explosionRadiusScale,
-             1.0f, 4.0f, s.sliderXRadiusActive)) optChanged = true;
+             OPT_RANGE_EXPLOSION_RADIUS.min, OPT_RANGE_EXPLOSION_RADIUS.max,
+             s.sliderXRadiusActive, OPT_RANGE_EXPLOSION_RADIUS.step)) optChanged = true;
 
     // Toggles: three across, label on its own line, a compact ON/OFF
     // control below (labels are long, so keep them off the control's
-    // line). Each defaults to its constants.h value; applied at match
+    // line). Each defaults to its options.h value; applied at match
     // start. Sliders use an 85px rhythm; this row sits just below them.
     // Four explicit x positions (not the slider columns), spaced by
     // measured label width at font 18 - 157 / 134 / 115 / 220 px

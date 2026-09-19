@@ -398,19 +398,11 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
 // A profile is a file the player can edit, so treat every loaded value as
 // untrusted input and clamp it into the range the UI can actually represent.
 // Without this, a hand-typed "players": 400 would reach setPlayerCount().
-inline void SanitizeOptions(MatchOptions& m) {
-    if (mapSizePresets.find(m.mapSize) == mapSizePresets.end()) m.mapSize = MatchOptions{}.mapSize;
-    m.numPlayers          = (int)Clampf((float)m.numPlayers, 1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS);
-    m.botDifficulty       = Clampf(m.botDifficulty, 0.0f, BOT_DIFFICULTY);
-    m.wallElasticity      = Clampf(m.wallElasticity, 0.0f, 1.0f);
-    m.platformElasticity  = Clampf(m.platformElasticity, 0.0f, 1.0f);
-    m.speedBoost          = Clampf(m.speedBoost, 1.0f, 2.0f);
-    m.rocketSpeedScale    = Clampf(m.rocketSpeedScale, 1.0f, 2.0f);
-    m.explosionRadiusScale= Clampf(m.explosionRadiusScale, 1.0f, 4.0f);
-    m.jetpackThrust       = Clampf(m.jetpackThrust, 1.0f, 2.0f);
-    m.fuelConsumption     = (int)Clampf((float)m.fuelConsumption, 0.0f, 100.0f);
-    m.fuelRegenPct        = (int)Clampf((float)m.fuelRegenPct, 0.0f, 100.0f);
-}
+// Delegates to options.h, which owns the ranges because the OPTIONS sliders need
+// the same numbers. This used to restate all ten as literals, so widening a
+// slider without widening the clamp here silently reverted the player's setting
+// on their next launch - in a different file, one restart later.
+inline void SanitizeOptions(MatchOptions& m) { ClampOptions(m); }
 
 inline void Sanitize(Profile& p) {
     if (p.name.size() > PLAYER_NAME_MAX_CHARS) p.name.resize(PLAYER_NAME_MAX_CHARS);

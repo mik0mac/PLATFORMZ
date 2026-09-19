@@ -69,8 +69,19 @@ time.sleep(0.6)
 lst = a.matchlists[-1]
 check(lst.get("total", 0) == before, "a private room does NOT appear in the public list")
 
-print("quick match goes to an official room")
-offCode = official[0]["c"] if official else ""
+print("quick match goes to the FIRST official preset, not the lowest room code")
+# The tiebreak. Every official room is empty at boot, so this is decided entirely
+# by the preset ramp in options.h - typical gameplay first, niche last - and
+# DEFAULT is the front door.
+#
+# This used to assert on official[0], the first row of a listing SORTED BY CODE.
+# With one preset that was the same room by definition; with five it agreed only
+# when DEFAULT happened to draw the lowest of five random codes, so it was a
+# 1-in-5 flake that would have read as "quick match is broken".
+defaults = [r for r in official if r.get("pre") == "DEFAULT"]
+check(bool(defaults), f"an official DEFAULT room exists: {[r.get('pre') for r in official]}")
+offCode = defaults[0]["c"] if defaults else ""
+lowest  = min((r["c"] for r in official), default="")
 b = C("QUICKER")
 b.hello()
 time.sleep(1.0)
@@ -82,7 +93,13 @@ row = [r for r in a.matchlists[-1].get("m", []) if r.get("c") == offCode]
 # Not "some room got a player" - the resident OFFICIAL room specifically, while a
 # joinable public custom room ("PUBLIC ROOM") was also sitting there to be picked.
 check(bool(row) and row[0].get("p", 0) >= 1,
-      f"quick landed in the official room {offCode}: {row}")
+      f"quick landed in the official DEFAULT room {offCode}: {row}")
+# Worth saying out loud when the codes happen to line up, because on those runs
+# the check above would also pass under the OLD sort-by-code behaviour and so
+# proves nothing about the ramp.
+if offCode == lowest:
+    print(f"    (note: DEFAULT also drew the lowest code this run, {lowest} -"
+          f" the ramp is not distinguished from code order here)")
 b.alive = False
 b.send({"type": "goodbye"})
 time.sleep(0.3)

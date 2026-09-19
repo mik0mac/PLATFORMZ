@@ -12,6 +12,11 @@
 
 #include "random.h"
 #include "constants.h"
+// Match RULE defaults (WALL/PLATFORM_ELASTICITY_PLAYER, FUEL_*, COAST_MODE) -
+// the fields below that a match can retune are initialised from them. Must come
+// after raylib.h: options.h includes constants.h, which uses raylib's Color
+// without including raylib itself.
+#include "options.h"
 
 
 //MARK: Walls

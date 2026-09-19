@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdio>
 #include <set>
+#include <string>
 
 static int failures = 0;
 static void check(bool ok, const char* what) {
@@ -64,6 +65,53 @@ int main() {
         check(MapSizeName(m->pendingMap.load()) == p.options.mapSize, "...and round-trips by name");
         check(MatchPresetByName("NOPE").options.numPlayers == p.options.numPlayers,
               "unknown preset falls back to DEFAULT");
+    }
+
+    printf("every preset is dialable in the UI\n");
+    {
+        // The third consumer of the ranges in options.h, and the one that had NO
+        // check at all: a preset sets fields directly, bypassing both the OPTIONS
+        // sliders and the profile's clamp. So a preset could hold a value no
+        // player can select and nothing would say so - the only thing stopping it
+        // was a "// slider max is 4.0" comment written from memory.
+        //
+        // Also catches the reverse: narrow a range and any preset now outside it
+        // fails here rather than being silently clamped on someone's machine.
+        for (const auto& entry : matchOptionPresets) {
+            // Not a structured binding: capturing one in the lambda below is a
+            // C++20 extension and this builds as C++17.
+            const std::string&  name = entry.first;
+            const MatchOptions& o    = entry.second.options;
+            auto inRange = [&](const OptionRange& r, float v, const char* field) {
+                const std::string what = name + "." + field + " = " + std::to_string(v) +
+                                         " is within [" + std::to_string(r.min) + ", " +
+                                         std::to_string(r.max) + "]";
+                check(r.holds(v), what.c_str());
+            };
+            inRange(OPT_RANGE_NUM_PLAYERS,         (float)o.numPlayers,    "numPlayers");
+            inRange(OPT_RANGE_BOT_DIFFICULTY,      o.botDifficulty,        "botDifficulty");
+            inRange(OPT_RANGE_WALL_ELASTICITY,     o.wallElasticity,       "wallElasticity");
+            inRange(OPT_RANGE_PLATFORM_ELASTICITY, o.platformElasticity,   "platformElasticity");
+            inRange(OPT_RANGE_SPEED_BOOST,         o.speedBoost,           "speedBoost");
+            inRange(OPT_RANGE_ROCKET_SPEED,        o.rocketSpeedScale,     "rocketSpeedScale");
+            inRange(OPT_RANGE_EXPLOSION_RADIUS,    o.explosionRadiusScale, "explosionRadiusScale");
+            inRange(OPT_RANGE_JETPACK_THRUST,      o.jetpackThrust,        "jetpackThrust");
+            inRange(OPT_RANGE_FUEL_CONSUMPTION,    (float)o.fuelConsumption, "fuelConsumption");
+            inRange(OPT_RANGE_FUEL_REGEN,          (float)o.fuelRegenPct,  "fuelRegenPct");
+            // A preset's arena has to be a real one - MapSizeIndex would quietly
+            // substitute MEDIUM for a typo, so the room would run, on the wrong map.
+            const std::string arena = name + ".mapSize \"" + o.mapSize + "\" is a real arena";
+            check(mapSizePresets.find(o.mapSize) != mapSizePresets.end(), arena.c_str());
+        }
+
+        // And the defaults themselves, which are what an untouched modal shows.
+        MatchOptions d;
+        MatchOptions clamped = d;
+        ClampOptions(clamped);
+        check(clamped.numPlayers == d.numPlayers && clamped.botDifficulty == d.botDifficulty &&
+              clamped.speedBoost == d.speedBoost && clamped.fuelConsumption == d.fuelConsumption &&
+              clamped.fuelRegenPct == d.fuelRegenPct && clamped.mapSize == d.mapSize,
+              "MatchOptions{} is already in range - clamping it changes nothing");
     }
 
     // The point of #107: governance comes from KIND, and visibility is a
