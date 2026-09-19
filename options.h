@@ -130,7 +130,7 @@ const bool WALLS_ENABLED = true; // if true, the boundary walls are drawn and ev
 // GameSpace::rocketsObeyPhysics). The per-rocket defaults it overrides,
 // ROCKET_GRAVITY_ENABLED and ROCKET_VELOCITY_INHERITANCE_ENABLED, stayed in
 // constants.h.
-const bool ROCKETS_OBEY_PHYSICS = true; // default ON. OFF: rockets fly straight, no inherited velocity (current behavior)
+const bool ROCKETS_OBEY_PHYSICS = true; // default ON. OFF = rockets fly straight, no inherited velocity.
 
 // friendlyFire. When OFF, a player takes no splash DAMAGE from their own blast
 // (self-knockback still applies, so rocket-jumping survives). Default ON keeps
@@ -165,7 +165,7 @@ struct MatchOptions {
     // stack on top of it for their domains.
     float speedBoost           = 1.0f; // 1..2: walk/jetpack speed+accel, rocket speed
     float rocketSpeedScale     = 1.0f; // 1..2, on top of speedBoost (rockets only)
-    float explosionRadiusScale = 1.0f; // 1..4: damage radius + blast visual
+    float explosionRadiusScale = 2.0f; // 1..4: damage radius + blast visual
     float jetpackThrust        = 1.0f; // 1..2, on top of speedBoost (jetpack only)
 
     // Fuel: consumption is a direct rate (units/sec out of the 100-unit tank,
