@@ -32,7 +32,7 @@
 #include "../collisions.h"
 #include "../input.h"           // PlayerInput
 #include "../bot_controller.h"
-#include "../options.h"         // MatchOptions defaults via constants.h
+#include "../options.h"         // MatchOptions + its rule defaults + mapSizeOrder
 #include "perf.h"               // A4 tick/egress instrumentation
 
 #include <boost/asio/ip/udp.hpp>
@@ -215,7 +215,7 @@ struct Match {
     // Written by the io thread when a "start"/"options" arrives, read by the sim
     // thread when it consumes startRequested (the flag is the synchronization
     // point).
-    // The chosen arena, as an index into mapSizeOrder (constants.h). One value
+    // The chosen arena, as an index into mapSizeOrder (options.h). One value
     // instead of the three loose numbers it used to be: half-size, platform count
     // and asteroid count are all derivable from it at start, and keeping them
     // separate meant they could disagree with each other and with what the lobby

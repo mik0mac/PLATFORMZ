@@ -411,7 +411,7 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
 
     // Toggles: three across, label on its own line, a compact ON/OFF
     // control below (labels are long, so keep them off the control's
-    // line). Each defaults to its constants.h value; applied at match
+    // line). Each defaults to its options.h value; applied at match
     // start. Sliders use an 85px rhythm; this row sits just below them.
     // Four explicit x positions (not the slider columns), spaced by
     // measured label width at font 18 - 157 / 134 / 115 / 220 px

@@ -1,8 +1,9 @@
 #pragma once
 
-#include <unordered_map> // mapSizePresets
-#include <string>        // mapSizePresets key
+#include <string>        // SCOREBOARD_FILEPATH
 #include <vector>        // HUMAN_PLAYER_COLORS
+// <unordered_map> is gone with mapSizePresets, its only user here - it lives in
+// options.h now (see the "Moved to options.h" note below).
 
 //MARK: Audio events (shared client+server wire contract)
 // Small-int ids so the headless server can tag/serialize events without any
@@ -93,60 +94,36 @@ const float EARTH_GRAVITY = 9.81f * GRAVITY_SCALE; // earth gravity, m/s^2 * 2
 const bool ORIGIN_GRAVITY = false; // if true {0, 0, 0} is a gravity attractor.
 
 //MARK: GameSpace Constants
-// These are only class defaults - each match overrides them with a mapSizePreset (below), applied in main.cpp's startGame.
+// These are only class defaults - each match overrides them with a mapSizePreset (options.h), applied in main.cpp's startGame.
 const float GAMESPACE_HALF_SIZE = 60.0f; // half-size of the game space cube, units.  Also used by Walls.
 const float GAMESPACE_OUT_OF_BOUNDS_FACTOR = 1.5f; // factor by which the game space is considered out of bounds
 const float OUT_OF_BOUNDS_TIMER = 10.0f; // seconds before a player is considered out of bounds and eliminated
 const int GAMESPACE_NUMBER_OF_PLATFORMS = 36; // Number of platforms in the game space
 const int GAMESPACE_NUMBER_OF_ASTEROIDS = 18; // Number of asteroids in the game space
 const int GAMESPACE_NUMBER_OF_PLAYERS = 8; // Max player slots (index 0 is the local human; 1+ are bot-filled). Also the OPTIONS slider max, the server's roster cap, and the lobby slot count (so a full house can join). Sized against the UDP state-packet budget - see nb::MaxAsteroidsForRoster (netbin.h); at 8 players the budget is ~35 asteroids, so XL's 36 is clamped by one. (It was ~42 until #100 raised ACTION_HEADROOM to something the measured 8-player action volume justifies.)
-const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the OPTIONS slider and the server's pending config start at; the host can raise it up to the max above.
 
-struct mapSizePreset {
-    float halfSize;
-    int numPlatforms;
-    int numAsteroids;
-};
-
-// inline: one definition shared across all TUs (constants.h is included by
-// main.cpp, collisions.cpp, ...). Can't be const - main.cpp uses operator[].
-inline std::unordered_map<std::string, mapSizePreset> mapSizePresets = {
-    {"SMALL",  {90.0f, 64, 12}},
-    {"MEDIUM", {120.0f, 128, 18}},
-    {"LARGE",  {240.0f, 256, 24}},
-    // XL: 27x LARGE volume; benched 2026-07 on Mike's Mac at p95 ~8ms with bots
-    // and rocket fire (framerate was never the binding limit - even 480/1024
-    // passed). Platforms scale with AREA, not volume (they're a traversal
-    // surface; volume-scaling would blow the render batch). Asteroid counts
-    // here are the LOCAL-play numbers; a networked start clamps them to the
-    // UDP state-packet budget for the roster size (nb::MaxAsteroidsForRoster,
-    // netbin.h) so a full tick fits one unfragmented datagram.
-    {"XL",     {360.0f, 576, 36}}
-};
-
-// WIRE ORDER for the presets above. mapSizePresets is an unordered_map and so
-// has no stable iteration order, but a map choice crosses the wire as an INDEX
-// into this list - two bits inside the options flags byte, which is why adding
-// it cost no protocol version bump.
+//MARK: Moved to options.h
+// The values that define WHAT A MATCH IS now live in options.h, beside the
+// `MatchOptions` struct whose fields they default and the `matchOptionPresets`
+// table that varies them - so one file answers "what rules does a match have,
+// what are they by default, and which presets change them".
 //
-// APPEND ONLY. Reordering silently reinterprets every connected client's choice,
-// and a fifth entry needs a third bit (the flags byte has 64 and 128 free).
-inline const char* const mapSizeOrder[] = { "SMALL", "MEDIUM", "LARGE", "XL" };
-inline constexpr int MAP_SIZE_COUNT = 4;
-inline constexpr int MAP_SIZE_BITS  = 2;   // enough for MAP_SIZE_COUNT
-static_assert(MAP_SIZE_COUNT <= (1 << MAP_SIZE_BITS),
-              "the map index no longer fits the bits reserved in the options flags byte");
+// Moved from here:
+//   the map-size cluster  mapSizePreset, mapSizePresets, mapSizeOrder,
+//                         MAP_SIZE_COUNT, MAP_SIZE_BITS, MapSizeIndex, MapSizeName
+//   the rule defaults     GAMESPACE_DEFAULT_PLAYERS, BOT_DIFFICULTY_DEFAULT,
+//                         WALL_ELASTICITY_PLAYER, PLATFORM_ELASTICITY_PLAYER,
+//                         FUEL_CONSUMPTION_RATE, FUEL_REGEN_PCT_DEFAULT,
+//                         WALLS_ENABLED, ROCKETS_OBEY_PHYSICS, FRIENDLY_FIRE,
+//                         COAST_MODE
+//
+// What stayed, and why: anything a match CANNOT retune. GAMESPACE_NUMBER_OF_PLAYERS
+// is a capacity (an array size and a static_assert in server/match.h), BOT_DIFFICULTY
+// is the slider's cap rather than its default, and GAMESPACE_HALF_SIZE is geometry.
+//
+// The dependency runs options.h -> constants.h and NEVER back, so a default that
+// has to be readable from inside this file cannot move there.
 
-// Unknown names fall back to MEDIUM rather than failing: a bad map should give a
-// playable match, never a refused start.
-inline int MapSizeIndex(const std::string& name) {
-    for (int i = 0; i < MAP_SIZE_COUNT; ++i)
-        if (name == mapSizeOrder[i]) return i;
-    return 1; // MEDIUM
-}
-inline const char* MapSizeName(int index) {
-    return (index >= 0 && index < MAP_SIZE_COUNT) ? mapSizeOrder[index] : mapSizeOrder[1];
-}
 // After a match ends the server keeps simulating so networked play matches local,
 // where the sim runs every frame of the client's death-FX countdown. That only
 // needs to outlast GAME_OVER_TIMER; past these thresholds nobody is watching, and
@@ -215,15 +192,14 @@ const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdo
 const float MID_MATCH_LEAVE_GRACE_SEC = 15.0f; // seconds a mid-match leaver's body stays open for a reconnect before being eliminated (see Player::leaveGraceSec)
 
 //MARK: Wall Constants
-const float WALL_ELASTICITY_PLAYER = 0.5f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
-const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity)
+const float WALL_ELASTICITY_ASTEROID = 0.95f; // hit velocity is reflected and scaled by this (velocity = -velocity * elasticity). The PLAYER one is a match rule (options.h); asteroids keep their bounce whatever the match is set to.
 const int WALL_DAMAGE = 0; // damage dealt to the player on wall impact
 const float WALL_GRID_REF_HALF_SIZE = 60.0f; // grid spacing scales as halfSize / this (min Walls::gridSpacing), capping the wall-grid line count on big maps
-const bool WALLS_ENABLED = true; // if true, the boundary walls are drawn and everything collides with them (rockets detonate). If false, nothing collides: rockets fade out past the boundary and players are subject to the out-of-bounds elimination rules.
+// WALLS_ENABLED is a match rule (options.h). WALL_ELASTICITY_PLAYER moved there
+// too; the ASTEROID elasticity above is compile-time only and stays.
 
 //MARK: Platform Constants
-const float PLATFORM_ELASTICITY_PLAYER = 0.33f; // For bouncy platforms, 0.0 - 1.0, determines how much the player bounces (velocity = -velocity * elasticity)
-const float PLATFORM_ELASTICITY_ASTEROID = 0.99f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity)
+const float PLATFORM_ELASTICITY_ASTEROID = 0.99f; // For bouncy platforms, 0.0 - 1.0, determines how much the asteroid bounces (velocity = -velocity * elasticity). The PLAYER one is a match rule (options.h).
 
 const float PLATFORM_MIN_WIDTH = 12.0f; //GAMESPACE_HALF_SIZE / 12.0f; // 5.0f; // Minimum width of the platform
 const float PLATFORM_MAX_WIDTH = 24.0f; //GAMESPACE_HALF_SIZE / 3.0f; // 20.0f; // Maximum width of the platform
@@ -289,13 +265,8 @@ const float PLAYER_ACCELERATION_WALK = 30.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 45.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 45.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
-// THRUST sliders (MatchOptions in options.h) multiply them per match.
-// Default for the OPTIONS COAST MODE toggle. ON = frictionless: releasing the
-// keys coasts instead of easing to a stop, and momentum is never braked away
-// just because the speed cap dropped (jetpack released, tank empty). Thrust can
-// still redirect that momentum, it just can't grow it past the cap. See the two
-// branches in Player::updateVelocity.
-const bool COAST_MODE = true;
+// THRUST sliders (MatchOptions in options.h) multiply them per match. The
+// COAST MODE toggle that decides how they decay is a rule and lives there too.
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -305,12 +276,8 @@ const int PLAYER_STARTING_HEALTH = PLAYER_MAX_HEALTH;
 const float PLAYER_MAX_FUEL = 100.0f;
 const float PLAYER_STARTING_FUEL = PLAYER_MAX_FUEL;
 
-// Fuel rates are OPTIONS sliders now (MatchOptions in options.h): FUEL
-// CONSUMPTION is a direct units/sec value (tank is 100, so it reads as %/sec)
-// defaulting to the rate below; FUEL REGEN is a percentage of the consumption
-// rate, so the 40% default recreates the old 2/sec regen (40% of 5).
-const float FUEL_CONSUMPTION_RATE = 5.0f; // Per sec; default for the OPTIONS slider.
-const int FUEL_REGEN_PCT_DEFAULT = 40; // Regen as % of consumption; default for the OPTIONS slider.
+// Fuel rates are OPTIONS sliders, so both their defaults - FUEL_CONSUMPTION_RATE
+// and FUEL_REGEN_PCT_DEFAULT - are match rules and live in options.h.
 const float JETPACK_MIN_FUEL = 0.1f; // Min fuel to produce jetpack thrust; below this the tank reads empty.
 const float NO_FUEL_SFX_INTERVAL = 1.0f; // Min seconds between "empty tank" cues while jetpack is held on empty.
 
@@ -347,7 +314,8 @@ const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target hea
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
 // with bot count (so a lone bot ~= difficulty, a crowd is varied).
 const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; also the BOT DIFFICULTY slider MAX / hard cap
-const float BOT_DIFFICULTY_DEFAULT = 0.2f; // OPTIONS starting value for BOT DIFFICULTY (client + server defaults)
+// The slider's STARTING value, BOT_DIFFICULTY_DEFAULT, is a match rule and lives
+// in options.h; this one is the cap and stays.
 const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
 const float BOT_MAX_AIM_SPREAD = 0.50f;    // radians of aim error at accuracy=0 (0 at accuracy=1) 0.5 = ~28.6 degrees 0.3 = ~17.2 degrees
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
@@ -406,12 +374,8 @@ const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a sma
 
 const float ROCKET_SPEED = 180.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.03f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
-const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS).
-const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS.
-// OPTIONS "ROCKETS OBEY PHYSICS": one match-wide toggle that drives BOTH rocket
-// gravity and shooter-velocity inheritance (input.h sets each fired rocket's
-// gravityEnabled/velocityInheritance from GameSpace::rocketsObeyPhysics).
-const bool ROCKETS_OBEY_PHYSICS = false; // default OFF: rockets fly straight, no inherited velocity (current behavior)
+const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS, options.h).
+const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS (options.h).
 const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
 const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
@@ -421,10 +385,8 @@ const float EXPLOSION_DAMAGE_RADIUS = 25.0f; // units
 const float EXPLOSION_MAX_RADIUS = EXPLOSION_DAMAGE_RADIUS * 1.0f; // units, visual radius of the explosion effect
 const float EXPLOSION_EXPANSION_RATE = 15.0f; // How quickly the explosion expands, in units/sec
 const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as pushback force
-// OPTIONS "FRIENDLY FIRE": when OFF, a player takes no splash DAMAGE from their own
-// blast (self-knockback still applies, so rocket-jumping survives). Default ON keeps
-// the current behavior. Consumed in ApplyExplosionSplashDamage (collisions.cpp).
-const bool FRIENDLY_FIRE = true; // default ON: your own rocket can damage you (current behavior)
+// FRIENDLY_FIRE is a match rule and lives in options.h; it is consumed here in
+// ApplyExplosionSplashDamage (collisions.cpp) via GameSpace::friendlyFire.
 
 // Shared client+server wire contract: the binary state packet quantizes
 // explosion `radius` into a single byte (nb::putQFrac/qFrac, netbin.h). This

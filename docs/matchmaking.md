@@ -30,8 +30,15 @@ both transports.
 | **kind** | `official` \| `custom` | the server (only it mints official) | **how it is governed** |
 | **visibility** | public \| private | whoever created it | whether it appears in `list` |
 | **phase** | `lobby` \| `countdown` \| `playing` \| `gameover` | the match | what it is doing right now |
-| **preset** | `DEFAULT`, … | at creation | the rule set it started from |
+| **preset** | `DEFAULT`, `CHAOS`, `SKIRMISH`, `ENDURANCE`, `VOID` | at creation | the rule set it started from |
 | **map** | `SMALL` \| `MEDIUM` \| `LARGE` \| `XL` | its options | which arena |
+
+**Presets** live in `options.h` as an ORDERED list, and the order is behaviour,
+not style: it runs from typical gameplay to niche, and quick match walks it to
+break ties (below). One pinned official room is created per entry at boot. The
+name crosses the wire as a *string*, never an index, so adding one is a server
+rebuild and nothing else — an old client naming a preset that no longer exists
+gets `DEFAULT` rather than a failed join.
 
 **Kind and visibility are different questions,** and conflating them was a real
 bug (#107). *Kind* says who is in charge: an **official** room has its options
@@ -126,12 +133,21 @@ take the server's default.
 | `list` | `cur` | one page of the directory, from that cursor |
 | `create` | `n`, `pre`, `priv`, `code` | make a room and enter it |
 | `join` | `m`, `code`? | enter a room by code |
-| `quick` | — | fullest joinable official lobby, or a new one |
+| `quick` | — | fullest joinable official lobby, ties broken by preset order; or a new one |
 | `leave` | — | back to the default room |
 | `start` | the options bundle | host only; locked rooms ignore it |
 | `options` | the options bundle | host only; echoed live to everyone |
 | `endmatch` | — | host only |
 | *(input)* | `seq`, `ep`, `mx`, `mz`, `jp`, `grav`, `fire`, `yaw`, `pitch` | **no `type`** — the 60 Hz packet, kept small |
+
+**`quick` picks the fullest room first**, so players pack together instead of
+scattering one each across empty lobbies. On a quiet server every official room
+is equally empty, so the tie is the common case — and it breaks on the preset
+order in `options.h`, which is why that list runs typical-first. Without it the
+winner was whichever room sorted first by its randomly minted code, making a
+stranger's first game a coin flip between the standard match and the one with no
+walls. Official rooms only: dropping someone into a stranger's public custom room
+hands their experience to a host who may never press START.
 
 The **options bundle** (`writeOptionKeys` in `wire.h`) is the same set of keys on
 `start` and `options`: `nplayers`, `diff`, `welast`, `pelast`, `boost`, `rspeed`,

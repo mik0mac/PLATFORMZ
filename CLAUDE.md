@@ -59,7 +59,7 @@ only `main.cpp` and `collisions.cpp` as translation units.
   renders; accessors return the vectors **by reference** for collision/systems
   to mutate. Boundary cube is centered on origin; default `halfSize = 60`
   (`GAMESPACE_HALF_SIZE`), overridden per match by the SMALL/MEDIUM/LARGE/XL
-  `mapSizePresets` in `constants.h` (halfSize 90/120/240/360).
+  `mapSizePresets` in `options.h` (halfSize 90/120/240/360).
 - `shapes.h` — all rendering. Low-level primitives (`DrawShadedWireBox`,
   `DrawShadedSphere`, `DrawGridRoom`) and one
   `Draw<Type>(const T&)` per element. No game state is mutated here.
@@ -91,6 +91,21 @@ only `main.cpp` and `collisions.cpp` as translation units.
   save would never happen there. `ReadRawFrom`/`WriteRawTo` take the filename and
   the `localStorage` key, so a second store reuses the atomic replace and the
   caught-exception web path instead of copying them. Tests: `test/run.sh`.
+- `options.h` — everything that defines **what a match is**: the arenas
+  (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (the 15
+  player-selectable rules the OPTIONS modal drives), **the compile-time default
+  of every one of those rules**, and `matchOptionPresets` — the named variants,
+  ordered typical-gameplay-first because quick match walks that order to break
+  ties between equally empty rooms. The rule defaults used to be scattered across
+  seven sections of `constants.h`. **Do not add repo `#include`s here**:
+  `elements.h` includes this file, so anything added lands in the lowest layer of
+  the game; `constants.h` is the only one allowed, and the dependency never runs
+  back the other way.
+- `constants.h` — everything a match **cannot** retune: geometry, capacities
+  (`GAMESPACE_NUMBER_OF_PLAYERS` sizes a `std::array` and a `static_assert`),
+  audio ids, VFX, bot AI tuning, match lifecycle and network limits. Where a pair
+  got split — `WALL_ELASTICITY_PLAYER` is a rule, `..._ASTEROID` is not — the one
+  that stayed carries a pointer comment.
 - `runboard.h` — what an arcade high-score board **is**, with no opinion about
   where it is stored: `RunRow`, the `'-'` bot-id convention, and the rules
   (`TrimRuns` caps each identity at 3 rows and all bots at 1 between them;
@@ -168,7 +183,8 @@ tests, and CI runs both on every push.
   `rlDisableDepthMask` → draw fill → flush → `rlEnableDepthMask`). Wireframes
   keep writing depth.
 - **Player is authoritative; the camera derives from it**, never the reverse.
-- **Units:** 1 unit = 1 meter. Gravity constants live in `constants.h`
+- **Units:** 1 unit = 1 meter. Gravity constants live in `constants.h` (match
+  RULES and their defaults live in `options.h` — see above)
   (`MOON_GRAVITY = 3.25`, `EARTH_GRAVITY = 19.61` — tuned up from the real
   1.62/9.81 for game feel); hold Left Shift for earth gravity. Gravity is
   applied once, in `Player::updateVelocity`.
