@@ -180,6 +180,71 @@ struct MatchOptions {
     bool coastMode          = COAST_MODE;
 };
 
+//MARK: Legal ranges - ONE definition, three consumers
+// What counts as a legal value for each rule. Three places need to agree on
+// this, and until now all three hand-kept their own copy of the numbers:
+//
+//   1. the OPTIONS modal's sliders          (screens.h)
+//   2. the profile's sanitiser              (profile::SanitizeOptions)
+//   3. the preset values above, which set fields directly and bypass both
+//
+// Nothing linked them. Widen a slider's max and forget the clamp, and the new
+// range works all session, gets written to profile.json, and is silently dragged
+// back on the NEXT launch - which reads as "the game forgot my settings" rather
+// than as the edit it actually was. Widen the clamp and forget the slider, and
+// the extra range is simply unreachable. Neither produces a compile error, and
+// the two files are far enough apart that nobody reads them together.
+//
+// So the ranges live here, beside the struct they constrain and the defaults
+// they must contain, and the other two read them.
+struct OptionRange {
+    float min;
+    float max;
+    // 0 = continuous. The three sliders backed by ints snap to 1 so the readout
+    // can't show a value the field cannot hold; UiSlider takes this directly.
+    float step;
+
+    float clampf(float v) const { return v < min ? min : (v > max ? max : v); }
+    int   clampi(int v)   const { return (int)clampf((float)v); }
+    // Used by the tests to prove every preset is dialable in the UI.
+    bool  holds(float v)  const { return v >= min && v <= max; }
+};
+
+// In MatchOptions field order, same as the defaults above. mapSize has no range
+// - it is a name, validated against mapSizePresets instead (see ClampOptions).
+const OptionRange OPT_RANGE_NUM_PLAYERS         = { 1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS, 1.0f };
+const OptionRange OPT_RANGE_BOT_DIFFICULTY      = { 0.0f, BOT_DIFFICULTY, 0.0f };
+const OptionRange OPT_RANGE_WALL_ELASTICITY     = { 0.0f, 1.0f,   0.0f };
+const OptionRange OPT_RANGE_PLATFORM_ELASTICITY = { 0.0f, 1.0f,   0.0f };
+const OptionRange OPT_RANGE_SPEED_BOOST         = { 1.0f, 2.0f,   0.0f };
+const OptionRange OPT_RANGE_ROCKET_SPEED        = { 1.0f, 2.0f,   0.0f };
+const OptionRange OPT_RANGE_EXPLOSION_RADIUS    = { 1.0f, 4.0f,   0.0f };
+const OptionRange OPT_RANGE_JETPACK_THRUST      = { 1.0f, 2.0f,   0.0f };
+const OptionRange OPT_RANGE_FUEL_CONSUMPTION    = { 0.0f, 100.0f, 1.0f };
+const OptionRange OPT_RANGE_FUEL_REGEN          = { 0.0f, 100.0f, 1.0f };
+
+// Force every rule into its legal range. Lives here rather than in profile.h
+// because the ranges do: a profile is only one of the things that can carry an
+// out-of-range value (a hand-edited file, an older build's bundle, a future
+// preset). profile::SanitizeOptions delegates to this.
+//
+// The bools are deliberately absent - a bool has no invalid value.
+inline void ClampOptions(MatchOptions& m) {
+    // Not a range: an arena is named, so the test is membership. An unknown name
+    // falls back to the default rather than failing, same rule as MapSizeIndex.
+    if (mapSizePresets.find(m.mapSize) == mapSizePresets.end()) m.mapSize = MatchOptions{}.mapSize;
+    m.numPlayers           = OPT_RANGE_NUM_PLAYERS.clampi(m.numPlayers);
+    m.botDifficulty        = OPT_RANGE_BOT_DIFFICULTY.clampf(m.botDifficulty);
+    m.wallElasticity       = OPT_RANGE_WALL_ELASTICITY.clampf(m.wallElasticity);
+    m.platformElasticity   = OPT_RANGE_PLATFORM_ELASTICITY.clampf(m.platformElasticity);
+    m.speedBoost           = OPT_RANGE_SPEED_BOOST.clampf(m.speedBoost);
+    m.rocketSpeedScale     = OPT_RANGE_ROCKET_SPEED.clampf(m.rocketSpeedScale);
+    m.explosionRadiusScale = OPT_RANGE_EXPLOSION_RADIUS.clampf(m.explosionRadiusScale);
+    m.jetpackThrust        = OPT_RANGE_JETPACK_THRUST.clampf(m.jetpackThrust);
+    m.fuelConsumption      = OPT_RANGE_FUEL_CONSUMPTION.clampi(m.fuelConsumption);
+    m.fuelRegenPct         = OPT_RANGE_FUEL_REGEN.clampi(m.fuelRegenPct);
+}
+
 //MARK: Match kind
 // How a room is GOVERNED: who may change its rules, and who starts it.
 //

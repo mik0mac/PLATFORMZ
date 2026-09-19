@@ -94,7 +94,10 @@ only `main.cpp` and `collisions.cpp` as translation units.
 - `options.h` — everything that defines **what a match is**: the arenas
   (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (the 15
   player-selectable rules the OPTIONS modal drives), **the compile-time default
-  of every one of those rules**, and `matchOptionPresets` — the named variants,
+  of every one of those rules**, their **legal ranges** (`OPT_RANGE_*` +
+  `ClampOptions` — read by the OPTIONS sliders, by `profile::SanitizeOptions`,
+  and asserted against every preset in `registry_test.cpp`, so a range and a
+  clamp can no longer disagree), and `matchOptionPresets` — the named variants,
   ordered typical-gameplay-first because quick match walks that order to break
   ties between equally empty rooms. The rule defaults used to be scattered across
   seven sections of `constants.h`. **Do not add repo `#include`s here**:
