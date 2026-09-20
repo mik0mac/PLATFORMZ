@@ -92,15 +92,24 @@ only `main.cpp` and `collisions.cpp` as translation units.
   the `localStorage` key, so a second store reuses the atomic replace and the
   caught-exception web path instead of copying them. Tests: `test/run.sh`.
 - `options.h` — everything that defines **what a match is**: the arenas
-  (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (the 15
-  player-selectable rules the OPTIONS modal drives), **the compile-time default
+  (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (17 rules,
+  the 15 with sliders being what the OPTIONS modal drives), **the compile-time default
   of every one of those rules**, their **legal ranges** (`OPT_RANGE_*` +
   `ClampOptions` — read by the OPTIONS sliders, by `profile::SanitizeOptions`,
   and asserted against every preset in `registry_test.cpp`, so a range and a
   clamp can no longer disagree), and `matchOptionPresets` — the named variants,
   ordered typical-gameplay-first because quick match walks that order to break
   ties between equally empty rooms. The rule defaults used to be scattered across
-  seven sections of `constants.h`. **Do not add repo `#include`s here**:
+  seven sections of `constants.h`.
+  Two of the 17 rules have **no slider** — they are authored by a preset rather
+  than dialed by a player, so they are absent from the OPTIONS modal while living
+  in `MatchOptions` like everything else: `maxBots` caps how many unclaimed roster
+  slots get bot-filled (the rest stay genuinely **empty** — no body, not
+  shootable, not counted for last-man-standing, and still joinable, so human
+  capacity is unchanged), and `minHumansToStart` is the head count an official
+  room's auto-start arms on. Both default to the old behaviour. LOCAL play
+  deliberately ignores `maxBots` and fills every slot — an empty slot exists so a
+  human can join it, and offline nobody can. **Do not add repo `#include`s here**:
   `elements.h` includes this file, so anything added lands in the lowest layer of
   the game; `constants.h` is the only one allowed, and the dependency never runs
   back the other way.
@@ -108,7 +117,8 @@ only `main.cpp` and `collisions.cpp` as translation units.
   (`GAMESPACE_NUMBER_OF_PLAYERS` sizes a `std::array` and a `static_assert`),
   audio ids, VFX, bot AI tuning, match lifecycle and network limits. Where a pair
   got split — `WALL_ELASTICITY_PLAYER` is a rule, `..._ASTEROID` is not — the one
-  that stayed carries a pointer comment.
+  that stayed carries a pointer comment. `PUBLIC_MIN_PLAYERS` is a third shape:
+  still here, but now only the **default** for `MatchOptions::minHumansToStart`.
 - `runboard.h` — what an arcade high-score board **is**, with no opinion about
   where it is stored: `RunRow`, the `'-'` bot-id convention, and the rules
   (`TrimRuns` caps each identity at 3 rows and all bots at 1 between them;

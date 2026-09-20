@@ -646,6 +646,12 @@ int main(int argc, char** argv) {
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
         ps[0].name = myDisplayName();
+        // LOCAL deliberately ignores maxBots and fills every slot. An empty slot
+        // exists so a human can walk into it later, and offline nobody ever can -
+        // one here would just be a hole in the match. At the default it is the
+        // same thing anyway (MAX_BOTS_DEFAULT is one short of the roster ceiling,
+        // so numPlayers - 1 bots is always within it); the two only diverge for a
+        // hand-edited profile.json.
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
@@ -934,6 +940,12 @@ int main(int argc, char** argv) {
                     // latch so a control we're actively dragging isn't stomped.
                     if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
                     if (!shell.sliderDiffActive)    onlineOpt.botDifficulty      = m.opt.botDifficulty;
+                    // No sliders for these two, so nothing to guard against: take
+                    // the server's value every tick. They still have to round-trip
+                    // - the host's next START sends the whole bundle back, and
+                    // dropping them here would silently reset the room's preset.
+                    onlineOpt.maxBots          = m.opt.maxBots;
+                    onlineOpt.minHumansToStart = m.opt.minHumansToStart;
                     if (!shell.sliderWElastActive)  onlineOpt.wallElasticity     = m.opt.wallElasticity;
                     if (!shell.sliderPElastActive)  onlineOpt.platformElasticity = m.opt.platformElasticity;
                     if (!shell.sliderBoostActive)   onlineOpt.speedBoost         = m.opt.speedBoost;

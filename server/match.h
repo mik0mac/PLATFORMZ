@@ -223,6 +223,12 @@ struct Match {
     std::atomic<int>   pendingMap{MapSizeIndex(MatchOptions{}.mapSize)};
     std::atomic<int>   pendingPlayers{GAMESPACE_DEFAULT_PLAYERS};
     std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
+    // The two rules with no OPTIONS slider. Still pendings, because they still
+    // arrive in the host's options bundle like everything else here - they are
+    // just authored by a preset rather than dialed. refreshBotSlots reads the
+    // first every tick, ServiceAutoStart the second.
+    std::atomic<int>   pendingMaxBots{MAX_BOTS_DEFAULT};
+    std::atomic<int>   pendingMinHumans{PUBLIC_MIN_PLAYERS};
     std::atomic<float> pendingWallElast{WALL_ELASTICITY_PLAYER};     // OPTIONS WALL ELASTICITY (players only)
     std::atomic<float> pendingPlatElast{PLATFORM_ELASTICITY_PLAYER}; // OPTIONS PLATFORM ELASTICITY (players only)
     std::atomic<float> pendingBoost{1.0f};       // OPTIONS SPEED BOOST
@@ -290,8 +296,8 @@ struct Match {
     // "OFFICIAL MATCH", so only the kind is safe to filter on.
     std::string matchName;
 
-    // Auto-start countdown, LOBBY only. Armed once connectedCount reaches
-    // PUBLIC_MIN_PLAYERS, disarmed if the room empties back below it.
+    // Auto-start countdown, LOBBY only. Armed once connectedCount reaches this
+    // room's pendingMinHumans, disarmed if it empties back below it.
     bool              autoStartArmed = false;
     Clock::time_point autoStartAt{};
 
@@ -437,6 +443,9 @@ struct Match {
         pendingRocketsPhysics = o.rocketsObeyPhysics;
         pendingFriendlyFire   = o.friendlyFire;
         pendingCoastMode      = o.coastMode;
+
+        pendingMaxBots        = OPT_RANGE_MAX_BOTS.clampi(o.maxBots);
+        pendingMinHumans      = OPT_RANGE_MIN_HUMANS.clampi(o.minHumansToStart);
 
         pendingMap = MapSizeIndex(o.mapSize);
     }

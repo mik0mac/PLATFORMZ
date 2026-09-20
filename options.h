@@ -31,6 +31,10 @@
 #include <utility>       // std::pair - matchOptionPresets is an ORDERED list
 #include <vector>
 
+//MAKR: TESTING BOOL
+// true = matches start with one human player
+const bool PRESET_TESTING_MODE = true;
+
 //MARK: Map sizes
 // Which arenas exist. Moved here from constants.h with the rule defaults below:
 // a match's arena is one of its rules, and the OPTIONS map selector sits in the
@@ -109,6 +113,18 @@ const int GAMESPACE_DEFAULT_PLAYERS = 4; // Default NUMBER OF PLAYERS - what the
 // its player.id as this +/- a spread. The MAX is BOT_DIFFICULTY (constants.h).
 const float BOT_DIFFICULTY_DEFAULT = 0.2f; // OPTIONS starting value for BOT DIFFICULTY (client + server defaults)
 
+// maxBots. One short of the roster ceiling, so a match is never ALL bots and the
+// old "every unclaimed slot becomes a bot" behaviour is preserved for every
+// roster size a player can pick (numPlayers - 1 bots is at most 7).
+//
+// The one place this differs from the old behaviour: a room with ZERO humans
+// connected previews 7 bots and one empty slot where it used to preview 8.
+// Nobody is connected to see it.
+const int MAX_BOTS_DEFAULT = GAMESPACE_NUMBER_OF_PLAYERS - 1;
+
+// minHumansToStart's default is PUBLIC_MIN_PLAYERS (constants.h), which is what
+// every room used before a preset could ask for more.
+
 // wallElasticity / platformElasticity. PLAYER-only: asteroids keep their
 // compile-time bounce (WALL/PLATFORM_ELASTICITY_ASTEROID, constants.h) so the
 // asteroid field's feel doesn't change under a bouncy-player match.
@@ -151,8 +167,27 @@ struct MatchOptions {
     // Crosses the wire as an index into mapSizeOrder (above).
     std::string mapSize = "MEDIUM";
 
-    int   numPlayers    = GAMESPACE_DEFAULT_PLAYERS; // 1 human + (N-1) bots
+    int   numPlayers    = GAMESPACE_DEFAULT_PLAYERS; // roster size: humans + bots + empty slots
     float botDifficulty = BOT_DIFFICULTY_DEFAULT;    // 0.0..BOT_DIFFICULTY
+
+    // How many UNCLAIMED slots get filled with a bot. This does NOT cap the
+    // room's capacity - the roster is still numPlayers slots and a human can
+    // take any of them - it caps how much of an empty room gets papered over.
+    // Slots past the cap stay genuinely EMPTY: no body in the arena, nothing to
+    // shoot, not counted for last-man-standing, and still joinable. 0 = a
+    // humans-only room.
+    //
+    // The two below are the only rules with NO slider in the OPTIONS modal: they
+    // are things a room's AUTHOR decides, not things a player dials mid-lobby.
+    // They live here anyway, so a preset is one bundle of rules written one way.
+    int maxBots = MAX_BOTS_DEFAULT;
+
+    // How many HUMANS an official room needs before its auto-start countdown
+    // arms. Meaningless in a custom room (its host presses START) and in local
+    // play; the lobby reads it to say how many more players it is waiting for.
+    // Must be <= numPlayers or the room could never start - an authoring rule
+    // asserted over every preset in registry_test.cpp.
+    int minHumansToStart = PUBLIC_MIN_PLAYERS;
 
     // Elasticity sliders are PLAYER-only: asteroids keep their compile-time
     // bounce (WALL/PLATFORM_ELASTICITY_ASTEROID) so the asteroid field's feel
@@ -214,6 +249,12 @@ struct OptionRange {
 // - it is a name, validated against mapSizePresets instead (see ClampOptions).
 const OptionRange OPT_RANGE_NUM_PLAYERS         = { 1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS, 1.0f };
 const OptionRange OPT_RANGE_BOT_DIFFICULTY      = { 0.0f, BOT_DIFFICULTY, 0.0f };
+// No slider reads these two - they have no row in the OPTIONS modal - but they
+// are still rules that arrive off the wire and out of profile.json, so they get
+// the same clamp as everything else. A minimum of 1 human is what stops a preset
+// from authoring a room that can never start.
+const OptionRange OPT_RANGE_MAX_BOTS            = { 0.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS, 1.0f };
+const OptionRange OPT_RANGE_MIN_HUMANS          = { 1.0f, (float)GAMESPACE_NUMBER_OF_PLAYERS, 1.0f };
 const OptionRange OPT_RANGE_WALL_ELASTICITY     = { 0.0f, 1.0f,   0.0f };
 const OptionRange OPT_RANGE_PLATFORM_ELASTICITY = { 0.0f, 1.0f,   0.0f };
 const OptionRange OPT_RANGE_SPEED_BOOST         = { 1.0f, 2.0f,   0.0f };
@@ -235,6 +276,8 @@ inline void ClampOptions(MatchOptions& m) {
     if (mapSizePresets.find(m.mapSize) == mapSizePresets.end()) m.mapSize = MatchOptions{}.mapSize;
     m.numPlayers           = OPT_RANGE_NUM_PLAYERS.clampi(m.numPlayers);
     m.botDifficulty        = OPT_RANGE_BOT_DIFFICULTY.clampf(m.botDifficulty);
+    m.maxBots              = OPT_RANGE_MAX_BOTS.clampi(m.maxBots);
+    m.minHumansToStart     = OPT_RANGE_MIN_HUMANS.clampi(m.minHumansToStart);
     m.wallElasticity       = OPT_RANGE_WALL_ELASTICITY.clampf(m.wallElasticity);
     m.platformElasticity   = OPT_RANGE_PLATFORM_ELASTICITY.clampf(m.platformElasticity);
     m.speedBoost           = OPT_RANGE_SPEED_BOOST.clampf(m.speedBoost);
@@ -284,10 +327,10 @@ inline MatchKind matchKindFromWire(const std::string& s) {
 //
 // Adding one is a data change here and nothing else: the server's boot loop
 // creates a pinned OFFICIAL room per entry, the browser advertises it by `label`,
-// and every rule below already crosses the wire in the state packet's option
-// block. **Server rebuild + restart only** - the client never reads this table,
-// it only ever sends a preset NAME as a string. What it does NOT cover is a
-// preset needing a rule that does not exist yet: a new field means a new wire
+// and every rule in `options` already crosses the wire in the state packet's
+// option block. **Server rebuild + restart only** - the client never reads this
+// table, it only ever sends a preset NAME as a string. What it does NOT cover is
+// a preset needing a rule that does not exist yet: a new field means a new wire
 // key, both ends, and a web rebuild.
 struct MatchPreset {
     // The map used to sit beside this as its own field; it is inside `options`
@@ -297,21 +340,23 @@ struct MatchPreset {
     // ("DEFAULT") names a rule set; this names a place to play, and those want
     // different words in a list a player is reading.
     // Capped by MATCH_NAME_MAX_CHARS (24) - it is a room name like any other.
-    std::string  label;
+    std::string label;
+    // info to display the player about the preset.
+    std::string description;
 };
 
 // Start from the defaults and change only what the preset is ABOUT.
 //
-// Spelling all fifteen fields out positionally would be unreadable, and worse,
+// Spelling all seventeen fields out positionally would be unreadable, and worse,
 // it would silently SHIFT the moment MatchOptions gains a field - every preset
 // would keep compiling and mean something else. Naming the fields means a
 // preset's definition is exactly its diff from DEFAULT, and a new option lands
 // on every preset at its own default until somebody decides otherwise.
 template <typename Tune>
-inline MatchPreset MakePreset(const char* label, Tune tune) {
+inline MatchPreset MakePreset(const char* label, Tune tune, std::string description = "") {
     MatchOptions o;      // == the rule defaults above
     tune(o);
-    return MatchPreset{o, label};
+    return MatchPreset{o, label, description};
 }
 
 //MARK: ORDER IS MEANINGFUL - typical gameplay first, niche last
@@ -346,56 +391,65 @@ inline MatchPreset MakePreset(const char* label, Tune tune) {
 // these. Treat any value here as a starting point for tuning, not as a decision.
 inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
     // The standard game, and the front door: what QUICK MATCH hands a stranger.
-    {"DEFAULT", { MatchOptions{}, "OFFICIAL MATCH" }},   // MatchOptions{}.mapSize == MEDIUM
+    // The label must remain DEFAUT so the serer knows it is where a player goes
+    // on quick match all other options being equal
+    {"DEFAULT", MakePreset("CLASSIC", [](MatchOptions& o) {
+        o.mapSize              = "MEDIUM";
+        o.numPlayers           = 6;
+        o.maxBots              = 2;
+        o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
+    }, "The default setup.  MEDIUM map.")},   // MatchOptions{}.mapSize == MEDIUM
 
-    // Second because it changes only the DIAL, not the game: rockets still fly
-    // straight, walls still hold you in, you just do it louder and with a full
-    // house. Nothing here has to be re-learned.
-    {"CHAOS", MakePreset("CHAOS MATCH", [](MatchOptions& o) {
+    {"CLASSIC HYPED", MakePreset("CLASSIC HYPED", [](MatchOptions& o) {
         o.mapSize              = "LARGE";
         o.numPlayers           = 8;
+        o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
+        o.maxBots              = 2;
         o.botDifficulty        = 0.5f;
-        o.speedBoost           = 1.25f;
+        o.speedBoost           = 1.75f;
         o.rocketSpeedScale     = 1.5f;
-        o.explosionRadiusScale = 2.5f;   // slider max is 4.0
-    })},
+        o.explosionRadiusScale = 3.0f;   // slider max is 4.0
+    }, "Boosted version of classic.  LARGE map.")},
 
-    // Third because it changes AIMING. Tight and quick - a small arena, fewer
-    // bodies - and rockets that obey gravity and carry the shooter's momentum,
-    // so a shot has to be led rather than pointed.
-    {"SKIRMISH", MakePreset("SKIRMISH MATCH", [](MatchOptions& o) {
-        o.mapSize            = "SMALL";
-        o.numPlayers         = 4;
-        o.botDifficulty      = 0.35f;
-        o.speedBoost         = 1.4f;
-        o.jetpackThrust      = 1.4f;
-        o.rocketsObeyPhysics = true;     // gravity + inherited launch velocity
-    })},
+    {"SPAMMERS DELIGHT", MakePreset("SPAMMERS DELIGHT", [](MatchOptions& o) {
+        o.mapSize              = "LARGE";
+        o.numPlayers           = 6;
+        o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
+        o.maxBots              = 2;
+        o.botDifficulty        = 0.35f;
+        o.speedBoost           = 1.2f;
+        o.jetpackThrust        = 1.2f;
+        o.friendlyFire         = false;
+        o.explosionRadiusScale = 3.0f;
+        o.rocketSpeedScale     = 2.0f;
+        o.coastMode            = false;      // friction on: release the key, slow down
+    }, "Friendly fire off and speed boosted.  No coast mode.")},
 
-    // Fourth because it changes MOVING, which is more fundamental than aiming.
-    // Attrition: hard bots, a big arena, fuel that burns faster than it comes
-    // back, and no coasting - release the key and you slow down, so position has
-    // to be earned and re-earned.
-    {"ENDURANCE", MakePreset("ENDURANCE MATCH", [](MatchOptions& o) {
-        o.mapSize         = "XL";
-        o.numPlayers      = 8;
-        o.botDifficulty   = 0.7f;
-        o.fuelConsumption = 9;           // default 5 units/sec
-        o.fuelRegenPct    = 20;          // default 40% of consumption
-        o.coastMode       = false;       // friction on: release the key, slow down
-    })},
+    {"MAYHEM", MakePreset("MAYHEM", [](MatchOptions& o) {
+        o.mapSize              = "SMALL";
+        o.numPlayers           = 4;
+        o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
+        o.botDifficulty        = 0.7f;
+        o.maxBots              = 2;          
+        o.friendlyFire         = false;
+        o.explosionRadiusScale = 4.0f;
+        o.speedBoost           = 2.0f;
+    }, "Super big and super fast on a SMALL map.")},
 
-    // LAST, because it takes away the arena itself - the one thing every other
-    // entry above still has. Nothing collides with the cube: rockets fade past
-    // the line, asteroids wrap through the origin, and a player who drifts out is
-    // eliminated on the out-of-bounds timer, which is what still ends a match in
-    // a room with no walls to pin anyone in.
-    {"VOID", MakePreset("OPEN SPACE MATCH", [](MatchOptions& o) {
-        o.mapSize       = "XL";
-        o.numPlayers    = 6;
-        o.botDifficulty = 0.3f;
-        o.wallsEnabled  = false;
-    })},
+    {"VOID", MakePreset("THE VOID", [](MatchOptions& o) {
+        o.mapSize               = "XL";
+        o.numPlayers            = 8;
+        o.minHumansToStart      = (PRESET_TESTING_MODE) ? 1 : 3; // an empty void is a dull one
+        o.botDifficulty         = 0.35f;
+        o.maxBots               = 3;
+        o.fuelConsumption       = 50.0f;
+        o.fuelRegenPct          = 10.0f;
+        o.platformElasticity    = 0.9f;
+        o.explosionRadiusScale  = 4.0f;
+        o.rocketSpeedScale      = 2.0f;
+        o.friendlyFire          = false;
+        o.wallsEnabled          = false;
+    }, "XL map, no walls.  Fuel is scarce. Friendly fire off.")}
 };
 
 // Where a preset sits on the typical-to-niche ramp above; matchOptionPresets

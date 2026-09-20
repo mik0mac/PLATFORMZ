@@ -294,8 +294,11 @@ public:
             // wherever the player was looking when the last match ended.
             p.reticle.anchorInitialized = false;
             // NOT reset: rocketCounter (generates rocket ids the client tracks by
-            // identity - reusing ids across matches would alias them) and
-            // leaveGraceSec (owned by the slot-vacancy logic in refreshBotSlots).
+            // identity - reusing ids across matches would alias them), and
+            // leaveGraceSec / isVacant (both owned by the slot-vacancy logic in
+            // refreshBotSlots, which re-derives them every tick - and which runs
+            // later in this same tick, before any sim, so isAlive above is
+            // corrected for the empty slots before it can matter).
         }
         placePlayersSpread(); // reposition all slots spread across the new platforms (issue #5)
         rockets.clear();
@@ -409,6 +412,11 @@ public:
         // (the local player drives the death screen), so a per-player flag keeps
         // the burst from re-firing every frame.
         for (Player& player : players) {
+            // An empty slot is permanently !isAlive and was never in the match,
+            // so it has nothing to detonate. resetPlayersForMatch clears
+            // deathBurstSpawned, so without this guard every vacant slot fires a
+            // spark burst and a death cue on the first tick of every match.
+            if (player.isVacant) continue;
             if (!player.isAlive && !player.deathBurstSpawned) {
                 spawnEliminationBurst(player.position, player.color_outline);
                 emitAudio(FX_PLAYER_DEATH, player.position, player.id);

@@ -685,11 +685,17 @@ inline float DrawRosterPanel(ShellState& s, const std::vector<Player>& players,
     if (networked) {
         if (previewCount == 0)
             DrawText("Waiting for players...", (int)box.x + 10, (int)(box.y + headerH), 18, GRAY);
-        // Slots 0..previewCount-1 are all occupied (human or bot), so they draw as
-        // contiguous rows.
+        // Slots 0..previewCount-1 are contiguous rows, but they are no longer all
+        // occupied: a room whose preset caps maxBots leaves the slots past the cap
+        // genuinely empty. Those arrive neither connected nor bot-driven, and are
+        // drawn as OPEN - they are real, joinable seats, not missing rows.
         for (int i = 0; i < previewCount; ++i) {
             int  ry  = (int)(box.y + headerH + i * rowH);
             bool you = (i == myIndex);
+            if (!you && !players[i].isConnected && !players[i].isBot) {
+                DrawText(TextFormat("%d. -- OPEN --", i + 1), (int)box.x + 10, ry, 18, GRAY);
+                continue;
+            }
             // Our row shows the live-typed name; other rows show the server-synced
             // name, falling back to a slot label until they have set one.
             std::string shown = you ? myName
@@ -955,7 +961,10 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
         // to starting and nobody in it could tell.
         int humans = 0;
         for (const Player& p : players) if (p.isConnected && !p.isBot) humans++;
-        const int needed = PUBLIC_MIN_PLAYERS - humans;
+        // The room's own threshold, not the compile-time one: a preset may ask
+        // for more (opt.minHumansToStart), and a hard-coded 2 here would leave
+        // such a room counting down to nothing.
+        const int needed = opt.minHumansToStart - humans;
         if (autoStartIn > 0.0f) {
             UiTextCentered(TextFormat("MATCH STARTING IN %d...", (int)ceilf(autoStartIn)),
                            screenWidth, (int)startY + 14, 26, RAYWHITE);

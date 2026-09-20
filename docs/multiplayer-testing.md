@@ -304,13 +304,18 @@ Everything below runs against a plain `./gameserver` and needs no client.
 
 ```bash
 ./server/test/run_all.sh        # standalone C++ tests. Seconds, no server needed
-./server/test/run_probes.sh     # eleven live protocol probes, each on a fresh server
+./server/test/run_probes.sh     # live protocol probes, each on a fresh server
 ./server/test/ci_smoke.sh       # protocol tags + WebSocket + a two-match load run
 ```
 
 **The probes** (`server/test/probe*.py`) are headless protocol clients, one per
 question — the lobby and host rules, the directory, reconnecting into your own
-slot, join-in-progress, the handshake cookie, the capacity budgets. Each gets its
+slot, join-in-progress, the handshake cookie, the capacity budgets. Two cover the
+sliderless roster rules: `probe_maxbots.py` (a `maxBots = 0` room fields no bots,
+leaves its other slots genuinely empty, and — the regression that matters — keeps
+playing instead of ending on its first tick) and `probe_minhumans.py` (an official
+room arms on its own preset's head count, not the compile-time one; it waits out a
+countdown that must *not* fire, so it takes ~30 s). Each gets its
 own fresh server, because several leave state behind that would fail the next one
 for the wrong reason. Run one on its own while poking at the server:
 

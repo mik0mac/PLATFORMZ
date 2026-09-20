@@ -540,6 +540,8 @@ Match::Seat Match::SeatPlayer(const std::string& clientId, const std::string& na
         auto& p = gameSpace.getPlayers()[seat.slot];
         p.leaveGraceSec = -1.0f;    // back before the countdown ran out
         p.isBot         = false;    // never botified mid-match, but say so explicitly
+        p.isVacant      = false;    // likewise: HeldSlotFor requires isAlive, so a
+                                    // vacant slot can never be resumed - stated anyway
         Message msg(MSG_TYPE_REJOINED_GAME, p.name, p.name, p.id, p.id);
         gameSpace.emitMessage(msg);
     } else {
@@ -626,13 +628,45 @@ std::vector<uint64_t> Match::CompactConnectedSlots() {
 // GAMEOVER, though, the client is already back on the roster-showing screen
 // (see returnToTitle in main.cpp), so a leaver's slot is relabeled right away
 // instead of sitting on their stale name until the next match start.
+//
+// Only the first `maxBots` unclaimed slots are filled (MatchPreset, options.h);
+// the rest are VACATED - marked isVacant, killed, and handed back their default
+// name and color. A vacant slot is a slot with no body at all: nothing to shoot,
+// nothing to drive, not counted for last-man-standing, and still joinable. It is
+// NOT the same thing as a mid-match leaver's open body, which keeps drifting and
+// stays killable; HandleMidMatchLeavers tells them apart by isAlive.
+//
+// Bots fill from the LOWEST unclaimed slot upward, so vacancies collect at the
+// top. That is not arbitrary: humans are compacted into the lowest slots
+// (CompactConnectedSlots), and setPlayerCount pops from the TAIL, so a match
+// start that shrinks the roster discards empty slots first and never disturbs
+// the bot set. Bot names are indexed by SLOT, not by bot ordinal, so a slot's
+// name holds steady for as long as it is a bot however many humans come and go.
 void Match::refreshBotSlots(SlotMask claimed, bool allowBotify) {
     auto& players = gameSpace.getPlayers();
+    const int maxBots = pendingMaxBots.load();
+    int botsSoFar = 0;
     for (int i = 0; i < (int)players.size(); ++i) {
         bool bot = !SlotSet(claimed, i);
-        if (!bot) { players[i].isBot = false; continue; }
+        if (!bot) { players[i].isBot = false; players[i].isVacant = false; continue; }
         if (!allowBotify) continue; // mid-match leaver: leave the slot open
-        players[i].isBot = true;
+        if (botsSoFar >= maxBots) {
+            // Over the cap: no body here. Clearing the name and color matters -
+            // without it a joiner who has not sent their name message yet
+            // renders for a tick as a magenta ghost called GEOFF. Idempotent, so
+            // running it sixty times a second costs nothing and never thrashes.
+            Player& p = players[i];
+            p.isBot    = false;
+            p.isVacant = true;
+            p.isAlive  = false;
+            p.velocity = {0, 0, 0};
+            p.name     = "PLAYER " + std::to_string(i + 1);
+            assignPlayerColor(p, i);
+            continue;
+        }
+        ++botsSoFar;
+        players[i].isBot    = true;
+        players[i].isVacant = false;
         // Through THIS MATCH's shuffled order, so a room does not field the same
         // lineup in the same slots every time (#102). Local mode has always done
         // this; the naming moved server-side and the shuffle did not come with it.
@@ -672,6 +706,11 @@ void Match::HandleMidMatchLeavers(SlotMask claimed, bool allowBotify, float dt) 
             continue;
         }
         if (p.isBot) continue;      // a real bot slot, never had a human - not a leaver
+        // A VACANT slot (over the preset's maxBots) is also unclaimed and also
+        // not a bot, but it is not a leaver either - it never had a body. It
+        // falls into the !isAlive branch below, which clears the countdown and
+        // moves on, which is exactly right: nothing to grace, nothing to
+        // eliminate, no "left the game" message.
         if (!p.isAlive) {
             // Dead, and nobody is sitting in it: there is nothing left to come
             // back to, so stop reserving the slot. Clearing the countdown here
@@ -755,9 +794,11 @@ bool Match::isHostConn(uint64_t connId) {
 }
 
 //MARK: Auto-start
-// A public room has no host to press START, so it starts itself. Arms once
-// PUBLIC_MIN_PLAYERS humans are present and disarms if the room drops back below
-// that, so a room that half-fills and empties doesn't launch at one player.
+// A public room has no host to press START, so it starts itself. Arms once this
+// room's minHumansToStart humans are present and disarms if it drops back below
+// that, so a room that half-fills and empties doesn't launch at one player. The
+// threshold is per-PRESET (MatchPreset, options.h) and defaults to
+// PUBLIC_MIN_PLAYERS, so a preset that says nothing behaves as it always did.
 // LOBBY only - once COUNTDOWN begins the normal path owns it. Caller holds
 // gameMutex.
 void Match::ServiceAutoStart(Clock::time_point now) {
@@ -765,7 +806,7 @@ void Match::ServiceAutoStart(Clock::time_point now) {
     if (gamePhase.load() != Phase::LOBBY) { autoStartArmed = false; return; }
 
     const int live = connectedCount.load();
-    if (live < PUBLIC_MIN_PLAYERS) {
+    if (live < pendingMinHumans.load()) {
         if (autoStartArmed) std::cout << "Auto-start disarmed (players " << live << ")\n";
         autoStartArmed = false;
         countdownRemaining = 0.0f;   // the room emptied back below the threshold
@@ -797,7 +838,8 @@ void Match::ServiceAutoStart(Clock::time_point now) {
 }
 
 //MARK: Join in progress
-// Hand a bot's slot to a human who has just joined a live match.
+// Hand a bot's slot - or an EMPTY one - to a human who has just joined a live
+// match.
 //
 // WHAT IS INHERITED AND WHAT IS NOT, because "take over the bot" is ambiguous and
 // the wrong split is either unfair or miserable:
@@ -816,6 +858,10 @@ void Match::ServiceAutoStart(Clock::time_point now) {
 //                      match you never played.
 //   colour             RESET to this slot's human colour. Otherwise the newcomer
 //                      renders in bot magenta for the rest of the match.
+//   vacancy            CLEARED. A slot the preset's maxBots left empty has no
+//                      body; the same reset above gives it one. Its position is
+//                      the placePlayersSpread spawn point with zero velocity -
+//                      a cleaner arrival than inheriting a bot mid-flight.
 //
 // Caller holds gameMutex. Safe in any phase: in LOBBY there is no world yet and
 // this is a harmless no-op on preview data.
@@ -824,9 +870,11 @@ void Match::TakeOverSlot(int slot, const std::string& joinerName) {
     if (slot < 0 || slot >= (int)players.size()) return;
     Player& p = players[slot];
 
-    const bool wasBot = p.isBot;
-    p.isBot   = false;
-    p.isAlive = true;
+    const bool wasBot    = p.isBot;
+    const bool wasVacant = p.isVacant;
+    p.isBot    = false;
+    p.isVacant = false;
+    p.isAlive  = true;
     p.health  = PLAYER_STARTING_HEALTH;
     p.fuel    = PLAYER_STARTING_FUEL;
     p.ammo    = PLAYER_STARTING_AMMO;
@@ -838,8 +886,10 @@ void Match::TakeOverSlot(int slot, const std::string& joinerName) {
     assignPlayerColor(p, slot);
 
     // Only announce a real mid-match takeover. A lobby join is already visible in
-    // the roster, and saying it there would be noise.
-    if (wasBot && gamePhase.load() == Phase::PLAYING) {
+    // the roster, and saying it there would be noise. Filling an EMPTY slot counts
+    // as one too - somebody just appeared in the arena either way, and in a
+    // maxBots-capped room that is the only kind of arrival there is.
+    if ((wasBot || wasVacant) && gamePhase.load() == Phase::PLAYING) {
         const std::string who = joinerName.empty() ? p.name : joinerName;
         Message msg(MSG_TYPE_JOINED_GAME, who, who, p.id, p.id);
         gameSpace.emitMessage(msg);
@@ -1119,10 +1169,13 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
         s += ",\"oob\":"    + jb(p.isOutOfBounds);   // server-owned: outside the boundary, elimination pending
         s += ",\"oobt\":"   + jf(p.outOfBoundsTimer); // seconds left before being lost in space (drives the HUD countdown)
         // A slot is shown if a human occupies it, a bot drives it, or - once a
-        // match is underway (roster final) - unconditionally, so a mid-match
-        // leaver's open body stays visible/killable instead of going invisible.
+        // match is underway (roster final) - whenever it is not VACANT, so a
+        // mid-match leaver's open body stays visible/killable instead of going
+        // invisible, while a slot the preset's maxBots left empty never had a
+        // body to show. This flag is also how the client learns a slot is empty:
+        // isVacant itself never crosses the wire.
         s += ",\"active\":" + jb(SlotSet(connectedSlots, i) || p.isBot
-                                 || gamePhase.load() != Phase::LOBBY);
+                                 || (gamePhase.load() != Phase::LOBBY && !p.isVacant));
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
         // Who runs this room. Server-owned, because the client can no longer work
         // it out: host is the CREATOR now, not whoever holds the lowest slot, and
@@ -1222,6 +1275,8 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
     // Lobby options (match-wide config), echoed every tick so a change by any
     // client shows live on every client's OPTIONS modal + roster preview.
     s += ",\"opt\":{\"nplayers\":" + ji(pendingPlayers.load());
+    s += ",\"maxbots\":"  + ji(pendingMaxBots.load());
+    s += ",\"minhumans\":" + ji(pendingMinHumans.load());
     s += ",\"diff\":"     + jf(pendingDiff.load());
     s += ",\"welast\":"   + jf(pendingWallElast.load());
     s += ",\"pelast\":"   + jf(pendingPlatElast.load());
@@ -1277,6 +1332,11 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     // Options (match-wide), same values buildStatePacket puts in "opt". Order
     // must match applyBinaryState() in wire.h exactly.
     nb::putU8(b, (uint8_t)pendingPlayers.load());
+    // The two sliderless rules. Two bytes, which together with the roster byte
+    // above are what cost STATE_BIN_VERSION 0x09 -> 0x0B: the flags byte had
+    // only two free bits and these need four each.
+    nb::putU8(b, (uint8_t)pendingMaxBots.load());
+    nb::putU8(b, (uint8_t)pendingMinHumans.load());
     nb::putF32(b, pendingDiff.load());
     nb::putF32(b, pendingWallElast.load());
     nb::putF32(b, pendingPlatElast.load());
@@ -1311,9 +1371,10 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
         nb::putQFrac(b, p.spectatingTimer, p.countdownToSpectating);
         nb::putU16(b, (uint16_t)p.score);
         // Same rule as the JSON builder: in-match slots stay visible even when
-        // their human left (open body awaiting a reconnect).
+        // their human left (open body awaiting a reconnect), but a VACANT slot
+        // (over the preset's maxBots) never had a body and stays hidden.
         bool active = SlotSet(connectedSlots, i) || p.isBot
-                      || gamePhase.load() != Phase::LOBBY;
+                      || (gamePhase.load() != Phase::LOBBY && !p.isVacant);
         // Bit 32 is the host flag. Bits 32/64/128 were free, so this needed no
         // layout change and no STATE_BIN_VERSION bump - a client built before it
         // masks the bits it knows and ignores this one.
@@ -2459,6 +2520,8 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         pendingMap = MapSizeIndex(clampName(parseString(msg, "map")));
         pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_DEFAULT_PLAYERS);
         pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
+        pendingMaxBots = (int)parseUInt(msg, "maxbots", (unsigned)MAX_BOTS_DEFAULT);
+        pendingMinHumans = (int)parseUInt(msg, "minhumans", (unsigned)PUBLIC_MIN_PLAYERS);
         pendingWallElast = parseFloat(msg, "welast", WALL_ELASTICITY_PLAYER);
         pendingPlatElast = parseFloat(msg, "pelast", PLATFORM_ELASTICITY_PLAYER);
         pendingBoost = parseFloat(msg, "boost", 1.0f);
@@ -2499,6 +2562,8 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
         pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
         pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
+        pendingMaxBots = (int)parseUInt(msg, "maxbots", (unsigned)pendingMaxBots.load());
+        pendingMinHumans = (int)parseUInt(msg, "minhumans", (unsigned)pendingMinHumans.load());
         pendingWallElast = parseFloat(msg, "welast", pendingWallElast.load());
         pendingPlatElast = parseFloat(msg, "pelast", pendingPlatElast.load());
         pendingBoost = parseFloat(msg, "boost", pendingBoost.load());
@@ -3126,9 +3191,15 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // (human or bot) is left standing - so a 2-human match keeps going
             // past the first human's death, and both humans reach GAME OVER on
             // the same phase flip. The single-survivor clause is gated to
-            // multi-slot rosters so a solo start (1 slot) doesn't end instantly;
+            // multi-PARTICIPANT rosters so a solo start doesn't end instantly;
             // it then ends only when the lone human dies (aliveHumans == 0),
-            // preserving today's solo behavior. A dead human keeps spectating
+            // preserving today's solo behavior.
+            //
+            // Participants, not players.size(): a room whose preset caps maxBots
+            // can hold empty slots, and counting those as bodies made a one-human
+            // match satisfy "only one left standing" on its very first PLAYING
+            // tick. The slots are in the roster and joinable - they just aren't
+            // anybody. A dead human keeps spectating
             // (client-side greyscale) until the match actually ends here.
             // PLAYING-only: once GAMEOVER we keep simulating (above) but never
             // re-evaluate the end condition.
@@ -3140,9 +3211,12 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                     if (client.playerId >= 0 && client.playerId < (int)players.size()
                         && players[client.playerId].isAlive) aliveHumans++;
                 }
-                int aliveTotal = 0;
-                for (const auto& p : players) if (p.isAlive) aliveTotal++;
-                bool multi = players.size() >= 2;
+                int aliveTotal = 0, participants = 0;
+                for (const auto& p : players) {
+                    if (p.isAlive) aliveTotal++;
+                    if (!p.isVacant) participants++;
+                }
+                bool multi = participants >= 2;
                 if (aliveHumans == 0 || (multi && aliveTotal <= 1)) {
                     gamePhase = Phase::GAMEOVER;
                     std::cout << "Match over (humans alive " << aliveHumans
@@ -3764,7 +3838,8 @@ int main() {
         g_registry.Pin(code);
         std::cout << "Match registry: official room " << code
                   << " preset=" << presetName
-                  << " (locked, auto-starts at " << PUBLIC_MIN_PLAYERS << " players)\n";
+                  << " (locked, auto-starts at " << m->pendingMinHumans.load()
+                  << " players, maxBots=" << m->pendingMaxBots.load() << ")\n";
     }
 
     const int threads = std::max(1u, std::thread::hardware_concurrency());

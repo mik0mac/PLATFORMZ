@@ -36,8 +36,9 @@ def set_target(host, port=None):
     if port: PORT = int(port)
 # Tags per netbin.h. WELCOME is 0x0A since the welcome grew the room's code
 # and kind - values are never recycled there, so it went past the high-water
-# mark rather than taking 0x03.
-STATE, WELCOME, CHUNK, FULL = 0x09, 0x0A, 0x03, 0x06
+# mark rather than taking 0x03. STATE is 0x0B since the options block grew the
+# maxbots + minhumans bytes; it skipped 0x0A because WELCOME holds it.
+STATE, WELCOME, CHUNK, FULL = 0x0B, 0x0A, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
 # Wire order of mapSizeOrder (constants.h). Append only, same as there.
 MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]
@@ -66,6 +67,10 @@ class C:
         # welcome, not the code we asked for.
         self.matchCode, self.matchKind = "", ""
         self.countdown = 0.0
+        # The two rules with no OPTIONS slider, echoed in every state packet
+        # like the rest of the bundle. Per-preset, so never assumed.
+        self.maxBots   = 0
+        self.minHumans = 0
         # The arena the LOBBY is advertising (from the state packet's option
         # flags) and the one actually generated (from the welcome's halfSize).
         # They are different questions: the first is the pending choice everyone
@@ -155,16 +160,22 @@ class C:
             elif tag == STATE:
                 # header: u8 tag, u32 tick, u32 lastSeq  -> body starts at 9
                 # body: u8 phase, f32 countdown, u32 epoch, u8 nplayers-opt,
-                #       7*f32, u8 fburn, u8 fregen, u8 flags, u8 rosterCount
+                #       u8 maxbots, u8 minhumans, 7*f32, u8 fburn, u8 fregen,
+                #       u8 flags, u8 rosterCount
+                # (maxbots/minhumans at 19-20 are what STATE_BIN_VERSION 0x0B
+                # added to the options block; every offset after them shifted.)
                 self.phase = PHASES.get(d[9], "?")
                 # f32 at 10: the pre-match countdown, and in LOBBY the official
                 # room's auto-start timer (0 unless armed).
                 self.countdown = struct.unpack_from("<f", d, 10)[0]
                 self.epoch = struct.unpack_from("<I", d, 14)[0]
-                # Option flags at 49; bits 16/32 are the map index (see
-                # mapSizeOrder in constants.h). Roster count follows at 50.
-                self.mapSize = MAP_SIZES[(d[49] >> 4) & 0x3]
-                self.nplayers = d[50]
+                # The two rules with no slider, straight after the roster size.
+                self.maxBots   = d[19]
+                self.minHumans = d[20]
+                # Option flags at 51; bits 16/32 are the map index (see
+                # mapSizeOrder in constants.h). Roster count follows at 52.
+                self.mapSize = MAP_SIZES[(d[51] >> 4) & 0x3]
+                self.nplayers = d[52]
                 # Decode the roster so tests can assert on a player's actual
                 # state. Layout per buildStateBodyBinary: u32 id, 3x qpos(i16),
                 # 3x qvel(i16), yaw+pitch(u16), u8 hp, u8 fuel, u8 ammo,
@@ -172,7 +183,7 @@ class C:
                 # length-prefixed name.
                 self.players = {}
                 self.slots   = {}
-                off = 51
+                off = 53
                 try:
                     for _ in range(self.nplayers):
                         pid   = struct.unpack_from("<I", d, off)[0]; off += 4
@@ -187,6 +198,10 @@ class C:
                         row = {
                             "id": pid, "hp": hp, "score": score,
                             "alive": bool(flags & 1), "bot": bool(flags & 2),
+                            # Bit 4: the server is showing this slot. Off for a
+                            # slot the room's maxBots left EMPTY - no body, but
+                            # still in the roster and still joinable.
+                            "active": bool(flags & 4),
                             "host": bool(flags & 32),
                             "name": name,
                         }
@@ -244,7 +259,12 @@ def step(label, cs, secs=1.2):
         print(f"{label:22s} {c.name}: slot={c.slot} phase={c.phase} "
               f"epoch={c.epoch} roster={c.nplayers}")
 
+# The bundle a host client sends. Mirrors MatchOptions{} defaults, so a probe
+# that starts a match gets the same room an untouched OPTIONS modal would - and,
+# like the real client, sends every key: an absent one resets to the compile-time
+# default rather than keeping whatever the room's preset asked for.
 OPTS = {"half": 120.0, "plat": 128, "roid": 18, "nplayers": 4, "diff": 0.2,
+        "maxbots": 7, "minhumans": 2,
         "welast": 0.5, "pelast": 0.33, "boost": 1.0, "rspeed": 1.0,
         "xradius": 1.0, "jthrust": 1.0, "fburn": 5, "fregen": 40,
         "walls": True, "phys": False, "ff": True, "coast": True}

@@ -1540,6 +1540,62 @@ and, from E3's measurements, the capacity paragraph that says plainly that **CPU
 is not the constraint and ~6 live matches is what 2 TB/month pays for.** The
 key-vs-code distinction and the abuse-limit table landed earlier, with E2.
 
+### E5. Empty slots: `maxBots` and `minHumansToStart` — **DONE**
+
+Two new `MatchOptions` rules: `maxBots` caps how many unclaimed roster slots get
+bot-filled, and `minHumansToStart` is the head count an official room's auto-start
+arms on. Both default to the old behaviour, so a LOCAL or CUSTOM match is
+unchanged.
+
+**They have no OPTIONS slider, and that is the only thing unusual about them.**
+They are authored by a preset rather than dialed by a player. The first cut put
+them on `MatchPreset` instead, which kept them off the wire entirely — but it
+meant a preset was written two ways, `o.speedBoost = …` inside the tune lambda
+and a `WithMaxBots(…)` wrapper around it, and the second is exactly the kind of
+positional afterthought the `MakePreset` comment argues against. Being in
+`MatchOptions` costs a range, a clamp, a profile key and two wire keys; it buys
+one way to write a preset, and the round-trip that lets a host's START echo the
+room's own values back instead of resetting them.
+
+**LOCAL ignores `maxBots`** and fills every slot. An empty slot exists so a human
+can walk into it later; offline nobody ever can, so one there would just be a hole
+in the match. At the default the two are identical anyway.
+
+**How an empty slot is represented.** A server-owned `Player::isVacant`, always
+carried with `isAlive = false`. Rejected alternatives:
+
+- *Shrink the roster to `humans + bots`.* `registry.h`'s `joinable` test is
+  `players < rosterSize`, so a shrunk room advertises as FULL and stops being
+  joinable — the opposite of the intent. Growing it back mid-match would also
+  append a `Player` with no `placePlayersSpread` and change
+  `MaxAsteroidsForRoster` under a live match.
+- *Reuse `isSpectating`.* It is wire-synced, drives the client's greyscale ramp,
+  and `updateFuel` would keep topping up a tank belonging to nobody.
+- *Derive it* from `!claimed && !isBot && !isAlive`. The two guards that most need
+  it (`gamespace.h`'s death burst, `elements.h`'s spectator promotion) live in
+  shared headers with no access to `clients`.
+
+**Bots fill low, vacancies collect high.** Not arbitrary: humans are compacted
+into the lowest slots, and `setPlayerCount` pops from the tail, so a match start
+that shrinks the roster discards empty slots first and never disturbs the bot set.
+Bot names are indexed by slot rather than by bot ordinal, so nothing thrashes as
+humans come and go.
+
+**The one place this was load-bearing** rather than cosmetic: match-end counted
+`players.size() >= 2` to decide whether the single-survivor clause applied. That
+is roster size. With empty slots in the roster, a one-human `maxBots = 0` match
+satisfied "only one player left standing" on its first PLAYING tick and ended
+instantly. It now counts participants. `probe_maxbots.py` is the regression test.
+
+**One version bump, covering both.** The options block grew two `u8`s, which cost
+`STATE_BIN_VERSION` `0x09 → 0x0B` (the flags byte has two free bits; these need
+four each). Worth it for `minHumansToStart` alone: without it the lobby could no
+longer say *how many more* players it was waiting for, which is a real loss in
+exactly the rooms the feature exists for. `maxBots` rides along for free, and the
+client never needed it to *render* an empty slot — the per-player `active` flag
+already told it to skip one, and widening that to exclude vacant slots was a
+one-line change at each of the two builders.
+
 ---
 
 # Epic F — Road to Steam (macOS + Windows), web maintained

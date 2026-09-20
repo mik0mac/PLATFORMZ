@@ -180,6 +180,10 @@ const int    MATCH_MAX_ACTIVE_DEFAULT = MATCH_MAX_CONCURRENT;
 // would otherwise control everyone's options and START button, and that control
 // migrates to another stranger when they leave. So public rooms lock their
 // options at creation and start themselves.
+// The DEFAULT for MatchOptions::minHumansToStart (options.h), not a fixed rule: a
+// preset may ask for more. Stays here because it is what a room asks for when its
+// preset says nothing, and because the client needs a value before the first state
+// packet arrives.
 const int    PUBLIC_MIN_PLAYERS      = 2;    // humans needed before the countdown arms
 const double PUBLIC_AUTOSTART_SECONDS = 10.0; // lobby countdown once that many are present
 

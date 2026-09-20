@@ -323,6 +323,8 @@ inline std::string serializeGoodbye() {
 // ("options", "start", and the server's "opt" echo) uses these keys.
 inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
     j["nplayers"] = o.numPlayers;           // requested match size (server clamps to connected)
+    j["maxbots"]  = o.maxBots;              // how many unclaimed slots get bot-filled; the rest stay empty
+    j["minhumans"] = o.minHumansToStart;    // humans an official room waits for before auto-starting
     j["diff"]     = o.botDifficulty;        // bot difficulty center [0..BOT_DIFFICULTY]
     j["welast"]   = o.wallElasticity;       // OPTIONS: WALL ELASTICITY (players only)
     j["pelast"]   = o.platformElasticity;   // OPTIONS: PLATFORM ELASTICITY (players only)
@@ -514,6 +516,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     // state builder exactly (server_main.cpp).
     msg.hasOptions               = true;
     msg.opt.numPlayers           = r.u8();
+    msg.opt.maxBots              = r.u8(); // state tag 0x0B+
+    msg.opt.minHumansToStart     = r.u8(); // state tag 0x0B+
     msg.opt.botDifficulty        = r.f32();
     msg.opt.wallElasticity       = r.f32();
     msg.opt.platformElasticity   = r.f32();
@@ -844,6 +848,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
     msg.epoch     = j.value("ep", 0u);          // match epoch; echoed back in our input
 
+
     // Lobby options snapshot (match-wide). Present every state packet; the client
     // applies these to its OPTIONS modal so any client's change shows live.
     if (j.contains("opt")) {
@@ -851,6 +856,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.hasOptions = true;
         MatchOptions d; // absent keys fall back to the compile-time defaults
         msg.opt.numPlayers           = o.value("nplayers", d.numPlayers);
+        msg.opt.maxBots              = o.value("maxbots",  d.maxBots);
+        msg.opt.minHumansToStart     = o.value("minhumans", d.minHumansToStart);
         msg.opt.botDifficulty        = o.value("diff",     d.botDifficulty);
         msg.opt.wallElasticity       = o.value("welast",   d.wallElasticity);
         msg.opt.platformElasticity   = o.value("pelast",   d.platformElasticity);

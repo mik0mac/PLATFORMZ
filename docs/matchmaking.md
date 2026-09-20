@@ -40,9 +40,23 @@ name crosses the wire as a *string*, never an index, so adding one is a server
 rebuild and nothing else — an old client naming a preset that no longer exists
 gets `DEFAULT` rather than a failed join.
 
+Two match options have no slider in the OPTIONS modal, because they are things a
+preset's author sets rather than things a player dials: `maxBots` and
+`minHumansToStart`. `maxBots` caps how many
+unclaimed roster slots are filled with bots — a room is still `numPlayers` slots
+and any of them can be taken by a human, so this does not change capacity; the
+slots past the cap are simply **empty**. An empty slot has no body at all: it is
+not drawn, not shootable, and not counted when the server asks whether one player
+is left standing — but it is still in the roster and still joinable, including
+mid-match. A client learns a slot is empty from the per-player `active` flag it
+already receives, not from `maxBots` — but both rules ride the options block like
+every other, so the lobby can say how many more players a room is waiting for and
+a host's START echoes the room's own values back rather than resetting them.
+
 **Kind and visibility are different questions,** and conflating them was a real
 bug (#107). *Kind* says who is in charge: an **official** room has its options
-locked and starts itself once `PUBLIC_MIN_PLAYERS` arrive, so it promises a game
+locked and starts itself once its preset's `minHumansToStart` (default
+`PUBLIC_MIN_PLAYERS`) arrive, so it promises a game
 that begins; a **custom** room is run by the person who created it, who owns the
 options and the START button. *Visibility* only says whether it is advertised. A
 public custom room is an ordinary thing to want.
@@ -337,3 +351,8 @@ it latches `SERVER VERSION MISMATCH` and never recovers — so bump once, ship b
 ends together, and never reuse a retired value. `server/test/ci_smoke.sh` checks
 the running server's tags against `netbin.h` on every push, which is what stops a
 stale binary shipping quietly.
+
+`STATE_BIN_VERSION` is at `0x0B`: the per-tick option block grew two `u8`s, for
+`maxBots` and `minHumansToStart`, straight after the roster size. It skipped
+`0x0A` (the welcome's) and `0x06` (burned by the retired FULL packet). The flags
+byte could not absorb them — it has two free bits and these need four each.
