@@ -359,7 +359,7 @@ inline MatchPreset MakePreset(const char* label, Tune tune, std::string descript
     return MatchPreset{o, label, description};
 }
 
-//MARK: ORDER IS MEANINGFUL - typical gameplay first, niche last
+// ORDER IS MEANINGFUL - typical gameplay first, niche last
 // Read this list as a ramp. The FIRST entry is the game as it is meant to be
 // played by someone who has never played it; each one after it departs further
 // from that, and the LAST is the most specialised thing on offer. A new variant
@@ -384,7 +384,7 @@ inline MatchPreset MakePreset(const char* label, Tune tune, std::string descript
 // MatchOptions{} is exactly the rule defaults above, so DEFAULT
 // plays identically to an untouched OPTIONS modal.
 //
-//MARK: The four after DEFAULT are PLACEHOLDERS
+//MARK: Official Presets
 // Their shapes are deliberate - between them they exercise every toggle and the
 // main sliders, so the plumbing is actually proven rather than five rooms that
 // all play identically - but the NUMBERS are untuned guesses. Nobody has played
@@ -402,12 +402,12 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
 
     {"CLASSIC HYPED", MakePreset("CLASSIC HYPED", [](MatchOptions& o) {
         o.mapSize              = "LARGE";
-        o.numPlayers           = 8;
+        o.numPlayers           = 6;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
         o.maxBots              = 2;
         o.botDifficulty        = 0.5f;
-        o.speedBoost           = 1.75f;
-        o.rocketSpeedScale     = 1.5f;
+        o.speedBoost           = 1.25f;
+        o.rocketSpeedScale     = 1.25f;
         o.explosionRadiusScale = 3.0f;   // slider max is 4.0
     }, "Boosted version of classic.  LARGE map.")},
 
@@ -417,7 +417,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
         o.maxBots              = 2;
         o.botDifficulty        = 0.35f;
-        o.speedBoost           = 1.2f;
+        o.speedBoost           = 1.0f;
         o.jetpackThrust        = 1.2f;
         o.friendlyFire         = false;
         o.explosionRadiusScale = 3.0f;
@@ -433,7 +433,8 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.maxBots              = 2;          
         o.friendlyFire         = false;
         o.explosionRadiusScale = 4.0f;
-        o.speedBoost           = 2.0f;
+        o.speedBoost           = 1.25f;
+        o.wallElasticity       = 1.0f;
     }, "Super big and super fast on a SMALL map.")},
 
     {"VOID", MakePreset("THE VOID", [](MatchOptions& o) {
