@@ -128,6 +128,21 @@ struct ShellState {
     // gets on connect - and from the one that comes back after LEAVE, which
     // would otherwise bounce us straight into the room we just left.
     bool joinPending = false;
+    // The move we asked for and have not been answered about, kept so it can be
+    // asked AGAIN if the answer goes missing.
+    //
+    // Over UDP a welcome is just a datagram. Losing one leaves the server
+    // believing we are seated while this client sits in the browser forever,
+    // because nothing re-asks: the hello retry that used to cover it runs only
+    // until the server first answers us (netAcked), and the silence-reset that
+    // would notice runs only while we HOLD a slot. A dropped welcome falls
+    // exactly between the two.
+    //
+    // Empty means "do not re-send this one" - a `create` would make a second
+    // room, so it recovers by joining the code the `created` reply gave us.
+    std::string pendingMoveMsg;
+    double      pendingMoveAt = 0.0;
+    int         pendingMoveTries = 0;
     bool roomChanged = false;   // a requested move completed; the screen acts on it
     // The mirror of roomChanged: we HELD a room and now hold none, because the
     // server said `unseated`. LEAVE is the ordinary way to get here and routes

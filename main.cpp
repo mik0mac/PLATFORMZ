@@ -821,6 +821,7 @@ int main(int argc, char** argv) {
             // rather than "the code differs", which is also true on connect and
             // on the way back out of a room after LEAVE.
             if (shell.joinPending) { shell.joinPending = false; shell.roomChanged = true; }
+            shell.pendingMoveMsg.clear();   // answered
             shell.inMatchCode = m.matchCode;
             shell.inMatchKind = m.matchKind;
             // Now that we know our real slot, assert our name: send our display
@@ -891,6 +892,7 @@ int main(int argc, char** argv) {
             // The move we were waiting on is not happening; leave the flag set and
             // the NEXT welcome for any reason would fling us into a lobby.
             shell.joinPending = false;
+            shell.pendingMoveMsg.clear();   // answered, unhappily
             // Render a sentence, never the wire token - joinFailureText owns that
             // mapping so the client and the protocol can drift apart safely.
             shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
@@ -1010,6 +1012,17 @@ int main(int argc, char** argv) {
         gameSpace.getMessages().clear();
         gameSpace.getAudioEvents().clear();
         return phase;
+    };
+
+    // Ask the server to put us in a room, remembering how so a lost answer can be
+    // asked again. `retryable` is false for a create, which is not idempotent -
+    // re-sending it would make a second room (see the recovery in the net block).
+    auto askToMove = [&](const std::string& msg, bool retryable) {
+        shell.joinPending      = true;
+        shell.pendingMoveMsg   = retryable ? msg : std::string();
+        shell.pendingMoveAt    = GetTime();
+        shell.pendingMoveTries = 0;
+        if (net.isOpen()) net.send(msg);
     };
 
     // GAME_OVER/title -> TITLE. Local: wipe the world for a clean restart.
@@ -1281,6 +1294,33 @@ int main(int argc, char** argv) {
             // Seated and hearing nothing: the connection is gone. Gated on
             // holding a slot on purpose - a parked client is ENTITLED to silence,
             // since state packets belong to a room and it is not in one.
+            // A move we asked for that nobody answered. This is the one gap the
+            // two recoveries below and above cannot cover between them: the hello
+            // retry stops once the server has answered us AT ALL (netAcked), and
+            // the silence-reset only runs while we already hold a slot. A welcome
+            // dropped on the way to a joining client falls exactly between, and
+            // leaves the server thinking we are in a room this client is not
+            // showing. Ask again, a few times, then say so rather than sitting
+            // there.
+            if (shell.joinPending && net.isOpen() && nowT - shell.pendingMoveAt > 1.5) {
+                const bool canRetry = !shell.pendingMoveMsg.empty();
+                // A create is not idempotent, so it recovers by NAME: the
+                // `created` reply already told us the code, and asking for that
+                // room is safe however many times we do it.
+                const bool canRejoin = !canRetry && !shell.createdCode.empty();
+                if ((canRetry || canRejoin) && shell.pendingMoveTries < 3) {
+                    ++shell.pendingMoveTries;
+                    shell.pendingMoveAt = nowT;
+                    net.send(canRetry ? shell.pendingMoveMsg
+                                      : serializeJoin(shell.createdCode, shell.createdCode));
+                    TraceLog(LOG_WARNING, "No answer to our join; asking again (%d/3)",
+                             shell.pendingMoveTries);
+                } else {
+                    shell.joinPending = false;
+                    shell.pendingMoveMsg.clear();
+                    shell.setBrowseStatus("NO ANSWER FROM THE SERVER - TRY AGAIN", nowT);
+                }
+            }
             if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0) {
                 myIndex  = -1;      // UDP only: treat as disconnected...
                 netAcked = false;   // ...and let the hello handshake run again
@@ -1359,10 +1399,9 @@ int main(int argc, char** argv) {
             // to a connection the server has not finished setting up.
             if (sessionOnline && !inviteCode.empty() && net.isOpen() && myIndex >= 0) {
                 shell.setBrowseStatus("JOINING " + inviteCode + "...", GetTime());
-                shell.joinPending = true;
                 // The code doubles as the password for an invite-only room, which
                 // is what makes one string the whole invite.
-                net.send(serializeJoin(inviteCode, inviteCode));
+                askToMove(serializeJoin(inviteCode, inviteCode), /*retryable*/ true);
                 inviteCode.clear();
             }
             // A completed move lands us in the room's lobby. Only a move WE asked
@@ -1402,8 +1441,8 @@ int main(int argc, char** argv) {
                         shell.matches.clear();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
-                        shell.joinPending = true;
-                        if (net.isOpen()) { net.send(serializeQuick()); net.send(serializeList(0)); }
+                        askToMove(serializeQuick(), /*retryable*/ true);
+                        if (net.isOpen()) net.send(serializeList(0));
                         shell.setBrowseStatus("FINDING A MATCH...", GetTime());
                         screen = GameScreen::BROWSE;
                         break;
@@ -1526,9 +1565,9 @@ int main(int argc, char** argv) {
                                         !shell.showOptions)) {
                     case CustomAction::Options: shell.showOptions = true; break;
                     case CustomAction::Create:
-                        shell.joinPending = true;
-                        net.send(serializeCreate(shell.customName, "DEFAULT",
-                                                 shell.customPrivate, ""));
+                        askToMove(serializeCreate(shell.customName, "DEFAULT",
+                                                  shell.customPrivate, ""),
+                                  /*retryable*/ false);   // would make a second room
                         break;
                     case CustomAction::Back: screen = GameScreen::TITLE; break;
                     case CustomAction::None: break;
@@ -1690,8 +1729,7 @@ int main(int argc, char** argv) {
                         break;
                     case BrowseAction::Quick:
                         shell.setBrowseStatus("FINDING A MATCH...", nowT);
-                        shell.joinPending = true;
-                        net.send(serializeQuick());
+                        askToMove(serializeQuick(), /*retryable*/ true);
                         break;
                     case BrowseAction::Create:
                         // Naming and visibility belong on their own screen now, so
@@ -1707,8 +1745,7 @@ int main(int argc, char** argv) {
                         break;
                     case BrowseAction::Join:
                         shell.setBrowseStatus("JOINING " + r.code + "...", nowT);
-                        shell.joinPending = true;
-                        net.send(serializeJoin(r.code, r.joinCode));
+                        askToMove(serializeJoin(r.code, r.joinCode), /*retryable*/ true);
                         break;
                     case BrowseAction::None:
                         break;
