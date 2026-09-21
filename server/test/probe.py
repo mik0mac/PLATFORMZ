@@ -269,6 +269,62 @@ OPTS = {"half": 120.0, "plat": 128, "roid": 18, "nplayers": 4, "diff": 0.2,
         "xradius": 1.0, "jthrust": 1.0, "fburn": 5, "fregen": 40,
         "walls": True, "phys": False, "ff": True, "coast": True}
 
+# The room a connection lands in when it names none is an OFFICIAL room: locked,
+# no host, no START button - it starts itself once enough humans are present. A
+# probe that wants to DRIVE a match therefore has to make a room it hosts.
+#
+# Public rather than invite-only, so the other clients can join by code alone (a
+# private room demands its own code back as the join code). Each probe gets its
+# own fresh server, so nothing else is ever looking at this listing.
+def host_room(client, name="PROBE ROOM", preset="DEFAULT", timeout=5.0):
+    """Create a CUSTOM room, land in it, and return its code ("" on failure)."""
+    client.send({"type": "create", "n": name, "pre": preset, "priv": False, "code": ""})
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.1)
+        if client.created and client.matchCode == client.created[-1]:
+            return client.matchCode
+    return ""
+
+
+def take_any_room(client, timeout=6.0):
+    """Get a seat ANYWHERE - the probe's QUICK MATCH.
+
+    hello() does not land you in a room any more: you arrive in the directory
+    holding nothing and choose (C6b). Probes that need a seat but do not care
+    which one say so here, instead of relying on the server to pick for them.
+    """
+    client.send({"type": "quick"})
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.1)
+        if client.slot is not None:
+            return client.matchCode
+    return ""
+
+
+def handshake_landed(client):
+    """Is this client through the door, seated or not?
+
+    Either answer proves the handshake completed: a welcome (we hold a slot) or
+    an `unseated` (we are connected and hold nothing). Before C6a only the first
+    existed, so probes asserted on a slot to mean "connected" - which stopped
+    being the same question once arriving without a room became normal.
+    """
+    return client.slot is not None or client.unseated > 0
+
+
+def join_room(client, code, timeout=5.0):
+    """Move an already-helloed client into `code`. True once it is actually there."""
+    client.send({"type": "join", "m": code, "code": ""})
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.1)
+        if client.matchCode == code:
+            return True
+    return False
+
+
 # Guarded so probe_idle.py (and anything else) can import C/OPTS without
 # running this whole scenario as a side effect of the import.
 def main():

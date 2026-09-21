@@ -16,7 +16,7 @@ so one player can legitimately hold several rows.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, host_room, join_room
 
 fails = 0
 def check(ok, what):
@@ -49,7 +49,13 @@ a.hello()
 time.sleep(1.2)
 b = C("MIKE")          # a DIFFERENT player who typed the same thing
 b.hello()
-time.sleep(1.5)
+time.sleep(1.0)
+# The landing room is official and starts itself, so A makes a room it hosts and
+# B follows it in - this probe drives the match by hand.
+room = host_room(a, "SCOREBOARD")
+check(bool(room), f"hosted a room to play in ({room})")
+check(join_room(b, room), f"the second MIKE joined it ({b.matchCode})")
+time.sleep(0.8)
 check(a.slot is not None and b.slot is not None, "both seated")
 check(bool(a.identities) and bool(b.identities), "both were issued identities")
 check(a.identities[-1] != b.identities[-1] if (a.identities and b.identities) else False,

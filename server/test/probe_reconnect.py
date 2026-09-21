@@ -23,7 +23,7 @@ What this checks, in order of how easy each is to get wrong:
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, host_room, join_room
 
 def body(c, slot, timeout=3.0):
     """The body in `slot` as `c` currently sees it, waiting for a readable view.
@@ -72,7 +72,13 @@ host.hello()
 time.sleep(0.4)
 buddy = C("BUDDY", cid=CID_B)
 buddy.hello()
-time.sleep(1.0)
+time.sleep(0.8)
+# The landing room is official - locked and self-starting - and this probe needs
+# a match it can start, end and reconnect into on its own schedule.
+hosted = host_room(host, "RECONNECT")
+check(bool(hosted), f"hosted a room to play in ({hosted})")
+check(join_room(buddy, hosted), f"buddy joined it ({buddy.matchCode})")
+time.sleep(0.8)
 
 # The held body must survive the whole grace window unattended for any of this to
 # be testable, and the defaults shred it: the first version came back at 4 hp and

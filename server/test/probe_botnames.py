@@ -14,7 +14,7 @@ Three things, which are the three ways this can be wrong:
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, host_room
 
 fails = 0
 def check(ok, what):
@@ -37,7 +37,11 @@ def end_match(host):
 print("a lineup exists at all")
 a = C("WATCHER")
 a.hello()
-time.sleep(1.5)
+time.sleep(1.0)
+# The landing room is official and starts itself, which would re-roll the lineup
+# mid-assertion. Host a room so this probe owns when matches begin and end.
+check(bool(host_room(a, "BOT NAMES")), f"hosted a room to watch ({a.matchCode})")
+time.sleep(1.0)
 check(a.slot is not None, "seated")
 lobby = lineup(a)
 check(len(lobby) >= 2, f"the lobby previews bots: {lobby}")

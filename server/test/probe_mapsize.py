@@ -16,7 +16,7 @@ Two separate claims, and this checks both:
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, host_room, join_room
 
 # constants.h mapSizePresets - halfSize per preset.
 HALF = {"SMALL": 90.0, "MEDIUM": 120.0, "LARGE": 240.0, "XL": 360.0}
@@ -28,9 +28,16 @@ def check(ok, what):
     if not ok: fails += 1
 
 host = C("HOST"); host.hello(); time.sleep(1.0)
-peer = C("PEER"); peer.hello(); time.sleep(1.2)
+peer = C("PEER"); peer.hello(); time.sleep(1.0)
+# An official room refuses `options` from everyone, so the map could never be
+# retuned in the landing room. Host a custom one - which is the only place a
+# player can pick an arena anyway.
+room = host_room(host, "MAP SIZE")
+check(bool(room), f"hosted a room ({room})")
+check(join_room(peer, room), f"peer joined it ({peer.matchCode})")
+time.sleep(0.8)
 check(host.slot is not None and peer.slot is not None,
-      f"two clients in the default room (slots {host.slot}, {peer.slot})")
+      f"two clients in the hosted room (slots {host.slot}, {peer.slot})")
 
 print("the host's choice reaches the lobby, before anything starts")
 for want in ("SMALL", "LARGE", "XL", "MEDIUM"):

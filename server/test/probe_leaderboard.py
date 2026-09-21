@@ -20,7 +20,7 @@ scores, and it arrives while phase is still "playing".
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, host_room, handshake_landed
 
 fails = 0
 def check(ok, what):
@@ -31,7 +31,10 @@ def check(ok, what):
 a = C("SCORER")
 a.hello()
 time.sleep(1.0)
-check(a.slot is not None, "joined")
+check(handshake_landed(a), "connected (holding no room yet)")
+# The landing room is official - locked, self-starting - so host one instead.
+check(bool(host_room(a, "LEADERBOARD")), f"hosted a room to play in ({a.matchCode})")
+time.sleep(0.8)
 
 before = len(a.leaderboards)
 a.send({"type": "start", **OPTS})

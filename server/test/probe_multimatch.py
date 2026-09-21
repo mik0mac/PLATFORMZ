@@ -44,6 +44,17 @@ wait()
 listed = [r.get("n") for r in (b.matchlists[-1].get("m", []) if b.matchlists else [])]
 check("ALPHA HOUSE" not in listed, f"BRAVO cannot see it: {listed}")
 
+print("BRAVO takes a room of its own")
+# BRAVO used to just sit in the landing room, which is OFFICIAL: locked, and it
+# starts itself once its threshold is met. That made "BRAVO is still in the
+# lobby" a statement about auto-start rather than about room isolation, and it
+# broke outright once a preset asked for only one human. A room BRAVO hosts does
+# nothing until BRAVO says so, which is what these checks are actually about.
+b.send({"type": "create", "n": "BRAVO HOUSE", "priv": False, "code": ""})
+wait(1.5)
+bravoRoom = b.created[-1] if b.created else None
+check(bool(bravoRoom), f"BRAVO has its own room: {b.created}")
+
 print("they are now in different rooms")
 a.send({"type": "start", **OPTS})     # only ALPHA's room starts
 wait(7.0)

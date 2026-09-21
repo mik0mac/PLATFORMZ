@@ -11,7 +11,7 @@ score and colour.
 """
 import sys, os, time, struct
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, host_room, join_room
 
 fails = 0
 def check(ok, what):
@@ -30,7 +30,13 @@ host.hello()
 time.sleep(0.4)
 buddy = C("BUDDY")
 buddy.hello()
-time.sleep(1.0)
+time.sleep(0.8)
+# The landing room is official and starts itself; this probe needs to control
+# when the match begins, so the host makes its own room.
+room = host_room(host, "JOIN IN PROGRESS")
+check(bool(room), f"hosted a room to play in ({room})")
+check(join_room(buddy, room), f"buddy joined it ({buddy.matchCode})")
+time.sleep(0.8)
 # friendlyFire off and a passive host: with one human, the host dying ends the
 # match (aliveHumans == 0) and there is nothing left to join. The bots fight
 # each other regardless, which is what damages them.
@@ -61,6 +67,8 @@ if not hurt:
 print("a latecomer joins the live match")
 late = C("LATECOMER")
 late.hello()
+time.sleep(0.4)
+join_room(late, room)
 # Sample score AND health as early as we can see ourselves, and again later.
 # Inheriting the bot's points and EARNING points from the bot's still-in-flight
 # rockets look identical if you only look once.
