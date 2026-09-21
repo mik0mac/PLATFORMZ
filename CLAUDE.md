@@ -166,6 +166,15 @@ Connecting puts a client in the **directory, not a room**: it holds no slot unti
 it picks one, `leave` returns it to that state, and a refused join leaves it
 there. `probe_unseated.py` is the probe for that whole lifecycle.
 
+The directory is ordered by **how close each room is to being a game** — joinable
+lobbies first, then fewest free spots, then the `options.h` preset ramp, then the
+code. It is a *live* key, which has two consequences worth knowing before touching
+it: paging past page 0 serves a per-connection **snapshot** (re-sorting between
+pages could show a room twice or skip it), and the client's browser **does not
+poll** — REFRESH is the only thing that re-reads the world, because a list that
+reorders under a player is a list they misclick. `probe_listorder.py` tests both
+halves; `docs/matchmaking.md` has the full contract.
+
 ## Collision system (collisions.cpp)
 - `RunCollisionChecks()` runs once per frame (after positions update, before
   active-object cleanup): rebuild grid → rocket-vs-{asteroid,platform,wall,player}

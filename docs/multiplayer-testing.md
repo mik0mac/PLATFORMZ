@@ -325,7 +325,14 @@ sliderless roster rules: `probe_maxbots.py` (a `maxBots = 0` room fields no bots
 leaves its other slots genuinely empty, and — the regression that matters — keeps
 playing instead of ending on its first tick) and `probe_minhumans.py` (an official
 room arms on its own preset's head count, not the compile-time one; it waits out a
-countdown that must *not* fire, so it takes ~30 s). Each gets its
+countdown that must *not* fire, so it takes ~30 s). `probe_listorder.py` covers
+the browser's order and the snapshot that holds it still: that a freshly booted
+server lists in preset order, that occupancy outranks the preset ramp and a match
+already in progress outranks neither, and — the one worth understanding before
+changing it — that paging past page 0 slices the SAME snapshot even when
+occupancy changed in between. That last check only bites if the churn crosses the
+page boundary; the first cut moved a room around inside page 0 and passed against
+a server that re-sorted on every request. Each gets its
 own fresh server, because several leave state behind that would fail the next one
 for the wrong reason. Run one on its own while poking at the server:
 

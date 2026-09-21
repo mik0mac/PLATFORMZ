@@ -1709,13 +1709,15 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Poll the list while the screen is open. Rooms fill and empty
-            // constantly, and a stale list offers joins that bounce.
+            // NO AUTO-POLL. This screen used to re-ask every two seconds, which
+            // was harmless while the server ordered the list by room code - a key
+            // that never changes, so a reply could only ever update the numbers in
+            // rows that stayed put. The list is now ordered by how full each room
+            // is, so a poll can REORDER IT, and reordering a list somebody is
+            // reaching for is how you make them click the room next to the one
+            // they aimed at. The list is a snapshot; REFRESH is how you take a
+            // new one.
             const double nowT = GetTime();
-            if (net.isOpen() && nowT - shell.lastListAt > 2.0) {
-                shell.lastListAt = nowT;
-                net.send(serializeList(shell.listCursor));
-            }
 
             if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
 
@@ -1729,9 +1731,15 @@ int main(int argc, char** argv) {
                         screen = GameScreen::TITLE;
                         break;
                     case BrowseAction::Refresh:
+                        // Cursor 0, not the page we happen to be on: that is what
+                        // tells the server to take a fresh snapshot (every other
+                        // cursor pages through the last one), and a page number
+                        // means nothing against a list that has been reordered
+                        // anyway - page 2 of the old order is not page 2 of the new.
                         shell.awaitingList = true;
+                        shell.listCursor = 0;
                         shell.lastListAt = nowT;
-                        net.send(serializeList(shell.listCursor));
+                        net.send(serializeList(0));
                         break;
                     case BrowseAction::Page:
                         shell.awaitingList = true;

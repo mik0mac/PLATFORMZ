@@ -216,6 +216,57 @@ The list is **capped to one datagram** (~1160 bytes, 8 rows) and paged with
 deliberately *below* the room cap so the paging path runs from day one rather
 than rotting until the cap is raised.
 
+#### The order
+
+Rooms come back **sorted by how close each one is to being a game**, outermost
+key first:
+
+1. **Band.** Joinable lobbies (`lobby`/`countdown`), then joinable matches
+   already in progress, then rooms you cannot enter at all (full, or `gameover`).
+   A 7/8 room that is already playing is a worse offer than a 2/8 lobby, so
+   fullness is not allowed to lift it above one. Unjoinable rooms are still
+   *listed* — the browser draws an inert reason on the row rather than making it
+   vanish — but never above something you can actually join.
+2. **Fewest free spots.** The anti-fragmentation rule: five players spread across
+   five empty rooms is the failure state of a small-population game, so the
+   second person to arrive should land on the first person's room rather than
+   beside it. Free spots, **not** head count — rosters differ per preset, so
+   ranking by players would put a 5/8 room above a 3/4 room that is one person
+   from starting.
+3. **Preset rank** — the typical-to-niche ramp in `options.h`, the same one QUICK
+   MATCH walks.
+4. **Code**, which makes the order *total*: without it, many rooms of one preset
+   at one occupancy would have no defined order and could shuffle between two
+   requests.
+
+Every **empty** room is clamped to the same free-spot key, so empty rooms tie and
+fall through to the preset ramp. That is what makes a freshly booted server —
+where every room is empty — list in exactly preset order, every time, with no
+separate mechanism keeping it there.
+
+#### Paging is a snapshot
+
+`cur = 0` means **take a fresh snapshot**; every other cursor is a slice of that
+same frozen vector, contents included. This is not an optimisation. The order
+above is derived from *live* occupancy, so re-deriving it for page 1 could cut
+that page from a list sorted differently to the one page 0 came from — showing a
+room on both pages, or on neither. Sorting by room code used to make that
+invariant free.
+
+A snapshot is held per connection (on the rate-limit record, which is already
+keyed by connection id and already swept) and is at most `MATCH_MAX_CONCURRENT`
+rows.
+
+The client side of this is that the browser **does not poll**. It used to re-ask
+every two seconds, which was harmless against a key that never changed but would
+now reorder the list under a player reaching for a row. The list is a snapshot;
+REFRESH sends `cur = 0` and is the only thing that takes a new one. The button
+goes inert for a second after each ask, because an over-budget `list` is dropped
+without a reply (see the rate limits below) and a mashed button would otherwise
+leave the screen waiting on a request that no longer exists.
+
+`probe_listorder.py` is the test for all of it.
+
 ### `joinfail` reasons
 
 | `why` | Means |

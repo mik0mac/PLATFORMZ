@@ -1665,6 +1665,54 @@ client never needed it to *render* an empty slot — the per-player `active` fla
 already told it to skip one, and widening that to exclude vacant slots was a
 one-line change at each of the two builders.
 
+### E6. The browser's order — **DONE**
+
+The match list was sorted by room code. Arbitrary, but *constant*, which is why
+nothing downstream had to think about it. It is now sorted by how close each room
+is to being a game: band, then fewest free spots, then preset rank, then code.
+The full contract is in `docs/matchmaking.md`; what belongs here is why it is not
+one of the two schemes that came first.
+
+**Rejected: encode the order into the room code.** The original idea — mint
+official rooms with a numeric prefix so they sort above alphabetical custom codes
+— fails on three counts, and the third is the one that matters. The code alphabet
+deliberately excludes `0`, `1`, `O` and `I` so a code can be read aloud, so an
+index prefix starting at 0 reintroduces exactly the two characters that alphabet
+exists to avoid. It also would not separate the two kinds: the first eight
+alphabet characters *are* digits, so about a quarter of custom codes already
+begin with one. And codes are permanent (`retired_` never reuses one), so a
+positional prefix spends **identity** on **presentation** — any later reordering
+becomes unreachable without re-minting.
+
+**Rejected: a preset-ranked sort, official rooms first.** The cheap version of
+the same goal, and it dies on a structural fact rather than a detail: the boot
+loop's one-official-room-per-preset is a coincidence of today's code, not a law.
+A preset is a *template* and will eventually spawn many rooms, so grouping by
+preset means twenty CLASSIC rooms bury every other preset on page three — which
+is the burial the ordering was supposed to prevent.
+
+**Deferred, not rejected: the shelf.** "One curated set always at the top" is a
+real want and it is a *different mechanism* — a slate of N entries held apart from
+both the preset and the room, in a declared order. Three shapes were considered:
+a rank on the room (dead front row the moment that specific room fills), a rank
+on a slot with the room rotating through it, and a shelf that is not rooms at all
+— the top of the browser becoming *the ways to play*, with the room list below.
+The third dissolves the problem instead of solving it (static data cannot be
+buried, go stale, or fill up) and is the one to build if the shelf comes back. It
+waits because the fullness sort turned out to cover the need: at cold boot every
+room is empty, every room ties, and the preset ramp is the whole answer — so a
+restart-consistent order falls out for free.
+
+**What the live key cost.** Exactly one invariant, and it had to be bought back:
+sorting on occupancy means page 1 can be cut from a differently-sorted list than
+page 0, showing a room twice or skipping it. Hence the per-connection page-0
+snapshot, and hence the client's browser no longer polling — a two-second re-ask
+would reorder the list under a player reaching for a row. That failure mode is
+not hypothetical here: a "join does nothing until the second click" bug earlier
+in this epic was *misdiagnosed* as list re-ordering, and was only ruled out
+because `buildMatchList` sorted on a key that could not move. The next such bug
+would not have that alibi, so the snapshot is what keeps it available.
+
 ---
 
 # Epic F — Road to Steam (macOS + Windows), web maintained

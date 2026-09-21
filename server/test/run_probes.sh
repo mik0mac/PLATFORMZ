@@ -70,7 +70,7 @@ esac
 # Every probe, in an order chosen so the cheap ones fail first.
 ALL_PROBES="probe probe_cookie probe_identity probe_scoreboard probe_botnames probe_capacity probe_leaderboard probe_directory \
 probe_official probe_host probe_mapsize probe_multimatch probe_joinprogress probe_reconnect \
-probe_maxbots probe_minhumans probe_unseated"
+probe_maxbots probe_minhumans probe_unseated probe_listorder"
 PROBES="${PLATFORMZ_PROBE_SET:-$ALL_PROBES}"
 
 # Never leave a server behind. An interrupted run - Ctrl-C, or a pipeline whose
@@ -101,15 +101,18 @@ for probe in $PROBES; do
   # strays end up holding port 9000 and the next run refuses to start. With exec
   # the subshell BECOMES gameserver, so $! is the thing we actually want to kill.
   # Per-probe server environment. probe_directory fills the registry to prove
-  # paging works, and every probe client shares one source address (127.0.0.1),
-  # so E2's per-address creation budget would stop it at three rooms - the probe
+  # paging works, and probe_listorder fills past one page to prove the paging
+  # SNAPSHOT holds; every probe client shares one source address (127.0.0.1), so
+  # E2's per-address creation budget would stop either at three rooms - the probe
   # would then fail for a reason that has nothing to do with paging. 0 turns that
   # budget off, which is the same knob an operator turns for a LAN party behind
   # one NAT. probe_capacity tests the budget itself, so it gets the default.
   # A plain string, deliberately unquoted below so it word-splits to nothing when
   # empty. An empty ARRAY would be cleaner but trips `set -u` on macOS's bash 3.2.
   env_extra=""
-  [ "$probe" = "probe_directory" ] && env_extra="PLATFORMZ_MAX_ROOMS_PER_ADDR=0"
+  case "$probe" in
+    probe_directory|probe_listorder) env_extra="PLATFORMZ_MAX_ROOMS_PER_ADDR=0" ;;
+  esac
 
   # shellcheck disable=SC2086  # $env_extra must split
   ( cd server && exec env PLATFORMZ_SCORES="$TMP/$probe.scores" $env_extra "./$SERVER_BIN" >"$log" 2>&1 ) &

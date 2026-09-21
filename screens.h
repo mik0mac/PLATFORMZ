@@ -509,8 +509,24 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
 
     UiTextCentered("FIND A MATCH", screenW, 80, 40, RAYWHITE);
 
-    if (UiButton({listX + listW - 130.0f, listY - 46.0f, 130.0f, 34.0f}, "REFRESH", 18) && connected)
-        out.action = BrowseAction::Refresh;
+    // REFRESH is the ONLY thing that re-orders this list (the browser stopped
+    // polling when the order became live), so it carries more weight than it used
+    // to - and it is worth not letting a player spend it on nothing. The server
+    // allows a small burst and then one list a second, and drops anything over
+    // budget WITHOUT A REPLY, so a mashed button would sit on "LOOKING FOR
+    // MATCHES..." with no request left alive to answer it. Inert for a second
+    // after each ask, drawn the same way an unjoinable row's button is: visible
+    // and obviously not available, rather than missing.
+    const Rectangle refreshBtn = {listX + listW - 130.0f, listY - 46.0f, 130.0f, 34.0f};
+    const bool refreshReady = connected && (now - s.lastListAt) >= 1.0;
+    if (refreshReady) {
+        if (UiButton(refreshBtn, "REFRESH", 18)) out.action = BrowseAction::Refresh;
+    } else {
+        UiPanel(refreshBtn, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));
+        int tw = MeasureText("REFRESH", 18);
+        DrawText("REFRESH", (int)(refreshBtn.x + (refreshBtn.width - tw) / 2),
+                 (int)(refreshBtn.y + 8), 18, GRAY);
+    }
 
     // Total count, so a capped page is not mistaken for the whole world.
     DrawText(s.listTotal == 1 ? "1 MATCH" : TextFormat("%d MATCHES", s.listTotal),

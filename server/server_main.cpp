@@ -2050,6 +2050,12 @@ struct ConnBudget {
     double joinWindow   = 0.0;   // start of the minute the bad joins below are counted in
     int    badJoins     = 0;
     double touchedSec   = 0.0;   // for the sweep; see PruneBudgets
+    // The browser's page-0 snapshot, so later pages slice the same list rather
+    // than a freshly sorted one. Not a budget, but it is connection-scoped and
+    // this record is the one thing already keyed by connId AND already swept.
+    // Capped by the registry: at most MATCH_MAX_CONCURRENT rows. See
+    // ListSnapshotFor.
+    std::vector<MatchListing> listSnapshot;
 };
 static std::map<uint64_t, ConnBudget> g_budgets;
 
@@ -2224,12 +2230,109 @@ const int    DIR_LIST_MAX_ROWS     = 8;
 static_assert(DIR_LIST_MAX_ROWS < MATCH_MAX_CONCURRENT,
               "page size must stay under the match cap or paging is unreachable");
 
-static std::string buildMatchList(int cursor) {
+// Which band of the browser a room belongs in. The bands are the coarse answer
+// to "how good a join is this right now", and they outrank fullness: a 7/8 room
+// already PLAYING is a worse place to land than a 2/8 lobby, because you would
+// be dropping into a match somebody else is most of the way through.
+enum class ListBand : int {
+    Filling  = 0,   // joinable, still in its lobby or counting down
+    InPlay   = 1,   // joinable, but the match is already running
+    Closed   = 2,   // full, or winding down in GAMEOVER
+};
+static ListBand BandOf(const MatchListing& r) {
+    if (!r.joinable) return ListBand::Closed;
+    return (r.phase == Phase::LOBBY || r.phase == Phase::COUNTDOWN)
+         ? ListBand::Filling : ListBand::InPlay;
+}
+
+// The browser's order, and the reason it is not the room code any more.
+//
+// This is an ANTI-FRAGMENTATION sort. The failure state of a small-population
+// game is five players spread across five empty rooms, so the list is ordered by
+// how close a room is to being a game: fewest FREE SPOTS first, which puts the
+// second player to arrive on the first player's room instead of beside it.
+//
+// Free spots, not head count. Rosters differ per preset - MAYHEM is a 4-slot
+// room, THE VOID is 8 - so ranking by players would put a 5/8 room above a 3/4
+// room when 3/4 is one person away from a match.
+//
+// EMPTY ROOMS ARE NOT RANKED BY SIZE. An empty room has no fullness to measure,
+// and its free-spot count is just its roster size - which would sort a 4-slot
+// room above an 8-slot one for no reason a player could see, and would make a
+// room's position change after its first match (the lobby roster is
+// GAMESPACE_NUMBER_OF_PLAYERS at boot and the preset's numPlayers ever after).
+// So every empty room is clamped to the same key and they tie, which hands the
+// decision to the preset ramp. That is what makes a freshly booted server - where
+// every room is empty - list in exactly preset order, every time, with no
+// separate mechanism to keep it there.
+//
+// The tail of the key is what makes it TOTAL: preset rank first (the
+// typical-to-niche ramp QUICK MATCH already walks), then the code, which is
+// unique. Without that last one, twenty rooms of the same preset with the same
+// occupancy would have no defined order and could shuffle between requests.
+static bool ListOrderLess(const MatchListing& a, const MatchListing& b) {
+    const int ba = (int)BandOf(a), bb = (int)BandOf(b);
+    if (ba != bb) return ba < bb;
+
+    // Clamped so every empty room ties - see above.
+    auto key = [](const MatchListing& r) {
+        return r.players <= 0 ? GAMESPACE_NUMBER_OF_PLAYERS
+                              : r.maxPlayers - r.players;
+    };
+    const int fa = key(a), fb = key(b);
+    if (fa != fb) return fa < fb;
+
+    const size_t pa = MatchPresetRank(a.presetName), pb = MatchPresetRank(b.presetName);
+    if (pa != pb) return pa < pb;
+    return a.code < b.code;
+}
+
+// A connection's page-0 snapshot, so paging is consistent.
+//
+// The old order was the room code, which never changes, so paging could be
+// served straight from the registry. This one is built from LIVE occupancy, so
+// re-deriving it for page 1 could hand back a list sorted differently from the
+// one page 0 came out of - showing a room twice, or skipping one entirely. That
+// is the invariant the code sort used to provide for free.
+//
+// So a `list` with cursor 0 means "take a fresh snapshot", and every later page
+// is a slice of that same frozen vector - contents included, not just the order.
+// A page 1 that showed current player counts against a page-0 membership would be
+// a third thing that matches neither. REFRESH in the client sends cursor 0, which
+// is what makes the button mean "get the latest states".
+//
+// Stored on the per-connection budget record because that is already keyed by
+// connId, already swept (PruneBudgets), and already the place connection-scoped
+// scratch lives. Bounded by MATCH_MAX_CONCURRENT rows per connection.
+static std::vector<MatchListing> ListSnapshotFor(uint64_t connId, bool rebuild) {
+    const double now = NowSec();
+    if (!rebuild) {
+        std::lock_guard<std::mutex> lk(g_budgetMutex);
+        auto it = g_budgets.find(connId);
+        if (it != g_budgets.end() && !it->second.listSnapshot.empty()) {
+            it->second.touchedSec = now;
+            return it->second.listSnapshot;
+        }
+        // Fall through: no snapshot to page through (a swept entry, or a client
+        // that asked for page 1 first). Building one now is better than serving
+        // nothing, and it becomes the snapshot the rest of the paging uses.
+    }
+
     std::vector<MatchListing> all = g_registry.List(/*includePrivate*/ false);
-    // Stable order, so paging can't show the same room twice or skip one as
-    // rooms come and go between requests.
-    std::sort(all.begin(), all.end(),
-              [](const MatchListing& a, const MatchListing& b) { return a.code < b.code; });
+    std::sort(all.begin(), all.end(), ListOrderLess);
+    {
+        std::lock_guard<std::mutex> lk(g_budgetMutex);
+        ConnBudget& b = g_budgets[connId];
+        b.touchedSec   = now;
+        b.listSnapshot = all;
+    }
+    return all;
+}
+
+static std::string buildMatchList(uint64_t connId, int cursor) {
+    // Cursor 0 is a fresh look; anything else pages through the one we already
+    // took. See ListSnapshotFor.
+    std::vector<MatchListing> all = ListSnapshotFor(connId, /*rebuild*/ cursor <= 0);
 
     if (cursor < 0) cursor = 0;
     std::string rows;
@@ -2290,7 +2393,7 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         // opens and once per page, so a real client never notices; a script
         // asking 10,000 times a second gets one reply a second.
         if (!AllowListReply(connId)) return true;
-        SendToClient(c, buildMatchList((int)parseUInt(msg, "cur", 0)));
+        SendToClient(c, buildMatchList(connId, (int)parseUInt(msg, "cur", 0)));
         return true;
     }
 
