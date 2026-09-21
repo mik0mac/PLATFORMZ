@@ -19,7 +19,7 @@ Then the budgets: rooms per address, and moves per second.
 """
 import sys, os, time, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C
+from probe import C, take_any_room, handshake_landed
 
 fails = 0
 def check(ok, what):
@@ -29,13 +29,15 @@ def check(ok, what):
 
 def wait(t=0.8): time.sleep(t)
 
-print("fill the default room")
-# One client first, to learn the default room's code off its welcome.
+print("fill a room")
+# One client first, to learn a room's code off its welcome. It has to ASK for a
+# seat now - connecting lands you in the directory holding nothing (C6b) - so
+# this is the probe's QUICK MATCH. Everyone after it names the room it landed in.
 first = C("P0")
 first.hello()
 wait(1.2)
-home = first.matchCode
-check(first.slot is not None, f"first client seated in {home}")
+home = take_any_room(first)
+check(first.slot is not None, f"first client seated in {home!r}")
 
 crowd = [first]
 for i in range(1, 12):                  # more than the 8 slots, on purpose
@@ -110,7 +112,9 @@ print("rooms per address")
 maker = C("MAKER")
 maker.hello()
 wait(1.2)
-check(maker.slot is not None, "the room-maker is seated")
+check(handshake_landed(maker), "the room-maker is through")
+# Creating does not need a seat first - a roomless client is exactly who
+# makes a room, and `create` puts them in the one they just made.
 # The first one carries a deliberately hostile name, because there is nowhere
 # better to test that and it costs nothing. Sent as RAW BYTES: the server parses
 # JSON by string search, so a control character has to actually be in the

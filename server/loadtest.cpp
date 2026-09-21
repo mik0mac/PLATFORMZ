@@ -248,11 +248,34 @@ static WsResult WsConnect(const Opts& o, const std::string& token, double second
         if (!token.empty()) { target += sep + std::string("tok=") + token; }
         ws.handshake(o.host + ":" + o.port, target);
 
+        // Connecting does not seat you any more (C6b): you arrive holding no
+        // room and pick one. So do what the real client's QUICK MATCH does, or
+        // no welcome and no state will ever arrive and there is nothing to smoke
+        // test.
+        ws.write(net::buffer(serializeQuick()));
+
+        // Bound the read. ws.read() blocks forever, and the deadline below is
+        // only consulted BETWEEN reads - so a server that simply says nothing
+        // (exactly what a parked connection gets) hung this harness rather than
+        // failing it, which in CI is a job that never ends. Two seconds is far
+        // longer than a 60 Hz stream's gap, so a healthy run never sees it.
+        {
+            struct timeval tv;
+            tv.tv_sec  = 2;
+            tv.tv_usec = 0;
+            setsockopt(ws.next_layer().native_handle(), SOL_SOCKET, SO_RCVTIMEO,
+                       &tv, sizeof(tv));
+        }
+
         const double deadline = NowSec() + seconds;
         beast::flat_buffer buffer;
         while (NowSec() < deadline && (!r.welcome || r.states < wantStates)) {
             buffer.clear();
-            ws.read(buffer);
+            // A timeout leaves the loop with whatever we have, so the checks
+            // below report WHICH expectation failed instead of an error string.
+            boost::system::error_code rec;
+            ws.read(buffer, rec);
+            if (rec) break;
             const std::string msg = beast::buffers_to_string(buffer.data());
             if (msg.find("\"type\":\"welcome\"") != std::string::npos) {
                 r.welcome = true;

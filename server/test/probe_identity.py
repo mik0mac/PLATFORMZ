@@ -17,7 +17,7 @@ otherwise and locks them out of the game to protect a leaderboard row.
 import sys, os, time, json, socket
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe
-from probe import C, enc
+from probe import C, handshake_landed, enc
 
 fails = 0
 def check(ok, what):
@@ -31,7 +31,7 @@ print("a client with no token is issued one")
 a = C("NEWCOMER")
 a.hello()
 time.sleep(1.2)
-check(a.slot is not None, "seated")
+check(handshake_landed(a), "through the handshake (identity is issued before any seat)")
 check(len(a.identities) == 1, f"exactly one identity was issued: {a.identities}")
 tok = a.identities[0] if a.identities else ""
 check(len(tok) == 64 and all(c in HEX for c in tok),
@@ -55,7 +55,7 @@ c = C("RETURNER")
 c.token = tok                      # the same client, a session later
 c.hello()
 time.sleep(1.2)
-check(c.slot is not None, "seated while presenting a token")
+check(handshake_landed(c), "through the handshake while presenting a token")
 check(c.identities == [],
       f"NO new token was issued - the old one verified: {c.identities}")
 c.drop(goodbye=True)
@@ -71,7 +71,7 @@ for label, bad in [
     d.token = bad
     d.hello()
     time.sleep(1.2)
-    check(d.slot is not None, f"{label}: still got a slot (never hard-fail)")
+    check(handshake_landed(d), f"{label}: still let in (never hard-fail)")
     check(len(d.identities) == 1, f"{label}: and was issued a fresh token")
     check(bool(d.identities) and d.identities[0] != bad,
           f"{label}: which is not the one it presented")

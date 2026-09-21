@@ -9,7 +9,7 @@ exercised by probe_multimatch.py.
 """
 import sys, os, time, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C
+from probe import C, handshake_landed
 
 fails = 0
 def check(ok, what):
@@ -20,7 +20,10 @@ def check(ok, what):
 a = C("BROWSER")
 a.hello()
 time.sleep(1.0)
-check(a.slot is not None, "joined the default room")
+# Connecting no longer puts you anywhere (C6b) - the directory is the point of
+# this probe, and you now browse it from exactly that state.
+check(handshake_landed(a), "connected")
+check(a.slot is None, "...holding no room, which is what the browser is for")
 
 print("list")
 a.send({"type": "list", "cur": 0})
@@ -28,7 +31,7 @@ time.sleep(0.6)
 check(len(a.matchlists) >= 1, "a match list came back")
 lst = a.matchlists[-1] if a.matchlists else {}
 rows = lst.get("m", [])
-check(lst.get("total", 0) >= 1, f"at least the default room is listed (total={lst.get('total')})")
+check(lst.get("total", 0) >= 1, f"the official rooms are listed (total={lst.get('total')})")
 check(all(k in rows[0] for k in ("c", "n", "ph", "p", "max", "j", "k", "map")) if rows else False,
       "rows carry code/name/phase/players/max/joinable/kind/map")
 check(rows[0].get("map") in ("SMALL", "MEDIUM", "LARGE", "XL") if rows else False,

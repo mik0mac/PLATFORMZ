@@ -410,9 +410,14 @@ static bool ActiveMatchBudgetAllows(const Match* self) {
     return live < g_maxActiveMatches;
 }
 
-// The default room, created at boot and pinned so it is never reaped. Every
-// existing call site reaches the match through this, exactly as it used to reach
-// the global - which is what keeps this step behaviour-identical.
+// The LANDING room: where a connection goes when it names no room, where `leave`
+// returns you, and the fallback when the room you asked for is gone or full.
+//
+// It is the FIRST official preset room (set in main, after the boot loop creates
+// them), pinned like all of them so it is never reaped. It used to be a separate
+// CUSTOM room named PLATFORMZ, from before the client could pick a room at all.
+// Being official, it has no host and nobody can press START in it - it starts
+// itself once enough humans are present.
 std::string            g_defaultCode;
 std::shared_ptr<Match> g_defaultMatch;
 
@@ -1555,8 +1560,9 @@ public:
             if (ec) { std::cerr << "accept: " << ec.message() << "\n"; return; }
 
             // ?match=CODE on the upgrade URL picks the room - that is how an
-            // invite link works. Unknown or absent lands in the default room, so
-            // every deployed client keeps working exactly as before.
+            // invite link works. Absent is the ordinary case and means exactly
+            // that: SeatOrPark parks the connection and the player picks from the
+            // directory. Unknown is refused with `notfound`, parked either way.
             const std::string targetCode =
                 clampName(QueryParam(std::string(self->req_.target()), "match"));
             // ?cid=UUID is the client's own install id (D1), carried on the
@@ -1983,35 +1989,37 @@ static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
     }
 }
 
-// Seat a brand-new (or retrying) connection, without ever refusing the
-// connection itself. Three outcomes, all of which leave a client that works:
+// Seat a connection in the room it ASKED for, or in no room at all. Never in
+// some third room it did not choose.
 //
-//   - the room it asked for had a seat  -> welcome, nothing else said;
-//   - that room was full, the default had one -> welcome, PLUS a `full` refusal,
-//     so the player learns their invite did not land instead of silently
-//     finding themselves somewhere they did not choose;
-//   - nothing free anywhere -> parked unseated with `server_full`. Still
-//     connected, still able to list and join, and its next hello retries.
+//   - named a room, and it had a seat   -> welcome, nothing else said;
+//   - named a room it cannot have       -> parked, plus the reason (`notfound`
+//     or `full`), so the browser can say what happened;
+//   - named nothing                     -> parked, and that is not a failure.
 //
-// That last case is the whole point of E2. It used to be a "full" packet and a
-// dropped socket, which over UDP is indistinguishable from an unreachable server
-// and left the client re-helloing into the void forever.
+// That last case is C6b, and it is the whole point: arriving without naming a
+// room used to drop you into a landing room chosen for you. You now land in the
+// directory and pick. ParkConn does the telling (`unseated` + the leaderboard),
+// so a client can always tell "connected, holding nothing" from a handshake that
+// never landed.
 //
-// Shared by both transports' connect paths and by the unseated retry, so "what
-// happens when a room is full" has exactly one answer.
+// There is deliberately NO fallback room on refusal. A consolation seat in a
+// room nobody asked for is exactly what this removes, and the browser is already
+// where a refusal belongs.
+//
+// Being parked is still not a dropped connection - that was E2's change and it
+// stands: still connected, still able to list, join, create and quick.
+//
+// Shared by both transports' connect paths, so "what happens when you cannot
+// have the room you asked for" has exactly one answer.
 static void SeatOrPark(uint64_t connId, const ConnectedClient& rec,
                        const std::string& wantCode) {
-    const char* why = "";
-    std::string code = wantCode;
-    if (code.empty() || !g_registry.Find(code)) code = g_defaultCode;
+    if (wantCode.empty()) { ParkConn(connId, rec); return; }
 
-    if (AttachConn(connId, code, rec, why)) return;
-    if (code != g_defaultCode && AttachConn(connId, g_defaultCode, rec, why)) {
-        SendToClient(rec, buildJoinFail("full"));
-        return;
-    }
+    const char* why = "";
+    if (AttachConn(connId, wantCode, rec, why)) return;
     ParkConn(connId, rec);
-    SendToClient(rec, buildJoinFail("server_full"));
+    SendToClient(rec, buildJoinFail(why));
 }
 
 //MARK: Abuse budgets (E1, E2)
@@ -2436,11 +2444,14 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
         // Join-leave-join-leave is the cheapest roster churn there is, and
         // exempting the leave half would make the join half's budget meaningless.
         if (!AllowMove(connId)) { SendToClient(c, buildJoinFail("rate_limited")); return true; }
-        // Back to the default room, which is the closest thing to a lobby until
-        // the client grows a browser screen (C2/C3). Leaving to NO match would be
-        // the eventual shape, but a client with nowhere to be would simply stop
-        // receiving state and look frozen.
-        MoveConnToMatch(connId, c, g_defaultCode, "");
+        // Out, and nowhere. Leaving used to hand you the landing room, because a
+        // client with no room receives no state and looked frozen - the browser
+        // is where a roomless client belongs, and ParkConn tells it so.
+        //
+        // Already unseated (a `leave` from the browser) is a no-op, not an error:
+        // DetachConn says so by returning false and there is nothing to undo.
+        ConnectedClient rec;
+        if (DetachConn(connId, rec)) ParkConn(connId, rec);
         return true;
     }
     return false;
@@ -3650,11 +3661,16 @@ private:
             return;
         }
         // A hello may name the room it wants (that is how an invite link works over
-        // UDP, mirroring ?match= on the WebSocket side). Unknown or absent lands
-        // in the default room, so every existing client keeps working untouched.
-        std::string targetCode = clampName(parseString(helloMsg, "match"));
+        // UDP, mirroring ?match= on the WebSocket side). Naming nothing is the
+        // ordinary case and means exactly that - SeatOrPark parks it below and
+        // the player picks from the directory.
+        //
+        // This used to substitute the landing room here, which is subtle and was
+        // the LAST thing forcing a seat: it rewrote the code before SeatOrPark
+        // could see it was empty, so parking on an empty code looked correct and
+        // did nothing on the transport most clients use.
+        const std::string targetCode = clampName(parseString(helloMsg, "match"));
         auto target = targetCode.empty() ? nullptr : g_registry.Find(targetCode);
-        if (!target) { target = g_defaultMatch; targetCode = g_defaultCode; }
 
         // "cid" is the client's install id (D1). This is the path that matters
         // most for it: UDP has no disconnect event, so a client whose NAT mapping
@@ -3665,7 +3681,10 @@ private:
         // "tok" is the identity token (D3). Read here, on the hello, because
         // that is this transport's handshake - there is no URL on the wire.
         const Identity identity = EstablishIdentity(parseString(helloMsg, "tok"));
-        {
+        // Only if they named a room that exists: superseding a stale twin is a
+        // question about a specific roster, and there is no roster to ask about
+        // when no room was named.
+        if (target) {
             // Lock order gameMutex->clientMutex, matching Session::Accept.
             std::lock_guard<std::mutex> gg(target->gameMutex);
             std::lock_guard<std::mutex> gc(target->clientMutex);
@@ -3826,45 +3845,6 @@ int main() {
                   << scoreboard.filePath << "\n";
     }
 
-    // The default room. Created through the registry rather than beside it, so
-    // every path below is the real multi-match path with a count of one - A3 then
-    // swaps a fixed lookup for a per-connection one instead of introducing the
-    // whole mechanism at once.
-    //
-    // CUSTOM, so it behaves exactly like today's single global match: whoever
-    // holds the lowest slot hosts it and presses START. This is the landing room
-    // for a client that connects without naming one, and it stays host-run so a
-    // solo player can still start a game. Once the client always picks a room
-    // explicitly (#105/#83/#84), this room has no reason to exist and the
-    // resident official room below becomes the place you land.
-    //
-    // Pinned: it must outlive every client, or the reaper would delete it out
-    // from under the next person to connect.
-    {
-        MatchRegistry::CreateResult why;
-        g_defaultMatch = g_registry.Create(/*name*/ "PLATFORMZ", /*preset*/ "DEFAULT",
-                                           MatchKind::Custom, /*isPrivate*/ false,
-                                           /*joinCode*/ "",
-                                           g_defaultCode, why);
-        if (!g_defaultMatch) { std::cerr << "could not create the default match\n"; return 1; }
-        g_registry.Pin(g_defaultCode);
-        std::cout << "Match registry: default room " << g_defaultCode
-                  << " (cap " << MATCH_MAX_CONCURRENT << ")\n";
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_defaultMatch->gameMutex);
-        // Boot into the LOBBY: create player slots only (so clients can connect
-        // and be listed), but no world. A client "start" message generates the
-        // world and begins the match (see SimulationLoop).
-        g_defaultMatch->gameSpace.spawnPlayers();
-        g_defaultMatch->rosterSize.store((int)g_defaultMatch->gameSpace.getPlayers().size());
-        g_defaultMatch->rebuildWelcomeStatic(); // seed the cached welcome (empty lobby world) before clients connect
-        std::cout << "GameSpace: lobby ready, "
-                  << g_defaultMatch->gameSpace.getPlayers().size()
-                  << " player slots (waiting for a player to start)\n";
-    }
-
     // One resident OFFICIAL room per preset, pinned so it is always there.
     //
     // Answering A2's open question the expensive-looking way, because the cheap
@@ -3890,7 +3870,36 @@ int main() {
                   << " preset=" << presetName
                   << " (locked, auto-starts at " << m->pendingMinHumans.load()
                   << " players, maxBots=" << m->pendingMaxBots.load() << ")\n";
+
+        // The FIRST preset is the landing room: where a connection goes when it
+        // names no room, where `leave` returns you, and the fallback when a
+        // requested room is gone or full.
+        //
+        // There used to be a separate CUSTOM room called PLATFORMZ for this, back
+        // when a client could not pick a room at all and needed somewhere host-run
+        // to press START in. The client browses and picks now, so that room was a
+        // placeholder sitting in everyone's match list with nothing behind it.
+        // matchOptionPresets is ordered front-door-first for exactly this reason -
+        // it is already what QUICK MATCH hands a stranger.
+        //
+        // Consequence worth knowing: the landing room is OFFICIAL, so it is locked
+        // and starts itself. Nobody hosts it and nobody presses START there; a
+        // player who wants to run their own rules creates a custom room.
+        if (!g_defaultMatch) { g_defaultMatch = m; g_defaultCode = code; }
     }
+    // Every fallback path below dereferences this, so an empty preset table is a
+    // boot failure rather than a null waiting to be hit by the first connection.
+    if (!g_defaultMatch) { std::cerr << "no presets: there is no room to land in\n"; return 1; }
+    std::cout << "Match registry: landing room " << g_defaultCode
+              << " (cap " << MATCH_MAX_CONCURRENT << ")\n";
+    // BOOT-READY LINE. "lobby ready" is what run_probes.sh and ci_smoke.sh wait
+    // for before they start talking to the server, so keep that substring even if
+    // the rest of the sentence changes - four consumers grep for it (the two
+    // runners and both testing docs). It means the same thing it always did: the
+    // landing room has its slots and its cached welcome, so a client can connect.
+    std::cout << "GameSpace: lobby ready, "
+              << g_defaultMatch->gameSpace.getPlayers().size()
+              << " player slots (official room - it starts itself)\n";
 
     const int threads = std::max(1u, std::thread::hardware_concurrency());
     net::io_context ioc{threads};
