@@ -405,8 +405,8 @@ static int Load(const Opts& o) {
 
     // --- Spread across rooms ---------------------------------------------
     // One client per group creates a room; the rest join it by code. A parked
-    // client can do this too - that is the point of E2 - so a server whose
-    // default room is full is not a reason to stop here.
+    // client can do this too - that is the point of E2, and since C6b every
+    // client starts parked, so this is simply the normal path.
     //
     // Rooms are created from ONE address, so the server needs
     // PLATFORMZ_MAX_ROOMS_PER_ADDR raised past --matches, or E2's budget refuses

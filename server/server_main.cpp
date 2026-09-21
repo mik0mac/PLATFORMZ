@@ -410,16 +410,14 @@ static bool ActiveMatchBudgetAllows(const Match* self) {
     return live < g_maxActiveMatches;
 }
 
-// The LANDING room: where a connection goes when it names no room, where `leave`
-// returns you, and the fallback when the room you asked for is gone or full.
+// Ticks this PROCESS has run, for the heartbeat.
 //
-// It is the FIRST official preset room (set in main, after the boot loop creates
-// them), pinned like all of them so it is never reaped. It used to be a separate
-// CUSTOM room named PLATFORMZ, from before the client could pick a room at all.
-// Being official, it has no host and nobody can press START in it - it starts
-// itself once enough humans are present.
-std::string            g_defaultCode;
-std::shared_ptr<Match> g_defaultMatch;
+// There used to be a landing room, and the heartbeat published ITS tick as
+// though it were the server's. That was never quite true - every room has its
+// own serverTick and they diverge the moment one is reaped - and it stopped
+// being true at all once no room was special (C6e). This counts the sim loop
+// itself, which is what "is the server alive" actually asks about.
+std::atomic<uint32_t> g_serverTicks{0};
 
 // Forward decls: Session::Read and the UDP handler both dispatch through these,
 // but their bodies need Session complete (SendToClient calls Session::Send), so
@@ -1670,11 +1668,12 @@ private:
         ws_.async_read(buffer_,
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) {
-                    // Whichever room holds this connection, not necessarily the
-                    // default one.
+                    // Whichever room holds this connection - or none at all,
+                    // which is an ordinary state now: a client sitting in the
+                    // browser holds no room, and there is no roster to take it
+                    // out of. ForgetConn below is the whole cleanup for those.
                     auto m = MatchForConn(self->connId_);
-                    if (!m) m = g_defaultMatch;
-                    {
+                    if (m) {
                         std::lock_guard<std::mutex> lock(m->clientMutex);
                         auto it = m->clients.find(self->connId_);
                         if (it != m->clients.end()) {
@@ -1978,12 +1977,12 @@ static void MoveConnToMatch(uint64_t connId, const ConnectedClient& caller,
 
     if (!DetachConn(connId, rec)) { refuse("notfound"); return; }
     if (!AttachConn(connId, code, rec, why)) {   // logs the seat itself
-        // Put them back where they were rather than stranding them nowhere -
-        // and if even the default room has no seat, park them unseated. What we
-        // must never do is leave a live connection in neither place, which is
-        // what the old "try the default and hope" line did on a full server.
-        const char* ignored = "";
-        if (!AttachConn(connId, g_defaultCode, rec, ignored)) ParkConn(connId, rec);
+        // Park them and say why. DetachConn above already took them out of the
+        // room they were in, so there is nothing to put them back into - and
+        // finding them a different one is exactly the behaviour C6b removed.
+        // What we must never do is leave a live connection in neither place,
+        // which is what the old "try the default and hope" line did.
+        ParkConn(connId, rec);
         refuse(why);
         return;
     }
@@ -2685,9 +2684,9 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
 // Router: find the match this connection belongs to, and forward.
 //
 // A connection is bound to at most one match at a time, so this is a lookup, not
-// a broadcast. A packet for a room that has since been reaped falls back to the
-// default room rather than being dropped - the client is real and still
-// connected, it just has nowhere to be.
+// a broadcast. A packet for a room that has since been reaped finds nothing and
+// is dropped: there is no fallback room to hand it to, and inventing one is what
+// C6e removed.
 // Everything an unseated connection can do (E2). It holds no player slot, so the
 // match verbs - input, start, name, endmatch - have no body to act on and are
 // dropped. Two things do reach it:
@@ -2751,9 +2750,7 @@ static bool HandleUnseatedMessage(uint64_t connId, const std::string& msg) {
 
     // Anything else: swallowed. Returning true rather than falling through is
     // deliberate - without a slot there is no match this packet could belong to,
-    // and routing it to the default room would have it looked up in a client map
-    // it is not in and silently dropped there instead, which is the same outcome
-    // by a longer road.
+    // and the caller has nowhere else to send it.
     return true;
 }
 
@@ -2761,7 +2758,11 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
     auto m = MatchForConn(connId);
     // No room: parked with no seat (E2). Its own small dispatch, above.
     if (!m && HandleUnseatedMessage(connId, msg)) return;
-    if (!m) m = g_defaultMatch;
+    // In no room AND not parked: a connection we have already forgotten, whose
+    // last datagram arrived after we let go of it. It used to be handed to the
+    // landing room, which meant a stranger's message was processed against a
+    // real roster. Drop it.
+    if (!m) return;
 
     // Stamp liveness HERE, because only here do we know which match holds the
     // record. UDP has no disconnect event, so ReapIdleUdpClients culls anyone
@@ -3480,7 +3481,6 @@ void SimulationLoop() {
     using Clock    = std::chrono::steady_clock;
     using Duration = std::chrono::duration<double>;
     auto lastTick  = Clock::now();
-    g_defaultMatch->prevPhase = g_defaultMatch->gamePhase.load();
     // One scratch grid for every match this thread drives - see the note in
     // match.h. Lives here (not in Match) so it stays warm across matches, and so
     // a future worker pool gets one per worker for free.
@@ -3498,6 +3498,7 @@ void SimulationLoop() {
             continue;
         }
         lastTick = now;
+        ++g_serverTicks;   // this PROCESS's beat, independent of any room's
 
         // EVERY match, not just the default one. Rooms created at runtime were
         // being routed to correctly and then never simulated, so a match in one
@@ -3511,8 +3512,8 @@ void SimulationLoop() {
         for (auto& m : g_registry.All()) m->Tick(scratchGrid);
 
         // Registry upkeep, once a second rather than per tick - destroying rooms
-        // is not something 60 Hz buys anything. The default room is pinned, so
-        // today this only ever logs nothing.
+        // is not something 60 Hz buys anything. The official rooms are pinned, so
+        // this only reaps rooms players made.
         if (++beat >= (int)TICK_RATE) {
             beat = 0;
             ++g_uptimeSeconds;
@@ -3531,10 +3532,20 @@ void SimulationLoop() {
                         scoreboardDirty = true;   // try again next flush
                 }
             }
-            ReportHeartbeat(g_defaultMatch->serverTick.load(), g_uptimeSeconds.load());
+            ReportHeartbeat(g_serverTicks.load(), g_uptimeSeconds.load());
             if (PerfEnabled() && ++perfBeat >= PERF_REPORT_SECONDS) {
                 perfBeat = 0;
-                ReportPerf(*g_defaultMatch, now);
+                // A LIVE room, not a nominated one. ReportPerf returns early on
+                // a match that has not simulated anything, so pointing it at a
+                // fixed room meant the PERF line was usually blank unless that
+                // particular room happened to be playing.
+                for (const auto& m : g_registry.All()) {
+                    const Phase ph = m->gamePhase.load();
+                    if (ph == Phase::PLAYING || ph == Phase::COUNTDOWN) {
+                        ReportPerf(*m, now);
+                        break;
+                    }
+                }
             }
         }
 
@@ -3723,10 +3734,10 @@ private:
         // stranger.
         if (!identity.issue.empty()) SendToClient(c, buildIdentity(identity.issue));
 
-        // Seated, bumped to the default room, or parked with no slot at all -
-        // one shared answer with the WS path, and none of them hang up. The old
-        // code's last branch sent a "full" packet and simply never registered the
-        // peer, so the client re-helloed into silence forever.
+        // Seated in the room they named, or parked with no room at all - one
+        // shared answer with the WS path, and neither hangs up. The old code's
+        // last branch sent a "full" packet and simply never registered the peer,
+        // so the client re-helloed into silence forever.
         SeatOrPark(connId, c, targetCode);
     }
 };
@@ -3857,6 +3868,7 @@ int main() {
     //
     // One per preset: adding CHAOS to matchOptionPresets adds its room here with
     // no code change, which is the point of that table being data.
+    std::shared_ptr<Match> firstRoom;
     for (const auto& [presetName, preset] : matchOptionPresets) {
         MatchRegistry::CreateResult why;
         std::string code;
@@ -3871,35 +3883,27 @@ int main() {
                   << " (locked, auto-starts at " << m->pendingMinHumans.load()
                   << " players, maxBots=" << m->pendingMaxBots.load() << ")\n";
 
-        // The FIRST preset is the landing room: where a connection goes when it
-        // names no room, where `leave` returns you, and the fallback when a
-        // requested room is gone or full.
-        //
-        // There used to be a separate CUSTOM room called PLATFORMZ for this, back
-        // when a client could not pick a room at all and needed somewhere host-run
-        // to press START in. The client browses and picks now, so that room was a
-        // placeholder sitting in everyone's match list with nothing behind it.
-        // matchOptionPresets is ordered front-door-first for exactly this reason -
-        // it is already what QUICK MATCH hands a stranger.
-        //
-        // Consequence worth knowing: the landing room is OFFICIAL, so it is locked
-        // and starts itself. Nobody hosts it and nobody presses START there; a
-        // player who wants to run their own rules creates a custom room.
-        if (!g_defaultMatch) { g_defaultMatch = m; g_defaultCode = code; }
+        if (!firstRoom) firstRoom = m;   // only to report readiness below
     }
-    // Every fallback path below dereferences this, so an empty preset table is a
-    // boot failure rather than a null waiting to be hit by the first connection.
-    if (!g_defaultMatch) { std::cerr << "no presets: there is no room to land in\n"; return 1; }
-    std::cout << "Match registry: landing room " << g_defaultCode
-              << " (cap " << MATCH_MAX_CONCURRENT << ")\n";
+    // No room is special any more. A connection that names none holds none and
+    // browses; `leave` returns you to that state; a refused join leaves you
+    // there. What used to be the landing room - and before that a placeholder
+    // called PLATFORMZ, from when a client could not pick a room at all - is now
+    // just the first of five, and QUICK MATCH is how you ask for it by name.
+    //
+    // Still a boot failure with no presets, because then there is nothing to
+    // play at all.
+    if (!firstRoom) { std::cerr << "no presets: there are no rooms to play in\n"; return 1; }
+    std::cout << "Match registry: " << matchOptionPresets.size()
+              << " official rooms (cap " << MATCH_MAX_CONCURRENT << ")\n";
     // BOOT-READY LINE. "lobby ready" is what run_probes.sh and ci_smoke.sh wait
     // for before they start talking to the server, so keep that substring even if
     // the rest of the sentence changes - four consumers grep for it (the two
     // runners and both testing docs). It means the same thing it always did: the
     // landing room has its slots and its cached welcome, so a client can connect.
     std::cout << "GameSpace: lobby ready, "
-              << g_defaultMatch->gameSpace.getPlayers().size()
-              << " player slots (official room - it starts itself)\n";
+              << firstRoom->gameSpace.getPlayers().size()
+              << " player slots (official rooms - they start themselves)\n";
 
     const int threads = std::max(1u, std::thread::hardware_concurrency());
     net::io_context ioc{threads};
