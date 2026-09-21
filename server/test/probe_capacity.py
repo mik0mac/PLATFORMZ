@@ -87,6 +87,14 @@ if waiting is None:
     check(False, "needed a second unseated client")
 else:
     check(waiting.slot is None, "still unseated to begin with")
+    # C6a: being parked is ANNOUNCED. Without this the client cannot tell a
+    # connection that got through and found no seat from one whose handshake
+    # never landed - a welcome is the only other proof it is connected, and that
+    # cannot exist without a seat.
+    check(waiting.unseated > 0,
+          f"...and was told so, not left to infer it ({waiting.unseated} acks)")
+    check(bool(waiting.leaderboards),
+          "...and still got the leaderboard, which is not a property of a room")
     seated[0].drop(goodbye=True)         # frees a slot in `home` immediately
     wait(0.4)
     waiting.hello()                      # the real client does this every 0.5s

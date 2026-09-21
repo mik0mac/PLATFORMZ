@@ -84,6 +84,7 @@ class C:
         self.personalBest = None   # (name, score) from the last leaderboard, or None
         self.matchlists   = []     # directory replies: dicts as sent
         self.joinfails    = []     # refusal reasons, in order
+        self.unseated     = 0      # how many times the server said "no slot for you"
         self.created      = []     # codes of rooms we made
         self.players      = {}     # name -> {hp, score, alive, bot} from the last state
         # The same rows keyed by SLOT. Names are not unique - a reconnecting
@@ -250,6 +251,18 @@ class C:
                     self.matchlists.append(j)
                 elif t == "created":
                     self.created.append(j.get("m", ""))
+                elif t == "unseated":
+                    # Connected, holding no slot. The seatless counterpart of the
+                    # welcome - counted rather than flagged, because a client can
+                    # be parked more than once (join refused, leave, ...).
+                    #
+                    # It also UNDOES a welcome: slot and room come from a welcome
+                    # and this says we have neither any more. Without clearing
+                    # them a probe that leaves a room still reads the room it
+                    # left, because no further welcome ever arrives to correct it.
+                    self.unseated += 1
+                    self.slot = None
+                    self.matchCode = ""
                 elif t == "joinfail":
                     self.joinfails.append(j.get("why", "?"))
 

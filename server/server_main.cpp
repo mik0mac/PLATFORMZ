@@ -1742,6 +1742,21 @@ static void SendToClient(const ConnectedClient& c, const std::string& msg) {
 //MARK: Routing helpers
 static std::string buildJoinFail(const char* why);
 
+// "You are connected, and you hold no slot."
+//
+// A client learns it is connected by receiving a WELCOME, which cannot exist
+// without a seat - so a parked connection was indistinguishable from one whose
+// handshake never landed, and the client's only recovery was to keep re-helloing
+// forever. This is the seatless counterpart: it says the handshake DID land.
+//
+// Carries nothing. Why you are unseated is a separate question with a separate
+// answer already (`joinfail`), and being unseated because you have not chosen a
+// room yet (C6b) is not a failure at all.
+//
+// JSON on both transports, like everything except the welcome and the per-tick
+// state - so no binary tag and no STATE_BIN_VERSION bump.
+static std::string buildUnseated() { return "{\"type\":\"unseated\"}"; }
+
 // The match a connection currently belongs to, or nullptr if it has none.
 static std::shared_ptr<Match> MatchForConn(uint64_t connId) {
     std::string code;
@@ -1758,15 +1773,28 @@ static std::shared_ptr<Match> MatchForConn(uint64_t connId) {
 // endpoint) so we can still talk to it, loses its playerId because it has none,
 // and starts its idle clock now - an unseated UDP peer is reaped on the same
 // silence rule a seated one is (see SweepUnseated).
+//
+// Then it is TOLD, which is the whole of C6a: `unseated` plus the leaderboard,
+// the seatless mirror of the welcome-plus-leaderboard pair AttachConn sends.
 static void ParkConn(uint64_t connId, ConnectedClient rec) {
     rec.playerId    = -1;
     rec.hasInput    = false;
     rec.lastInput   = PlayerInput{};
     rec.firePending = false;
     rec.lastSeenSec = NowSec();
-    std::lock_guard<std::mutex> lk(g_connMutex);
-    g_unseated[connId] = std::move(rec);
-    g_connMatch[connId].clear();
+    {
+        std::lock_guard<std::mutex> lk(g_connMutex);
+        g_unseated[connId] = rec;
+        g_connMatch[connId].clear();
+    }
+    // Tell them, from HERE rather than from each call site - the same reason
+    // AttachConn welcomes from one place: a new path cannot forget to. Off the
+    // lock, like every other send site.
+    SendToClient(rec, buildUnseated());
+    // The board is not a property of a room, and HIGH SCORES is reachable from
+    // the browser - so a seatless client gets it too. AttachConn sends the same
+    // thing on the seated path.
+    SendToClient(rec, buildLeaderboard(rec.identity));
 }
 
 // Drop every trace of a connection: its seat is the caller's business, this is
@@ -2675,11 +2703,33 @@ static bool HandleUnseatedMessage(uint64_t connId, const std::string& msg) {
 
     if (msg.find("\"type\":\"hello\"") != std::string::npos) {
         // A name may ride the hello exactly as it does on a first one. Keep it
-        // even if we stay unseated - ParkConn writes the record back, so the
-        // name is already right whenever a seat does appear.
+        // even if we stay unseated, so the name is already right whenever a seat
+        // does appear.
         const std::string nm = clampName(parseString(msg, "name"));
         if (!nm.empty()) { sink.name = nm; sink.nameDirty = true; }
-        SeatOrPark(connId, sink, clampName(parseString(msg, "match")));
+        const std::string want = clampName(parseString(msg, "match"));
+
+        // A BARE hello - no room named - is not a request for a seat. It is a
+        // client sitting in the directory saying it is still there.
+        //
+        // Seating it here is what made parking circular: the server parks a
+        // connection, and the client's own 0.5 s retry undoes that half a second
+        // later, however carefully it was parked. Nothing could stay unseated on
+        // purpose while this line existed.
+        //
+        // `sink` is a copy, so a name that rode this hello has to be written
+        // back by hand. Re-ack, because over UDP the first one can simply have
+        // been lost - but NOT the leaderboard, which it already has.
+        if (want.empty()) {
+            if (!nm.empty()) {
+                std::lock_guard<std::mutex> lk(g_connMutex);
+                auto it = g_unseated.find(connId);
+                if (it != g_unseated.end()) { it->second.name = nm; it->second.nameDirty = true; }
+            }
+            SendToClient(sink, buildUnseated());
+            return true;
+        }
+        SeatOrPark(connId, sink, want);
         return true;
     }
 

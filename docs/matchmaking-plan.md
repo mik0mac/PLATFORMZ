@@ -702,6 +702,75 @@ The LOBBY screen shows the code and a COPY INVITE action.
 
 ---
 
+### C6. No room until you choose one
+
+**The problem.** A connection has always had to be *somewhere*. Connect without
+naming a room and the server quietly seats you in a landing room you never
+picked — for most of this project's life a public CUSTOM room called PLATFORMZ,
+left over from when the server held exactly one match and there was nowhere else
+to be.
+
+That room was worse than redundant. Being custom, it had a host; being
+server-created, it had no creator to *be* the host, so the fallback handed the
+role to whoever held the lowest slot — in practice the first stranger to connect.
+They could retune every rule and press START in a public room everyone else also
+lands in, and when they left, control passed silently to the next person in line.
+That is precisely the problem A9 fixed for official rooms; the landing room was
+simply never brought along.
+
+Pointing the landing room at the first OFFICIAL room (done, alongside E5) fixes
+the accidental host — official rooms have no host and nobody can start them. But
+it does not fix the real thing: **you still arrive somewhere you did not choose**,
+and it is now a room that will start a match around you on its own schedule.
+
+**Scope.** Connecting puts you in the directory and nowhere else. You see the
+browser, you pick, and only then do you hold a slot. LEAVE returns you to the
+browser rather than to another room.
+
+**Most of this already exists.** `HandleUnseatedMessage` already serves a parked
+connection the whole directory (`list`/`join`/`create`/`quick`), and
+`ParkConn`/`g_unseated` already hold a live connection with no room — that path
+runs today whenever the server is full, and `probe_capacity` covers it. This is
+not new machinery; it is removing the forced seat and teaching the client that
+"connected" and "seated" are different things.
+
+Three things force a seat today, and the second is what makes it circular:
+
+1. `SeatOrPark` defaults an empty room code to `g_defaultCode`.
+2. The client re-sends `hello` every 0.5 s while it has no slot, and the unseated
+   handler's `hello` branch calls `SeatOrPark`. So a parked connection re-seats
+   itself half a second later, however carefully the server parked it.
+3. `leave` moves you to `g_defaultCode` instead of to nothing.
+
+**A refusal leaves you parked.** Asking for a room that is full or gone gets a
+`joinfail` and nothing else — no fallback room, no consolation seat. The browser
+is already the right place to be told, and a fallback would reintroduce exactly
+the "somewhere you did not choose" this entry removes.
+
+**One new message, JSON.** The client learns it is connected by receiving a
+*welcome*, which cannot exist without a seat. A parked connection needs an
+equivalent ack. JSON on both transports, like everything except the welcome and
+the per-tick state — so no binary tag and no `STATE_BIN_VERSION` bump.
+
+**The trap.** `UDP_CLIENT_TIMEOUT_LOBBY` is **3 seconds**, and the client's
+keepalive is gated on holding a slot (`main.cpp`). A parked UDP client survives
+today only because its own hello retry doubles as a heartbeat. Stop the retry
+without moving the keepalive gate and every parked UDP player is reaped three
+seconds after arriving — invisible over WebSocket, where TCP keeps the session up.
+
+**`myIndex < 0` is the client's whole difficulty.** It currently means both
+"still handshaking" and "connected, no room". Splitting those two is the change;
+the screen routing, the keepalive gate, and `shell.serverFull` — which stops
+being an error and becomes the normal resting state — all fall out of it.
+
+**Retires** `g_defaultMatch` / `g_defaultCode` entirely. Heartbeat and perf
+reporting read them for a tick source and need repointing first.
+
+**Files:** `server/server_main.cpp` (`SeatOrPark`, `HandleUnseatedMessage`,
+`leave`, boot), `wire.h`, `main.cpp`, `screens.h`, `server/test/probe.py`.
+
+---
+
 # Epic D — Identity
 
 ### D1. `profile.h` — persistent local profile — **DONE**
@@ -1690,6 +1759,12 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | C3 | #83 | Client: split `LOBBY` off the title screen, add LEAVE | client | C1, A3 |
 | C4 | #84 | Client: QUICK MATCH and CREATE MATCH | client | C2, B1 |
 | C5 | #85 | Client: invite links (`?match=`) and join-by-code | client | C2 |
+| C6a | #149 | Protocol: an ack for a connection that holds no slot | protocol | B1 |
+| C6b | #150 | Server: stop seating a connection that asked for no room | server | C6a |
+| C6c | #151 | Client: tell "connected" apart from "seated" | client | C6a |
+| C6d | #152 | Client: connect lands in the match browser, not a room | client | C6c |
+| C6e | #153 | Server: retire the default landing room | server | C6b, C6d |
+| C6f | #154 | Testing: probe harness for a connection with no room | testing | C6b |
 | D1 | #86 | Client: persistent local profile (name, `clientId`, `token`, volume, options) | client | — |
 | D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
 | D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |

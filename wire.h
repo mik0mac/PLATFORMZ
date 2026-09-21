@@ -133,8 +133,13 @@ struct ServerMessage {
     // No `Full`. It used to be its own message and its own binary tag, sent just
     // before the server hung up on you; E2 retired both. Fullness is a JoinFail
     // now (reason `full` or `server_full`) and nobody gets hung up on.
+    // `Unseated` is the seatless counterpart of `Welcome`: the handshake landed,
+    // and we hold no slot. Without it those two are indistinguishable from the
+    // client's side - a welcome is the only proof a connection got through, and
+    // it cannot exist without a seat.
     enum class Type { None, Welcome, State, VersionMismatch, Leaderboard,
-                      MatchList, JoinFail, Created, Challenge, Identity, Unknown };
+                      MatchList, JoinFail, Created, Challenge, Identity,
+                      Unseated, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -810,6 +815,13 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     if (type == "created") {
         msg.type        = ServerMessage::Type::Created;
         msg.createdCode = j.value("m", std::string());
+        return msg;
+    }
+    // Connected, holding no slot. Carries nothing: WHY is either a `joinfail`
+    // that arrives beside this, or - once the client picks its own room - not a
+    // failure at all.
+    if (type == "unseated") {
+        msg.type = ServerMessage::Type::Unseated;
         return msg;
     }
     if (type == "joinfail") {
