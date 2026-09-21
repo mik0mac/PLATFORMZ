@@ -317,7 +317,10 @@ changed; `PLATFORMZ_NO_BUILD=1` skips it if the binary came from somewhere else.
 
 **The probes** (`server/test/probe*.py`) are headless protocol clients, one per
 question — the lobby and host rules, the directory, reconnecting into your own
-slot, join-in-progress, the handshake cookie, the capacity budgets. Two cover the
+slot, join-in-progress, the handshake cookie, the capacity budgets.
+`probe_unseated.py` covers holding no room: that connecting lands you nowhere and
+**keeps** you there across the hello retries a real client sends, that a refusal
+never hands you a different room, and that leave-then-rejoin round-trips. Two cover the
 sliderless roster rules: `probe_maxbots.py` (a `maxBots = 0` room fields no bots,
 leaves its other slots genuinely empty, and — the regression that matters — keeps
 playing instead of ending on its first tick) and `probe_minhumans.py` (an official

@@ -157,7 +157,14 @@ Four docs, and it is worth reading the right one before changing anything here:
   decisions that were *not* taken and why.
 
 `make -C server` builds it; `./server/test/run_all.sh` and `run_probes.sh` are the
-tests, and CI runs both on every push.
+tests, and CI runs both on every push. The two live runners (`run_probes.sh`,
+`ci_smoke.sh`) **build what they are about to test** - they used to only check the
+binary existed, which meant an uncompiled change was silently tested as the
+previous build.
+
+Connecting puts a client in the **directory, not a room**: it holds no slot until
+it picks one, `leave` returns it to that state, and a refused join leaves it
+there. `probe_unseated.py` is the probe for that whole lifecycle.
 
 ## Collision system (collisions.cpp)
 - `RunCollisionChecks()` runs once per frame (after positions update, before

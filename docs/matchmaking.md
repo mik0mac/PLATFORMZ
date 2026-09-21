@@ -90,6 +90,23 @@ entirely, which is what makes its code a real capability rather than a formality
 
 ## Connecting
 
+**Connecting does not put you in a room.** Name one and you get it, or a refusal
+saying why; name none and you hold none, which is the ordinary way to arrive. You
+browse, you pick, and only then do you have a slot. `leave` returns you to that
+state, and a refused `join` leaves you in it - there is no fallback room, because
+a seat in a room nobody asked for is the thing this removes.
+
+A client learns the handshake landed from a `welcome` if it got a seat, and from
+an `unseated` if it did not. Before that second message existed, holding no room
+was indistinguishable from a handshake that never arrived, and the only recovery
+was to keep re-helloing. A **bare hello is not a request for a seat** - it is a
+client saying it is still there - so re-sending one never seats you.
+
+A connection with no room is a working connection: it can `list`, `join`,
+`create` and `quick`, and it is sent the leaderboard, which is not a property of
+a room. Over UDP it must still keep up its heartbeat - `UDP_CLIENT_TIMEOUT_LOBBY`
+is 3 seconds and applies to everyone, seated or not.
+
 Everything a client sends is JSON. Everything it receives is JSON **except** the
 welcome and the per-tick state over UDP, which are binary (`netbin.h`) so a full
 8-player tick fits one unfragmented datagram. The client dispatches on **byte 0**:
