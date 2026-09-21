@@ -286,7 +286,8 @@ directory drain the bucket faster than it fills.
 | `notfound` | no such room, or it was reaped |
 | `badcode` | wrong join code for a private room |
 | `full` | that room has no free slot — you were put somewhere else, or left where you were |
-| `server_full` | nowhere free at all, or you are over your room-creation budget |
+| `server_full` | the registry has no free room at all |
+| `too_many_rooms` | *you* are over your own room-creation budget. Distinct from `server_full` on purpose: that one is the whole server and clears in seconds as empty rooms are reaped, this one is your three rooms and comes back one every two minutes. They shared a token until it was pointed out that "SERVER IS AT CAPACITY" was being shown with a third of the registry free |
 | `rate_limited` | too many attempts; wait |
 | `inprogress` | **defined but never sent.** The client renders it ("MATCH ALREADY STARTED") and the enum carries it, but no server path emits it: a match in progress either has a free slot, in which case you join it, or it is `full` |
 
@@ -392,7 +393,7 @@ recognisable rather than mysterious.
 | Limit | Default | Refused with |
 |---|---|---|
 | Rooms on the server | 12 | `server_full` |
-| Rooms one **address** may mint | 3, one back every 2 min | `server_full` |
+| Rooms one **address** may mint | 3, one back every 2 min | `too_many_rooms` |
 | Room moves (join / quick / leave) | 5 in hand, 1/s | `rate_limited` |
 | Wrong room codes | 5 per minute per connection | `rate_limited` |
 | `list` replies | 3 in hand, 1/s | *silently dropped* |

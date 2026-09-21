@@ -2400,11 +2400,20 @@ static bool HandleDirectoryMessage(uint64_t connId, const ConnectedClient& c,
     if (msg.find("\"type\":\"create\"") != std::string::npos) {
         // Budgeted per ADDRESS, not per connection (E2): one machine opening a
         // fresh connection for each room is exactly the abuse, so a per-connection
-        // budget would be free to sidestep. Refused as server_full, which is what
-        // it amounts to from where the player is standing - there is no room for
-        // them to make - and is already a sentence the client knows how to say.
+        // budget would be free to sidestep.
+        //
+        // ITS OWN REASON, not server_full. This used to share that token on the
+        // argument that both amount to "there is no room for you to make" - and
+        // that is wrong in the way that costs the most time, because the two
+        // differ in every respect a player acts on. A full registry clears in
+        // seconds as empty rooms are reaped and is nobody's fault; this one is
+        // YOUR three rooms, clears at one every two minutes, and is usually fixed
+        // by using a room you already made. Saying "SERVER IS AT CAPACITY" when
+        // four of twelve slots are free sends whoever reads it to look at the
+        // wrong thing. A `why` is a wire STRING, so an older client simply falls
+        // through to "COULD NOT JOIN" - no version bump.
         if (!AllowCreate(c.remoteAddr)) {
-            SendToClient(c, buildJoinFail("server_full"));
+            SendToClient(c, buildJoinFail("too_many_rooms"));
             std::cout << "Create refused: address " << c.remoteAddr
                       << " is over its budget\n";
             return true;

@@ -90,7 +90,8 @@ struct MatchSummary {
 
 // Why a join was refused. Kept as an enum rather than a free string so the client
 // can render a sentence a player understands instead of echoing wire text.
-enum class JoinFailure { None, NotFound, Full, BadCode, InProgress, ServerFull, RateLimited, Unknown };
+enum class JoinFailure { None, NotFound, Full, BadCode, InProgress, ServerFull,
+                         TooManyRooms, RateLimited, Unknown };
 
 inline JoinFailure joinFailureFromWire(const std::string& s) {
     if (s == "notfound")     return JoinFailure::NotFound;
@@ -98,6 +99,10 @@ inline JoinFailure joinFailureFromWire(const std::string& s) {
     if (s == "badcode")      return JoinFailure::BadCode;
     if (s == "inprogress")   return JoinFailure::InProgress;
     if (s == "server_full")  return JoinFailure::ServerFull;
+    // Distinct from server_full on purpose: that one is the registry being out
+    // of rooms, this one is YOUR budget, and only the second is fixed by waiting
+    // a couple of minutes or reusing a room you already have.
+    if (s == "too_many_rooms") return JoinFailure::TooManyRooms;
     if (s == "rate_limited") return JoinFailure::RateLimited;
     return JoinFailure::Unknown;
 }
@@ -111,6 +116,7 @@ inline const char* joinFailureWire(JoinFailure f) {
         case JoinFailure::BadCode:     return "badcode";
         case JoinFailure::InProgress:  return "inprogress";
         case JoinFailure::ServerFull:  return "server_full";
+        case JoinFailure::TooManyRooms: return "too_many_rooms";
         case JoinFailure::RateLimited: return "rate_limited";
         default:                       return "unknown";
     }
@@ -124,6 +130,10 @@ inline const char* joinFailureText(JoinFailure f) {
         case JoinFailure::BadCode:     return "WRONG CODE";
         case JoinFailure::InProgress:  return "MATCH ALREADY STARTED";
         case JoinFailure::ServerFull:  return "SERVER IS AT CAPACITY";
+        // Kept short deliberately: this one renders on the CUSTOM screen, whose
+        // bottom-right corner belongs to the volume slider. "YOU" matters - the
+        // limit is the player's own, not the server's.
+        case JoinFailure::TooManyRooms: return "YOU HAVE TOO MANY ROOMS - USE ONE, OR WAIT";
         case JoinFailure::RateLimited: return "TOO MANY ATTEMPTS - WAIT A MOMENT";
         default:                       return "COULD NOT JOIN";
     }

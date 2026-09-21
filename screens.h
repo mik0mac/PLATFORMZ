@@ -496,6 +496,27 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     return optChanged;
 }
 
+//MARK: Refusals
+// The server's answer to something the player asked for, on whatever screen they
+// asked from.
+//
+// This used to be drawn inline in DrawBrowse and NOWHERE ELSE, which made a
+// refusal invisible to anyone who was not standing in the browser. CREATE is on
+// the CUSTOM screen, so an over-budget create - "you already have three rooms" -
+// set this string and then rendered on a screen the player had left behind. From
+// where they stood the button simply did nothing, which is the worst possible
+// report of a refusal: no error, no log line, nothing to search for.
+//
+// Fades after a few seconds so a stale message is never mistaken for the current
+// state.
+inline void DrawRefusalLine(const ShellState& s, int screenW, int y, double now) {
+    if (s.browseStatus.empty()) return;
+    const double age = now - s.browseStatusAt;
+    if (age >= 6.0) return;
+    Color c = age > 4.0 ? Fade(RED, (float)((6.0 - age) / 2.0)) : RED;
+    UiTextCentered(s.browseStatus.c_str(), screenW, y, 18, c);
+}
+
 //MARK: BROWSE
 // What the player asked for this frame. The screen reports intent only - main()
 // owns the socket and decides what to send - so this stays free of networking.
@@ -699,15 +720,7 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     if (UiButton({listX + listW - 110.0f, by, 110.0f, 44.0f}, "BACK"))
         out.action = BrowseAction::Back;
 
-    // Refusals and confirmations, fading after a few seconds so a stale message
-    // is never mistaken for the current state.
-    if (!s.browseStatus.empty()) {
-        const double age = now - s.browseStatusAt;
-        if (age < 6.0) {
-            Color c = age > 4.0 ? Fade(RED, (float)((6.0 - age) / 2.0)) : RED;
-            UiTextCentered(s.browseStatus.c_str(), screenW, (int)by + 60, 18, c);
-        }
-    }
+    DrawRefusalLine(s, screenW, (int)by + 60, now);
     return out;
 }
 
@@ -1005,6 +1018,11 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
         action = CustomAction::Create;
     if (uiEnabled && UiButton({350, 588, 300, 44}, "BACK", 18))
         action = CustomAction::Back;
+
+    // CREATE is on THIS screen, so its refusal has to be on this screen too. The
+    // per-address room budget is the one that actually turns up in practice, and
+    // without this the button looked broken rather than refused.
+    DrawRefusalLine(s, screenWidth, 646, GetTime());
 
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
     return action;

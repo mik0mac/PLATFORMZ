@@ -1504,6 +1504,9 @@ int main(int argc, char** argv) {
                         // One modal, two option sets: hand it the values it is
                         // about to edit, or its sliders show the other mode's.
                         shell.syncShadows(onlineOpt);
+                        // A refusal from the browser is not about this screen; only what CREATE
+                        // gets back belongs here.
+                        shell.browseStatus.clear();
                         screen = GameScreen::CUSTOM;
                         break;
                     case TitleAction::LocalMatch:
@@ -1811,6 +1814,9 @@ int main(int argc, char** argv) {
                         // values.
                         onlineOpt = profile::Get().lastCustomOptions;
                         shell.syncShadows(onlineOpt);
+                        // A refusal from the browser is not about this screen; only what CREATE
+                        // gets back belongs here.
+                        shell.browseStatus.clear();
                         screen = GameScreen::CUSTOM;
                         break;
                     case BrowseAction::Join:

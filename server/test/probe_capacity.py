@@ -132,8 +132,15 @@ wait(0.8)
 # five makes exactly three rooms.
 check(len(maker.created) == 3,
       f"3 rooms minted from one address, then refused: {maker.created}")
-check(maker.joinfails.count("server_full") == 2,
+check(maker.joinfails.count("too_many_rooms") == 2,
       f"the extra attempts were refused: {maker.joinfails}")
+# ITS OWN REASON. The registry has eight free rooms at this point, so calling
+# this "server_full" - which it did - told the player to go and look at a server
+# that was two thirds empty. The two failures clear on completely different
+# terms (seconds, as rooms are reaped, versus one room back every two minutes),
+# so a client cannot give useful advice unless it can tell them apart.
+check("server_full" not in maker.joinfails,
+      f"...as a room budget, not as a full server: {set(maker.joinfails)}")
 
 print("match names are sanitised like player names")
 maker.matchlists.clear()

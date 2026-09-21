@@ -113,6 +113,13 @@ for i in range(20):                       # cap is 12; this must start refusing
     time.sleep(0.12)
 time.sleep(0.8)
 check("server_full" in a.joinfails, "creation refused once at capacity")
+# This probe runs with the per-address budget turned OFF, so every refusal here
+# is the registry genuinely being out of rooms. Asserting the OTHER reason is
+# absent is what keeps the two apart: they used to share one token, which is how
+# "you already have three rooms" came to read as "SERVER IS AT CAPACITY" with a
+# third of the registry free.
+check("too_many_rooms" not in a.joinfails,
+      f"...as capacity, not as a room budget that is switched off here: {set(a.joinfails)}")
 a.send({"type": "list", "cur": 0})
 time.sleep(0.6)
 p0 = a.matchlists[-1]
