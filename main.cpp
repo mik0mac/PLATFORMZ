@@ -841,7 +841,7 @@ int main(int argc, char** argv) {
             const bool wasSeated = myIndex >= 0;
             netAcked = true;
             myIndex  = -1;
-            if (wasSeated) shell.inMatchCode.clear();
+            if (wasSeated) { shell.inMatchCode.clear(); shell.roomLost = true; }
             TraceLog(LOG_INFO, "Connected, holding no room");
             return true;
         }
@@ -1033,8 +1033,24 @@ int main(int argc, char** argv) {
         // Networked: we are still IN the room whose match just ended, so go back
         // to its lobby. Dropping to the router would look like being kicked, and
         // the server would still be holding our slot.
+        //
+        // Unless we are NOT in it any more - a slot lost while the match was
+        // winding down leaves nothing to return to, and the lobby would render a
+        // roster we have no part in. The browser is where a roomless client
+        // belongs, so send them there to pick again.
         if (networked) shell.syncShadows(onlineOpt);
-        screen = networked ? GameScreen::LOBBY : GameScreen::TITLE;
+        const bool haveRoom = myIndex >= 0;
+        if (networked && !haveRoom) {
+            shell.roomLost = false;      // acted on
+            shell.browseStatus.clear();
+            shell.matches.clear();
+            shell.awaitingList = true;
+            shell.lastListAt = GetTime();
+            if (net.isOpen()) net.send(serializeList(0));
+        }
+        screen = !networked      ? GameScreen::TITLE
+               : haveRoom        ? GameScreen::LOBBY
+                                 : GameScreen::BROWSE;
         // An offline match is over; the session is online again if it ever was.
         networked = sessionOnline;
     };
@@ -1532,6 +1548,19 @@ int main(int argc, char** argv) {
             ServerMessage::Phase p = pumpNet();
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // This screen is "a room we are standing in", so the moment we are
+            // not standing in one it has nothing to draw. Back to the browser to
+            // pick again, rather than showing the roster of a room we left.
+            if (shell.roomLost || myIndex < 0) {
+                shell.roomLost = false;
+                shell.browseStatus.clear();
+                shell.matches.clear();
+                shell.awaitingList = true;
+                shell.lastListAt = GetTime();
+                if (net.isOpen()) net.send(serializeList(0));
+                screen = GameScreen::BROWSE;
+                continue;
+            }
             shell.roomChanged = false;   // already here; nothing to act on
 
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
@@ -1578,9 +1607,13 @@ int main(int argc, char** argv) {
                         shell.scoresShowLocal = false;
                         break;
                     case LobbyAction::Leave:
-                        // The server puts us back in its default room and welcomes
-                        // us there; joinPending stays false so that welcome cannot
-                        // bounce us into the room we just walked out of.
+                        // The server parks us: no room, and an `unseated` saying
+                        // so. joinPending stays false, so nothing can bounce us
+                        // into the room we just walked out of. We route to the
+                        // browser ourselves rather than waiting to be told, so
+                        // the screen changes on the click instead of a round trip
+                        // later - the roomLost guard above is the backstop for
+                        // every other way a slot can go.
                         if (net.isOpen()) net.send(serializeLeave());
                         shell.browseStatus.clear();
                         shell.matches.clear();
@@ -2071,6 +2104,7 @@ int main(int argc, char** argv) {
                 // so both ends share netbin.h's tags).
                 const char* msg = protoMismatch ? "SERVER VERSION MISMATCH"
                                 : myIndex >= 0  ? "JOINING GAME..."
+                                : netAcked      ? "NO MATCH - CHOOSE ONE FROM THE BROWSER"
                                                 : "CONNECTING TO SERVER...";
                 DrawText(msg, 20, 20, 20, protoMismatch ? RED : RAYWHITE);
                 DrawText(serverUrl.c_str(), 20, 48, 14, DARKGRAY);

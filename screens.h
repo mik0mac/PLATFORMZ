@@ -129,6 +129,12 @@ struct ShellState {
     // would otherwise bounce us straight into the room we just left.
     bool joinPending = false;
     bool roomChanged = false;   // a requested move completed; the screen acts on it
+    // The mirror of roomChanged: we HELD a room and now hold none, because the
+    // server said `unseated`. LEAVE is the ordinary way to get here and routes
+    // itself, so this is for every other way - and it exists because a screen
+    // that assumes a room (the lobby, the countdown) has to stop assuming one
+    // the moment that stops being true, rather than sitting on a stale roster.
+    bool roomLost = false;
 
     // ---- Custom match setup (CUSTOM) ------------------------------------
     std::string customName;                 // room name, defaulted from the player's
