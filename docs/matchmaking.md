@@ -260,10 +260,22 @@ rows.
 The client side of this is that the browser **does not poll**. It used to re-ask
 every two seconds, which was harmless against a key that never changed but would
 now reorder the list under a player reaching for a row. The list is a snapshot;
-REFRESH sends `cur = 0` and is the only thing that takes a new one. The button
-goes inert for a second after each ask, because an over-budget `list` is dropped
-without a reply (see the rate limits below) and a mashed button would otherwise
-leave the screen waiting on a request that no longer exists.
+REFRESH sends `cur = 0` and is the only thing that takes a new one.
+
+**Paging never reaches the player.** The client asks for `cur = 0`, then follows
+`next` to the end of the snapshot and concatenates, so the browser shows ONE
+scrollable list of every public room rather than pages to click through. That is
+only coherent because of the snapshot above — pages cut from a list re-sorted
+between requests would assemble into one that never existed at any single moment.
+Assembly is bounded by the registry cap, but it is also rate limited (a burst,
+then one `list` a second, and an over-budget request is dropped in silence), so
+the client re-asks for a page that does not come back and gives up after four
+tries rather than spinning: a short list somebody can act on beats a spinner.
+
+The REFRESH button goes inert for a second after the **last page** of a refresh
+lands, not the first. A refresh costs one request per page while the budget
+refills at one a second, so timing it from page 0 would let a multi-page
+directory drain the bucket faster than it fills.
 
 `probe_listorder.py` is the test for all of it.
 

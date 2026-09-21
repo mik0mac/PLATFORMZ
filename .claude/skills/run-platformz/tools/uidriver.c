@@ -13,9 +13,11 @@
 // Claude Code (usually Visual Studio Code) - `uidriver trusted` reports 1/0.
 //
 //   uidriver trusted
-//   uidriver click <x> <y>                  screen POINTS, not pixels
-//   uidriver key   <keycode>                a bare key
-//   uidriver chord <modkeycode> <keycode> <cmd|ctrl>
+//   uidriver click  <x> <y>                 screen POINTS, not pixels
+//   uidriver key    <keycode>               a bare key
+//   uidriver chord  <modkeycode> <keycode> <cmd|ctrl>
+//   uidriver scroll <x> <y> <lines>         + is up/away, - is down/toward
+//   uidriver drag   <x1> <y1> <x2> <y2>     press, move in steps, release
 //
 // Useful key codes: V 9 · TAB 48 · RETURN 36 · DELETE 51 · ESC 53 ·
 //                   CMD 55 · SHIFT 56 · CTRL 59 · A 0 · M 46
@@ -34,7 +36,7 @@ static void postKey(CGKeyCode kc, bool down, CGEventFlags fl) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { fprintf(stderr, "usage: uidriver trusted|click|key|chord ...\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: uidriver trusted|click|key|chord|scroll|drag ...\n"); return 2; }
 
     if (strcmp(argv[1], "trusted") == 0) { printf("%d\n", AXIsProcessTrusted()); return 0; }
 
@@ -47,6 +49,50 @@ int main(int argc, char** argv) {
         CGEventPost(kCGHIDEventTap, dn); CFRelease(dn);
         usleep(90000);
         CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, p, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, up); CFRelease(up);
+        return 0;
+    }
+
+    // The wheel goes to whatever is UNDER THE POINTER, not to the focused
+    // window, so the move first is not optional - and a scroll-aware widget
+    // usually gates on the pointer being over it anyway.
+    if (strcmp(argv[1], "scroll") == 0 && argc >= 5) {
+        CGPoint p = CGPointMake(atof(argv[2]), atof(argv[3]));
+        CGEventRef mv = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, p, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, mv); CFRelease(mv);
+        usleep(120000);
+        CGEventRef sc = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 1,
+                                                      (int32_t)atoi(argv[4]));
+        // A scroll event carries no location of its own; without this it lands
+        // wherever the system last thought the pointer was.
+        CGEventSetLocation(sc, p);
+        CGEventPost(kCGHIDEventTap, sc); CFRelease(sc);
+        usleep(90000);
+        return 0;
+    }
+
+    // Press, MOVE IN STEPS, release. A single jump from press to release is not
+    // a drag: an immediate-mode widget samples the mouse once a frame, so it
+    // would see the button go down and up with no motion between and treat the
+    // whole thing as a click.
+    if (strcmp(argv[1], "drag") == 0 && argc >= 6) {
+        double x1 = atof(argv[2]), y1 = atof(argv[3]);
+        double x2 = atof(argv[4]), y2 = atof(argv[5]);
+        CGPoint a = CGPointMake(x1, y1);
+        CGEventRef mv = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, a, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, mv); CFRelease(mv);
+        usleep(120000);
+        CGEventRef dn = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, a, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, dn); CFRelease(dn);
+        usleep(120000);
+        for (int i = 1; i <= 12; ++i) {
+            CGPoint q = CGPointMake(x1 + (x2 - x1) * i / 12.0, y1 + (y2 - y1) * i / 12.0);
+            CGEventRef dg = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDragged, q, kCGMouseButtonLeft);
+            CGEventPost(kCGHIDEventTap, dg); CFRelease(dg);
+            usleep(25000);
+        }
+        CGPoint b = CGPointMake(x2, y2);
+        CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, b, kCGMouseButtonLeft);
         CGEventPost(kCGHIDEventTap, up); CFRelease(up);
         return 0;
     }

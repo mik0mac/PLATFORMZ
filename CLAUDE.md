@@ -175,6 +175,14 @@ poll** — REFRESH is the only thing that re-reads the world, because a list tha
 reorders under a player is a list they misclick. `probe_listorder.py` tests both
 halves; `docs/matchmaking.md` has the full contract.
 
+**Paging is a wire detail, not a UI.** The one-datagram cap is why `matchlist` is
+paged; the client follows `next` to the end of the snapshot and shows one
+scrollable list, so there are no page buttons. The scroll lives in `screens.h`
+(`BeginScissorMode` to clip rows, `GetMouseWheelMove` + a draggable bar), and the
+JOIN hit-test is gated on the pointer being inside the panel — the scissor clips
+what is *drawn*, never what `UiButton` hit-tests, so without that gate a button
+scrolled out of view would still take a click.
+
 ## Collision system (collisions.cpp)
 - `RunCollisionChecks()` runs once per frame (after positions update, before
   active-object cleanup): rebuild grid → rocket-vs-{asteroid,platform,wall,player}

@@ -880,12 +880,47 @@ int main(int argc, char** argv) {
             return true;
         }
         if (m.type == ServerMessage::Type::MatchList) {
-            shell.matches     = std::move(m.matches);
+            // ONE LIST, ASSEMBLED FROM PAGES. The reply is capped to a single
+            // datagram, which is a transport limit and not something the player
+            // should ever have to click through, so cursor 0 starts a list and
+            // every later page is appended to it.
+            //
+            // This is only coherent because the SERVER pages from a snapshot:
+            // pages cut from a list re-sorted between requests would concatenate
+            // into one that never existed at any single moment - the same room
+            // twice, another missing entirely.
+            if (m.listCursor <= 0) {
+                shell.matches = std::move(m.matches);
+                shell.browseScrollPx = 0.0f;   // a new list starts at the top
+            } else {
+                shell.matches.insert(shell.matches.end(),
+                                     std::make_move_iterator(m.matches.begin()),
+                                     std::make_move_iterator(m.matches.end()));
+            }
             shell.listCursor  = m.listCursor;
             shell.listNext    = m.listNext;
             shell.listTotal   = m.listTotal;
-            shell.browseScroll = 0;
             shell.awaitingList = false;
+
+            // Walk to the end of the snapshot. Bounded by the registry cap, so
+            // this is a handful of requests at worst - but it IS rate limited
+            // (a burst, then one a second), and an over-budget `list` is dropped
+            // in silence, so the ask is recorded and the BROWSE screen re-asks
+            // if nothing comes back. Without that a truncated list would look
+            // exactly like a server with fewer rooms on it.
+            shell.listFollow = m.listNext;
+            if (m.listNext >= 0) {
+                shell.listFollowAt  = GetTime();
+                shell.listFollowTry = 0;
+                // The REFRESH cooldown counts from the LAST page fetched, not the
+                // first, so it scales with the size of the list instead of the
+                // number of times the button was pressed. A refresh costs one
+                // request per page while the budget refills at one a second, so
+                // timing it from page 0 would let a two-page directory drain the
+                // bucket faster than it fills and start losing follow-up pages.
+                shell.lastListAt = GetTime();
+                if (net.isOpen()) net.send(serializeList(m.listNext));
+            }
             return true;
         }
         if (m.type == ServerMessage::Type::JoinFail) {
@@ -1057,6 +1092,7 @@ int main(int argc, char** argv) {
             shell.roomLost = false;      // acted on
             shell.browseStatus.clear();
             shell.matches.clear();
+            shell.listFollow = -1;   // no half-walked list to finish
             shell.awaitingList = true;
             shell.lastListAt = GetTime();
             if (net.isOpen()) net.send(serializeList(0));
@@ -1439,6 +1475,7 @@ int main(int argc, char** argv) {
                         // BROWSE is what turns that into a lobby.
                         shell.browseStatus.clear();
                         shell.matches.clear();
+                        shell.listFollow = -1;   // no half-walked list to finish
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         askToMove(serializeQuick(), /*retryable*/ true);
@@ -1450,6 +1487,7 @@ int main(int argc, char** argv) {
                         screen = GameScreen::BROWSE;
                         shell.browseStatus.clear();
                         shell.matches.clear();
+                        shell.listFollow = -1;   // no half-walked list to finish
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         if (net.isOpen()) net.send(serializeList(0));
@@ -1594,6 +1632,7 @@ int main(int argc, char** argv) {
                 shell.roomLost = false;
                 shell.browseStatus.clear();
                 shell.matches.clear();
+                shell.listFollow = -1;   // no half-walked list to finish
                 shell.awaitingList = true;
                 shell.lastListAt = GetTime();
                 if (net.isOpen()) net.send(serializeList(0));
@@ -1656,6 +1695,7 @@ int main(int argc, char** argv) {
                         if (net.isOpen()) net.send(serializeLeave());
                         shell.browseStatus.clear();
                         shell.matches.clear();
+                        shell.listFollow = -1;   // no half-walked list to finish
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         if (net.isOpen()) net.send(serializeList(0));
@@ -1719,6 +1759,21 @@ int main(int argc, char** argv) {
             // new one.
             const double nowT = GetTime();
 
+            // Finish assembling the list if a follow-up page never arrived. The
+            // `list` budget is a burst then one a second, and anything over it is
+            // dropped WITHOUT a reply, so a big directory can out-run the limiter
+            // mid-walk. Re-ask on the limiter's own cadence, and give up rather
+            // than loop: a short list the player can act on beats a spinner.
+            if (shell.listFollow >= 0 && net.isOpen() && nowT - shell.listFollowAt > 1.2) {
+                if (shell.listFollowTry >= 4) {
+                    shell.listFollow = -1;    // what we have is what they get
+                } else {
+                    shell.listFollowTry++;
+                    shell.listFollowAt = nowT;
+                    net.send(serializeList(shell.listFollow));
+                }
+            }
+
             if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
 
             BeginDrawing();
@@ -1738,14 +1793,9 @@ int main(int argc, char** argv) {
                         // anyway - page 2 of the old order is not page 2 of the new.
                         shell.awaitingList = true;
                         shell.listCursor = 0;
+                        shell.listFollow = -1;   // abandon any half-walked list
                         shell.lastListAt = nowT;
                         net.send(serializeList(0));
-                        break;
-                    case BrowseAction::Page:
-                        shell.awaitingList = true;
-                        shell.listCursor = r.cursor;
-                        shell.lastListAt = nowT;
-                        net.send(serializeList(r.cursor));
                         break;
                     case BrowseAction::Quick:
                         shell.setBrowseStatus("FINDING A MATCH...", nowT);

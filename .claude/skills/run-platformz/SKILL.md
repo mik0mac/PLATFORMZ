@@ -110,10 +110,21 @@ driver).
 ## 3. Click and type
 
 ```bash
-"$SCRATCH/uidriver" click 734 627        # screen POINTS
-"$SCRATCH/uidriver" key 46               # M - end match
-"$SCRATCH/uidriver" chord 55 9 cmd       # Cmd+V (paste)
+"$SCRATCH/uidriver" click 734 627            # screen POINTS
+"$SCRATCH/uidriver" key 46                   # M - end match
+"$SCRATCH/uidriver" chord 55 9 cmd           # Cmd+V (paste)
+"$SCRATCH/uidriver" scroll 700 380 -4        # wheel, 4 lines DOWN, at that point
+"$SCRATCH/uidriver" drag 1129 481 1129 300   # press, move, release - scrollbars
 ```
+
+`scroll` moves the pointer first and stamps the location onto the event: a scroll
+event carries no position of its own, and a list that only scrolls while hovered
+(the match browser does, so a scroll aimed at the page cannot move a row out from
+under the cursor) would ignore one posted at the wrong place.
+
+`drag` posts **intermediate motion**, which is what makes it a drag rather than a
+click. An immediate-mode widget samples the mouse once a frame, so a straight
+jump from press to release looks like a click on the starting point.
 
 **Do not use `osascript`/System Events for input.** Two traps, both of which
 make working code look broken:

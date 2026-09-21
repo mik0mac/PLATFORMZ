@@ -110,13 +110,30 @@ struct ShellState {
     std::vector<int> botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
 
     // ---- Match browser (BROWSE) -----------------------------------------
-    std::vector<MatchSummary> matches;      // current page, newest reply wins
+    // EVERY room, not one page. The wire still pages - the reply is capped to one
+    // datagram - but that is a transport fact the player should never meet, so
+    // the client follows `next` to the end of the snapshot and concatenates. What
+    // makes that safe is the snapshot itself: pages cut from a list re-sorted
+    // between requests would assemble into one that never existed at any single
+    // moment, with rooms appearing twice and others missing.
+    std::vector<MatchSummary> matches;
     int   listCursor  = 0;                  // page we asked for
     int   listNext    = -1;                 // cursor for the next page, -1 = last
     int   listTotal   = 0;                  // rooms the server says exist
-    int   browseScroll = 0;                 // first visible row
     double lastListAt = 0.0;                // GetTime() of the last refresh
     bool   awaitingList = false;            // a request is outstanding
+    // Set while we are still walking the snapshot. Separate from awaitingList,
+    // which is about a single request: this is "the list on screen is not the
+    // whole list yet", and it is what the follow-up pages are driven from.
+    int    listFollow    = -1;              // cursor still to fetch, -1 = done
+    double listFollowAt  = 0.0;             // when we asked for it
+    int    listFollowTry = 0;               // re-asks spent on it
+    // Scroll offset in PIXELS, not rows. Smooth scrolling needs no more code than
+    // row-stepping once the panel is clipped, and a part-row at the bottom edge
+    // is the thing that tells a player there is more below.
+    float  browseScrollPx = 0.0f;
+    bool   browseDragging = false;          // the scrollbar thumb is held
+    float  browseDragGrab = 0.0f;           // where in the thumb it was grabbed
     // The room we are actually in, straight from the welcome - not the code we
     // asked for. Quick match picks a room for us, and connecting with no room
     // named lands us in one we never chose, so only the server knows.
@@ -482,13 +499,15 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
 //MARK: BROWSE
 // What the player asked for this frame. The screen reports intent only - main()
 // owns the socket and decides what to send - so this stays free of networking.
-enum class BrowseAction { None, Back, Refresh, Quick, Create, Join, Page };
+// No Page action any more: the list is scrolled, not paged. Paging survives on
+// the WIRE (the reply is capped to one datagram) but the client walks it to the
+// end and hands the player one list, so there is no page for them to ask for.
+enum class BrowseAction { None, Back, Refresh, Quick, Create, Join };
 
 struct BrowseResult {
     BrowseAction action = BrowseAction::None;
     std::string  code;       // Join: which room, from a row or the code field
     std::string  joinCode;   // Join: a private room's password, if one was typed
-    int          cursor = 0; // Page: which page to ask for
 };
 
 // The match browser. Immediate mode like everything in ui.h: call it every frame,
@@ -505,7 +524,7 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     const float listX = 100.0f, listY = 150.0f;
     const float listW = (float)screenW - 200.0f, listH = 330.0f;
     const float rowH  = 40.0f;
-    const int   rowsVisible = (int)(listH / rowH);
+    const Rectangle listRect = {listX, listY, listW, listH};
 
     UiTextCentered("FIND A MATCH", screenW, 80, 40, RAYWHITE);
 
@@ -528,11 +547,58 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                  (int)(refreshBtn.y + 8), 18, GRAY);
     }
 
-    // Total count, so a capped page is not mistaken for the whole world.
+    // Total count, so a capped page is not mistaken for the whole world. While
+    // the follow-up pages are still arriving this and matches.size() disagree,
+    // which is exactly right: it says how many there ARE while the list fills in.
     DrawText(s.listTotal == 1 ? "1 MATCH" : TextFormat("%d MATCHES", s.listTotal),
              (int)listX, (int)listY - 40, 18, ui::OUTLINE);
 
-    UiPanel({listX, listY, listW, listH});
+    UiPanel(listRect);
+
+    // SCROLLING. The content is every room the snapshot held, so it can be taller
+    // than the panel; `browseScrollPx` is how far down it has been pushed.
+    const float contentH = (float)s.matches.size() * rowH + 12.0f;
+    const float maxScroll = contentH > listH ? contentH - listH : 0.0f;
+    const bool  mouseOverList = CheckCollisionPointRec(GetMousePosition(), listRect);
+
+    // The wheel only steers while the pointer is over the list, so a scroll aimed
+    // at the page does not quietly move a row out from under the cursor.
+    if (mouseOverList) {
+        const float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f) s.browseScrollPx -= wheel * rowH;
+    }
+    // Arrow keys do the same, for a trackpad-less mouse and for anyone who never
+    // thinks to scroll a list that has no visible bar until it overflows.
+    if (IsKeyDown(KEY_DOWN)) s.browseScrollPx += rowH * 0.25f;
+    if (IsKeyDown(KEY_UP))   s.browseScrollPx -= rowH * 0.25f;
+
+    // The bar. Drawn only when there is something to scroll - a permanent bar on
+    // a list of five rooms is furniture that means nothing.
+    const Rectangle barTrack = {listX + listW - 9.0f, listY + 4.0f, 6.0f, listH - 8.0f};
+    if (maxScroll > 0.0f) {
+        const float thumbH = std::max(24.0f, barTrack.height * (listH / contentH));
+        const float travel = barTrack.height - thumbH;
+        const Rectangle thumb = {barTrack.x, barTrack.y + travel * (s.browseScrollPx / maxScroll),
+                                 barTrack.width, thumbH};
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            CheckCollisionPointRec(GetMousePosition(), thumb)) {
+            s.browseDragging = true;
+            s.browseDragGrab = GetMousePosition().y - thumb.y;
+        }
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) s.browseDragging = false;
+        if (s.browseDragging && travel > 0.0f)
+            s.browseScrollPx = ((GetMousePosition().y - s.browseDragGrab) - barTrack.y)
+                             / travel * maxScroll;
+
+        DrawRectangleRec(barTrack, Fade(ui::OUTLINE, 0.15f));
+        DrawRectangleRec(thumb, s.browseDragging ? ui::OUTLINE : Fade(ui::OUTLINE, 0.55f));
+    } else {
+        s.browseDragging = false;
+    }
+    // Clamp AFTER every input, and after the list has changed size under us - a
+    // refresh that returns fewer rooms must not leave us scrolled past the end.
+    if (s.browseScrollPx > maxScroll) s.browseScrollPx = maxScroll;
+    if (s.browseScrollPx < 0.0f)      s.browseScrollPx = 0.0f;
 
     if (!connected) {
         UiTextCentered("NOT CONNECTED", screenW, (int)(listY + listH / 2 - 10), 20, GRAY);
@@ -544,11 +610,17 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             UiTextCentered("CREATE ONE, OR TRY QUICK MATCH",
                            screenW, (int)(listY + listH / 2 + 8), 16, GRAY);
     } else {
-        for (int i = 0; i < rowsVisible; ++i) {
-            const int idx = s.browseScroll + i;
-            if (idx >= (int)s.matches.size()) break;
+        // Clip to the panel so a row scrolled half past the edge is cut rather
+        // than drawn over the frame - raylib's scissor is glScissor, so this
+        // works the same in the browser. The part-row it leaves at the bottom is
+        // the affordance: it is what says "there is more below".
+        BeginScissorMode((int)listRect.x, (int)listRect.y,
+                         (int)listRect.width, (int)listRect.height);
+        for (int idx = 0; idx < (int)s.matches.size(); ++idx) {
             const MatchSummary& m = s.matches[idx];
-            const float ry = listY + 6.0f + i * rowH;
+            const float ry = listY + 6.0f + idx * rowH - s.browseScrollPx;
+            // Nothing to draw and nothing to click, well off either edge.
+            if (ry + rowH < listRect.y || ry > listRect.y + listRect.height) continue;
 
             DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18, RAYWHITE);
             DrawText(TextFormat("%d/%d", m.players, m.maxPlayers),
@@ -568,9 +640,15 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             DrawText(m.phase.c_str(),  (int)listX + 570, (int)ry + 10, 16,
                      m.phase == "playing" ? ui::OUTLINE : GRAY);
 
+            // Clear of the scrollbar at listW-9: this ends at listW-14.
             Rectangle joinBtn = {listX + listW - 100.0f, ry + 4.0f, 86.0f, 30.0f};
             if (m.joinable) {
-                if (UiButton(joinBtn, "JOIN", 16) && connected) {
+                // `mouseOverList` is what keeps a half-scrolled row honest. The
+                // scissor clips what is DRAWN, not what UiButton hit-tests, so
+                // without it the invisible half of a button scrolled past the
+                // panel edge would still take a click - from a spot where the
+                // player can see a different row entirely.
+                if (UiButton(joinBtn, "JOIN", 16) && connected && mouseOverList) {
                     out.action = BrowseAction::Join;
                     out.code   = m.code;
                 }
@@ -593,21 +671,15 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                          (int)(joinBtn.y + 7), 16, GRAY);
             }
         }
+        EndScissorMode();
     }
 
-    // Paging appears only when there is more than one page to see.
-    if (s.listNext >= 0 || s.listCursor > 0) {
-        if (s.listCursor > 0 &&
-            UiButton({listX, listY + listH + 8.0f, 90.0f, 30.0f}, "FIRST", 16) && connected) {
-            out.action = BrowseAction::Page;
-            out.cursor = 0;   // the wire protocol pages forward only
-        }
-        if (s.listNext >= 0 &&
-            UiButton({listX + 100.0f, listY + listH + 8.0f, 90.0f, 30.0f}, "MORE", 16) && connected) {
-            out.action = BrowseAction::Page;
-            out.cursor = s.listNext;
-        }
-    }
+    // Still filling in. Said under the panel rather than over the rows, because
+    // the rows that HAVE arrived are already usable - this is "more on the way",
+    // not "wait".
+    if (s.listFollow >= 0 && connected)
+        DrawText(TextFormat("LOADING %d OF %d...", (int)s.matches.size(), s.listTotal),
+                 (int)listX, (int)(listY + listH + 10), 16, GRAY);
 
     const float by = listY + listH + 56.0f;
     if (UiButton({listX, by, 170.0f, 44.0f}, "QUICK MATCH") && connected)
