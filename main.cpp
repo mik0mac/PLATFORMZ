@@ -478,6 +478,21 @@ int main(int argc, char** argv) {
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
+    // Has the server ANSWERED our handshake? Not the same question as "do we
+    // hold a slot", and conflating the two is what this flag exists to undo.
+    //
+    // `myIndex < 0` used to mean both "still handshaking" and "connected,
+    // holding no room". That was harmless only while arriving always put you in
+    // a room: the moment it stopped (C6b), every myIndex-based test below was
+    // asking the wrong question - the hello retry would never stop, the UDP
+    // auto-fallback would fire on a perfectly healthy connection, and the
+    // keepalive would never start, so the server would reap us after three
+    // seconds of silence.
+    //
+    // Set by EITHER answer: a welcome (we have a seat) or an `unseated` (we are
+    // through and hold nothing). Cleared only when the connection itself
+    // restarts, which is the one case where the handshake really must run again.
+    bool      netAcked  = false;
     bool      protoMismatch = false; // server is speaking a different build's binary protocol (see netbin.h tags)
     uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
     // Handshake/reconnect bookkeeping (networked): resend hello until welcomed, and
@@ -799,6 +814,7 @@ int main(int argc, char** argv) {
     auto applyNonStateMessage = [&](ServerMessage& m) -> bool {
         if (m.type == ServerMessage::Type::Welcome) {
             myIndex = m.playerId;
+            netAcked = true;
             shell.serverFull = false;
             // A welcome arrives on connect, after a re-slot, and after a move.
             // Only a move WE asked for should change screens - hence joinPending
@@ -813,6 +829,20 @@ int main(int argc, char** argv) {
             // (myIndex == -1) every client's default would have been "PLAYER 1".
             net.send(serializeName(myDisplayName()));
             TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
+            return true;
+        }
+        if (m.type == ServerMessage::Type::Unseated) {
+            // Through the door, holding nothing. This is a normal resting state
+            // now, not a failure and not a queue: you arrive here and pick a room.
+            //
+            // It also UNDOES a welcome, which is what makes it more than a log
+            // line - LEAVE lands here, and without dropping the slot we would go
+            // on believing we were in the room we just left.
+            const bool wasSeated = myIndex >= 0;
+            netAcked = true;
+            myIndex  = -1;
+            if (wasSeated) shell.inMatchCode.clear();
+            TraceLog(LOG_INFO, "Connected, holding no room");
             return true;
         }
         if (m.type == ServerMessage::Type::Identity) {
@@ -865,12 +895,13 @@ int main(int argc, char** argv) {
             // mapping so the client and the protocol can drift apart safely.
             shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
             shell.awaitingList = false;
-            // Before we hold a slot, a refusal IS the connection status: we are
-            // connected and being told there is nowhere to sit. The browse status
-            // line above is only on screen in the browser, so drive the same flag
-            // the retired `full` message used to, and the lobby keeps saying
-            // "match in progress" instead of "connecting" forever. Cleared by the
-            // next welcome, which is what getting in looks like.
+            // "The room we asked for had no seat", not "we are connected with
+            // nowhere to be" - holding no room is ordinary now and says nothing
+            // about fullness. Still worth a flag of its own because a refusal is
+            // the one case where the player asked for something specific and did
+            // not get it, and the browse status line above is only on screen in
+            // the browser. Cleared by the next welcome, which is what getting in
+            // looks like.
             if (myIndex < 0 && (m.joinFail == JoinFailure::Full ||
                                 m.joinFail == JoinFailure::ServerFull))
                 shell.serverFull = true;
@@ -1182,19 +1213,23 @@ int main(int argc, char** argv) {
             // match we did not start, which is the bug this whole flag exists for.
             if (!networked) { net.poll(); lastStateTime = GetTime(); }
             // Auto-fallback (baked-in UDP default only): if the UDP handshake never
-            // completes (no welcome, myIndex still -1) within the timeout, the path
+            // completes (no answer of EITHER kind - see netAcked) within the timeout, the path
             // is likely blocking UDP - switch once to WebSocket at the same host and
             // restart the handshake. WsTransport then retries on its own thread.
-            if (autoFallback && udpTransport && myIndex < 0 && nowT - connectStartTime > 3.0) {
+            if (autoFallback && udpTransport && !netAcked && nowT - connectStartTime > 3.0) {
                 TraceLog(LOG_WARNING, "UDP handshake timed out; falling back to WebSocket: %s",
                          fallbackWsUrl.c_str());
                 net.connect(dialUrl(fallbackWsUrl)); // swaps UdpTransport -> WsTransport (old socket closed by its dtor)
                 udpTransport = false;       // stop UDP-only keepalive / silence-reset below
                 autoFallback = false;       // one-shot
                 connectStartTime = nowT;
+                netAcked = false;           // new socket, unanswered again
                 lastHelloTime = 0.0;        // send hello immediately on the new socket
             }
-            if (net.isOpen() && myIndex < 0 && nowT - lastHelloTime > 0.5) {
+            // Until the server answers, not until it seats us. Retrying past the
+            // answer is what made a parked connection impossible to hold: the
+            // server parks us and our own next hello asks to be seated again.
+            if (net.isOpen() && !netAcked && nowT - lastHelloTime > 0.5) {
                 // Only carry a name if the user actually set one (same gate as
                 // serializeName). Before welcome myIndex is -1, so myDisplayName()
                 // would send the slot-0 default "PLAYER 1" for EVERY client and
@@ -1215,12 +1250,25 @@ int main(int argc, char** argv) {
             // and the server's idle-reaper would free its slot mid-countdown. A
             // 1s heartbeat keeps the slot alive on every screen. UDP only - WS is
             // kept alive by TCP and is never reaped.
-            if (udpTransport && myIndex >= 0 && nowT - lastKeepaliveTime > 1.0) {
+            //
+            // Gated on being ANSWERED, not on holding a slot. A client sitting in
+            // the browser holds no slot and sends no input, and the reaper does
+            // not care why it is quiet: UDP_CLIENT_TIMEOUT_LOBBY is 3 seconds, so
+            // without this it is dropped almost immediately. It used to survive
+            // that only because the hello retry above doubled as a heartbeat -
+            // and stopping that retry is the other half of this change, so the
+            // two have to move together.
+            if (udpTransport && netAcked && nowT - lastKeepaliveTime > 1.0) {
                 net.send(serializeKeepalive());
                 lastKeepaliveTime = nowT;
             }
-            if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
-                myIndex = -1; // UDP only: treat as disconnected; resume the hello handshake
+            // Seated and hearing nothing: the connection is gone. Gated on
+            // holding a slot on purpose - a parked client is ENTITLED to silence,
+            // since state packets belong to a room and it is not in one.
+            if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0) {
+                myIndex  = -1;      // UDP only: treat as disconnected...
+                netAcked = false;   // ...and let the hello handshake run again
+            }
         }
 
         // Web only: tell shell.html whether the mouse belongs to the UI, so its
