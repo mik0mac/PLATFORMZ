@@ -1689,6 +1689,18 @@ int main(int argc, char** argv) {
             // browser while a match we belong to begins without us.
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // Already where a lost room would send us, so there is nothing to
+            // act on - the mirror of the LOBBY screen's roomChanged line.
+            //
+            // Leaving it set was a bug with a very specific shape: LEAVE routes
+            // itself to this screen on the click, so the `unseated` that follows
+            // always lands while we are ALREADY standing here, and nothing here
+            // consumed it. The flag then sat true until the next join reached the
+            // lobby, whose guard fired on it and bounced straight back - so the
+            // first join after any leave appeared to do nothing, and the second
+            // worked because the bounce had cleared the flag on the way out.
+            shell.roomLost = false;
+
             // The join/quick we asked for landed - go stand in the room.
             if (shell.roomChanged) {
                 shell.roomChanged = false;
