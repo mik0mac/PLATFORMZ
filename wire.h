@@ -129,7 +129,10 @@ inline const char* joinFailureText(JoinFailure f) {
         case JoinFailure::Full:        return "MATCH IS FULL";
         case JoinFailure::BadCode:     return "WRONG CODE";
         case JoinFailure::InProgress:  return "MATCH ALREADY STARTED";
-        case JoinFailure::ServerFull:  return "SERVER IS AT CAPACITY";
+        // "TRY AGAIN SHORTLY" is advice, not padding: an idle room is reaped
+        // after MATCH_EMPTY_GRACE_IDLE_SEC (30 s), so waiting genuinely is the
+        // fix, and without saying so a full server reads as a dead end.
+        case JoinFailure::ServerFull:  return "SERVER IS AT CAPACITY - TRY AGAIN SHORTLY";
         // Kept short deliberately: this one renders on the CUSTOM screen, whose
         // bottom-right corner belongs to the volume slider. "YOU" matters - the
         // limit is the player's own, not the server's.

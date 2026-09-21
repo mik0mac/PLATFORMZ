@@ -157,6 +157,17 @@ const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
 // constraint visible rather than pretending it does not exist. Watch the transfer
 // graph, not the tick time. Raising this past ~16 needs the egress work first
 // (broadcast decimation via GameSpace::extrapolate), not a faster tick.
+//
+// THIS NUMBER IS MEANT TO GO UP, so nothing outside this line may assume its
+// value. Verified by running the whole suite at 40 and fixing what broke, which
+// was one test: probe_directory sent a fixed 20 creates and called the 21st
+// refusal "capacity", so a bigger cap failed a server that was behaving
+// perfectly. It now fills until refused and walks however many pages that takes.
+// The client needs nothing: it follows `next` to the end of the snapshot, which
+// was checked at 40 rooms / 5 pages against the real browser. Note that 5 of
+// these slots are the pinned official rooms (one per preset), so the rooms
+// PLAYERS can hold is this minus matchOptionPresets.size() - and adding a preset
+// therefore costs a player room.
 const int    MATCH_MAX_CONCURRENT = 12;
 // Matches allowed to be LIVE (countdown or playing) at once. Rooms in a lobby
 // cost almost nothing; a running match is where the ~310 KB/s goes, and transfer
