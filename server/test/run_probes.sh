@@ -11,15 +11,31 @@
 #
 # Complements run_all.sh, which builds the standalone C++ tests and needs no
 # server at all.
-# Two environment overrides, both for CI (E3):
+# Three environment overrides:
 #   PLATFORMZ_SERVER_BIN   which binary in server/ to run (e.g. gameserver-tsan)
 #   PLATFORMZ_PROBE_SET    a space-separated subset, instead of all of them
+#   PLATFORMZ_NO_BUILD     skip the rebuild below and run the binary as it is
 # Defaults reproduce exactly what a bare run has always done.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 SERVER_BIN="${PLATFORMZ_SERVER_BIN:-gameserver}"
 BIN="server/$SERVER_BIN"
+
+# BUILD FIRST, always. This used to only check the binary existed, which meant a
+# source change you had not compiled was silently tested as the PREVIOUS build -
+# and a suite that passes against the wrong binary is worse than one that fails,
+# because you believe it. That has now happened twice: once with a stale
+# `loadtest` reporting 0% delivered after a wire-version bump, and once with a
+# whole probe run passing against a server compiled from different options.h.
+#
+# Each binary name is its own make target (gameserver, gameserver-tsan,
+# loadtest), so this works for whichever one PLATFORMZ_SERVER_BIN names. make is
+# incremental, so it is a no-op line when nothing changed - including in CI,
+# which builds before it gets here.
+if [ -z "${PLATFORMZ_NO_BUILD:-}" ]; then
+  make -C server "$SERVER_BIN" || { echo "build failed: $SERVER_BIN"; exit 1; }
+fi
 [ -x "$BIN" ] || { echo "build the server first: make -C server"; exit 1; }
 TMP="${TMPDIR:-/tmp}/platformz-probes"
 mkdir -p "$TMP"

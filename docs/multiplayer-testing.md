@@ -308,6 +308,13 @@ Everything below runs against a plain `./gameserver` and needs no client.
 ./server/test/ci_smoke.sh       # protocol tags + WebSocket + a two-match load run
 ```
 
+The last two **build what they are about to test** — `run_probes.sh` the server,
+`ci_smoke.sh` the server and the load harness — so you cannot accidentally test
+the previous build. They used to only check the binary existed, and a suite that
+passes against a binary you did not just compile is worse than one that fails,
+because you believe it. `make` is incremental, so this costs nothing when nothing
+changed; `PLATFORMZ_NO_BUILD=1` skips it if the binary came from somewhere else.
+
 **The probes** (`server/test/probe*.py`) are headless protocol clients, one per
 question — the lobby and host rules, the directory, reconnecting into your own
 slot, join-in-progress, the handshake cookie, the capacity budgets. Two cover the

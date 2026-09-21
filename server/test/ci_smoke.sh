@@ -25,6 +25,21 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 SERVER_BIN="${PLATFORMZ_SERVER_BIN:-gameserver}"
+
+# BUILD FIRST, always - and the harness too. Checking only that these existed is
+# exactly how this script once reported "sustained 0.0% of the expected broadcast
+# rate" after a STATE_BIN_VERSION bump: the server was new, `loadtest` was six
+# days old and still decoding the retired tag, and the failure named the symptom
+# rather than the cause. A test run against a binary you did not just compile is
+# not a test of your change.
+#
+# Both names are their own make target, so one line each. make is incremental, so
+# this is two no-op lines when nothing changed. PLATFORMZ_NO_BUILD=1 skips it,
+# for the case where the binary under test came from somewhere else.
+if [ -z "${PLATFORMZ_NO_BUILD:-}" ]; then
+  make -C server "$SERVER_BIN" || { echo "build failed: $SERVER_BIN"; exit 1; }
+  make -C server loadtest      || { echo "build failed: loadtest (needs nlohmann-json)"; exit 1; }
+fi
 [ -x "server/$SERVER_BIN" ] || { echo "build the server first: make -C server"; exit 1; }
 [ -x server/loadtest ] || { echo "build the harness first: make -C server loadtest"; exit 1; }
 
