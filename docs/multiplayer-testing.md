@@ -341,6 +341,34 @@ cd server && ./gameserver &
 python3 server/test/probe_capacity.py
 ```
 
+**`populate.py` is not a probe** — it asserts nothing. It fills a running server
+with rooms so you can *look* at the match browser with more than five empty
+official rooms in it: scroll a long list, watch the ordering shift as rooms fill,
+check how it wraps on a narrow window.
+
+```bash
+cd server && PLATFORMZ_MAX_ROOMS_PER_ADDR=0 ./gameserver &
+python3 server/test/populate.py              # fill to capacity, varied
+python3 server/test/populate.py --rooms 4    # just a few
+python3 server/test/populate.py --boring     # no variety, just a long list to scroll
+python3 server/test/populate.py --seed 7     # the same layout every time
+```
+
+It gives rooms a spread of occupancy, presets, a few private ones and a couple of
+matches actually running, because a browser full of identical 1/8 lobbies
+demonstrates nothing about an ordering built on how full a room is. It prints the
+order you should expect to see, which is the whole point — if the screen
+disagrees with that summary, the screen is wrong.
+
+Two things it exists to stop you rediscovering. **A room with nobody in it is
+reaped after 30 s**, so the script has to keep its connections open: leave it
+running in its own terminal and Ctrl-C when you are done (that drops everything
+with a `goodbye`, so the rooms go at once instead of lingering). And **the
+per-address room budget is 3** — every client on one machine shares one address —
+so without `PLATFORMZ_MAX_ROOMS_PER_ADDR=0` you get three rooms and a mystery.
+The script recognises that refusal by name and tells you rather than quietly
+making three.
+
 **The load harness** (`server/loadtest.cpp`) is the only way to see many rooms
 under real load:
 

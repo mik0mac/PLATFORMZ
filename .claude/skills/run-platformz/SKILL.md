@@ -153,7 +153,25 @@ Accessibility grant at all:
 ./platformz bench 120 128 18 4                   # skip the menus into a match
 ```
 
-Drive the *other* side with the protocol probes - they need no UI:
+**To look at a browser with rooms in it, use `populate.py`** rather than writing
+another throwaway filler - it fills to capacity with varied occupancy, presets
+and a couple of private rooms, prints the order you should expect, and holds
+every connection open:
+
+```bash
+cd server && PLATFORMZ_MAX_ROOMS_PER_ADDR=0 ./gameserver &   # budget OFF, see below
+python3 server/test/populate.py --seed 7                     # same layout every time
+```
+
+Two things it exists to stop you rediscovering. **Rooms are reaped 30 s after
+going empty**, so whatever made them has to stay connected - run it in its own
+terminal and Ctrl-C when done. And **E2's per-address room budget is 3**, which
+every client on one machine shares, so without `PLATFORMZ_MAX_ROOMS_PER_ADDR=0`
+you get three rooms and a puzzle; the script detects that refusal by name and
+prints the fix.
+
+For anything else, drive the other side with the probe client directly - it
+needs no UI:
 
 ```python
 import sys, os, time
