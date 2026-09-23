@@ -128,6 +128,22 @@ struct ShellState {
     int    listFollow    = -1;              // cursor still to fetch, -1 = done
     double listFollowAt  = 0.0;             // when we asked for it
     int    listFollowTry = 0;               // re-asks spent on it
+
+    // ---- The background refresh -----------------------------------------
+    // A room in GAMEOVER becomes a joinable lobby a minute later, and a room with
+    // one seat left can lose it - so a list nobody refreshes starts lying, and
+    // offers joins that bounce. But re-sorting the list under a player reaching
+    // for a row is how they end up in the room NEXT to the one they aimed at,
+    // which is why the old two-second poll had to go when the order became live.
+    //
+    // So the two halves of a refresh are separated. CONTENTS - how full a room
+    // is, its phase, whether you can join it - are updated in place on a slow
+    // timer, and nothing moves. ORDER and MEMBERSHIP only change when the player
+    // presses REFRESH, which is the moment they are not mid-reach.
+    std::vector<MatchSummary> listIncoming; // pages of a background refresh, staged
+    bool   listMerging   = false;           // this walk is a background one
+    double lastAutoListAt = 0.0;            // when the last background walk began
+    int    listNewRooms  = 0;               // rooms the merge saw that we are not showing
     // Scroll offset in PIXELS, not rows. Smooth scrolling needs no more code than
     // row-stepping once the panel is clipped, and a part-row at the bottom edge
     // is the thing that tells a player there is more below.
@@ -573,6 +589,15 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     // which is exactly right: it says how many there ARE while the list fills in.
     DrawText(s.listTotal == 1 ? "1 MATCH" : TextFormat("%d MATCHES", s.listTotal),
              (int)listX, (int)listY - 40, 18, ui::OUTLINE);
+    // Rooms a background refresh found that are not in the rows. They are not
+    // inserted, because inserting shifts every row below the insertion point and
+    // the whole reason that refresh merges is to never move anything. So they are
+    // OFFERED instead, and REFRESH is what takes them.
+    if (s.listNewRooms > 0) {
+        const char* n = s.listNewRooms == 1 ? "1 NEW - REFRESH"
+                                            : TextFormat("%d NEW - REFRESH", s.listNewRooms);
+        DrawText(n, (int)listX + 130, (int)listY - 40, 18, ui::OUTLINE);
+    }
 
     UiPanel(listRect);
 
@@ -643,9 +668,17 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             // Nothing to draw and nothing to click, well off either edge.
             if (ry + rowH < listRect.y || ry > listRect.y + listRect.height) continue;
 
-            DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18, RAYWHITE);
-            DrawText(TextFormat("%d/%d", m.players, m.maxPlayers),
-                     (int)listX + 300, (int)ry + 10, 18, ui::OUTLINE);
+            // A room a background refresh could no longer find: reaped, or gone
+            // private. Drawn DEAD IN PLACE rather than removed - taking the row
+            // out would shift every row below it, and not moving rows under the
+            // player is the whole point of merging instead of replacing. REFRESH
+            // is what clears it away, because that is when re-ordering is asked
+            // for.
+            const bool dead = m.gone;
+            DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18,
+                     dead ? GRAY : RAYWHITE);
+            DrawText(dead ? "--" : TextFormat("%d/%d", m.players, m.maxPlayers),
+                     (int)listX + 300, (int)ry + 10, 18, dead ? GRAY : ui::OUTLINE);
             // The arena, which the browser could not show at all until the map
             // moved into MatchOptions - before that it did not exist until
             // somebody pressed a START button.
@@ -657,13 +690,14 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             // can join and expect a game from without knowing anyone.
             const bool official = (m.kind == MatchKind::Official);
             DrawText(official ? "OFFICIAL" : "CUSTOM",
-                     (int)listX + 460, (int)ry + 10, 16, official ? ui::OUTLINE : GRAY);
-            DrawText(m.phase.c_str(),  (int)listX + 570, (int)ry + 10, 16,
-                     m.phase == "playing" ? ui::OUTLINE : GRAY);
+                     (int)listX + 460, (int)ry + 10, 16,
+                     (official && !dead) ? ui::OUTLINE : GRAY);
+            DrawText(dead ? "closed" : m.phase.c_str(), (int)listX + 570, (int)ry + 10, 16,
+                     (m.phase == "playing" && !dead) ? ui::OUTLINE : GRAY);
 
             // Clear of the scrollbar at listW-9: this ends at listW-14.
             Rectangle joinBtn = {listX + listW - 100.0f, ry + 4.0f, 86.0f, 30.0f};
-            if (m.joinable) {
+            if (m.joinable && !dead) {
                 // `mouseOverList` is what keeps a half-scrolled row honest. The
                 // scissor clips what is DRAWN, not what UiButton hit-tests, so
                 // without it the invisible half of a button scrolled past the
@@ -683,7 +717,8 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                 // of GAMEOVER_LOBBY_SECONDS, after every single match. The row
                 // already carries the phase and the counts, so no server help is
                 // needed to tell the two apart.
-                const char* why = (m.phase == "gameover") ? "ENDING"
+                const char* why = dead ? "GONE"
+                                : (m.phase == "gameover") ? "ENDING"
                                 : (m.players >= m.maxPlayers) ? "FULL"
                                 : "CLOSED";   // shouldn't happen; better than lying
                 UiPanel(joinBtn, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));

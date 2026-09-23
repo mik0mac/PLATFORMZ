@@ -86,6 +86,14 @@ struct MatchSummary {
     // Not the same question as public-vs-invite-only - a public room can be
     // either kind, and only public ones are listed here anyway.
     MatchKind kind = MatchKind::Custom;
+
+    // CLIENT-SIDE ONLY - never on the wire. Set when a background refresh finds
+    // this room is no longer listed (reaped, or gone private). The row is kept in
+    // place and drawn dead rather than removed, because removing it would shift
+    // every row below it - and not shifting rows under the player is the entire
+    // reason the background refresh merges instead of replacing. It disappears on
+    // the next manual REFRESH, which is when re-ordering is expected.
+    bool gone = false;
 };
 
 // Why a join was refused. Kept as an enum rather than a free string so the client

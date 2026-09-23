@@ -810,6 +810,57 @@ int main(int argc, char** argv) {
     // right after restarting the client, because the join path re-sends the table
     // behind the welcome, and that lands on the menu drain.
     //
+    // Fold a background refresh into the list already on screen.
+    //
+    // WHAT THIS DELIBERATELY DOES NOT DO IS RE-ORDER. The browser sorts by how
+    // full a room is, so adopting a fresh snapshot wholesale moves rows - and a
+    // row that moves while somebody is reaching for it is a join to the room next
+    // to the one they aimed at. That is why the old two-second poll was removed
+    // when the ordering went live, and re-adding one naively would have put the
+    // bug back.
+    //
+    // So this updates what a row SAYS and never where it sits:
+    //
+    //   matched by code   the mutable facts - players, phase, joinable, map
+    //   no longer listed  marked `gone` and drawn dead, still in its place. It is
+    //                     NOT removed, because removing it would shift every row
+    //                     below it, which is the thing this exists to avoid
+    //   newly listed      counted only. Inserting would shift rows too, so the
+    //                     header offers them and REFRESH is what adopts them
+    //
+    // `listTotal` is the server's count for the snapshot we just walked, so it is
+    // adopted here rather than when the pages arrived - the header would
+    // otherwise advertise rooms that are not in the rows yet.
+    auto mergeMatchList = [&](int freshTotal) {
+        std::unordered_map<std::string, const MatchSummary*> fresh;
+        fresh.reserve(shell.listIncoming.size());
+        for (const MatchSummary& r : shell.listIncoming) fresh[r.code] = &r;
+
+        for (MatchSummary& row : shell.matches) {
+            auto it = fresh.find(row.code);
+            if (it == fresh.end()) { row.gone = true; continue; }
+            const MatchSummary& f = *it->second;
+            row.gone       = false;   // it came back - a reaped code is never reused
+            row.players    = f.players;
+            row.maxPlayers = f.maxPlayers;
+            row.phase      = f.phase;
+            row.joinable   = f.joinable;
+            row.map        = f.map;   // the host can change the arena from the lobby
+        }
+
+        std::unordered_set<std::string> showing;
+        showing.reserve(shell.matches.size());
+        for (const MatchSummary& row : shell.matches) showing.insert(row.code);
+        int added = 0;
+        for (const MatchSummary& r : shell.listIncoming)
+            if (!showing.count(r.code)) added++;
+
+        shell.listNewRooms = added;
+        shell.listTotal    = freshTotal;
+        shell.listIncoming.clear();
+        shell.listMerging  = false;
+    };
+
     // Returns true if it handled the message, so callers only deal with State.
     auto applyNonStateMessage = [&](ServerMessage& m) -> bool {
         if (m.type == ServerMessage::Type::Welcome) {
@@ -889,18 +940,28 @@ int main(int argc, char** argv) {
             // pages cut from a list re-sorted between requests would concatenate
             // into one that never existed at any single moment - the same room
             // twice, another missing entirely.
+            // A BACKGROUND refresh goes to a staging buffer and is merged into the
+            // list already on screen once every page is in - see mergeMatchList.
+            // A refresh the player ASKED for replaces outright, because pressing
+            // REFRESH is exactly the moment re-ordering is wanted.
+            std::vector<MatchSummary>& into =
+                shell.listMerging ? shell.listIncoming : shell.matches;
             if (m.listCursor <= 0) {
-                shell.matches = std::move(m.matches);
-                shell.browseScrollPx = 0.0f;   // a new list starts at the top
+                into = std::move(m.matches);
+                if (!shell.listMerging)
+                    shell.browseScrollPx = 0.0f;   // a new list starts at the top
             } else {
-                shell.matches.insert(shell.matches.end(),
-                                     std::make_move_iterator(m.matches.begin()),
-                                     std::make_move_iterator(m.matches.end()));
+                into.insert(into.end(),
+                            std::make_move_iterator(m.matches.begin()),
+                            std::make_move_iterator(m.matches.end()));
             }
             shell.listCursor  = m.listCursor;
             shell.listNext    = m.listNext;
-            shell.listTotal   = m.listTotal;
             shell.awaitingList = false;
+            // The count is the SERVER's, and during a background walk it belongs
+            // to a snapshot we have not adopted yet - so hold it back until the
+            // merge, or the header would claim rooms the rows do not show.
+            if (!shell.listMerging) shell.listTotal = m.listTotal;
 
             // Walk to the end of the snapshot. Bounded by the registry cap, so
             // this is a handful of requests at worst - but it IS rate limited
@@ -918,8 +979,13 @@ int main(int argc, char** argv) {
                 // request per page while the budget refills at one a second, so
                 // timing it from page 0 would let a two-page directory drain the
                 // bucket faster than it fills and start losing follow-up pages.
-                shell.lastListAt = GetTime();
+                //
+                // A BACKGROUND walk does not touch it: the button must not grey
+                // itself out because of work the player did not ask for.
+                if (!shell.listMerging) shell.lastListAt = GetTime();
                 if (net.isOpen()) net.send(serializeList(m.listNext));
+            } else if (shell.listMerging) {
+                mergeMatchList(m.listTotal);       // the last page of a background walk
             }
             return true;
         }
@@ -1093,6 +1159,10 @@ int main(int argc, char** argv) {
             shell.browseStatus.clear();
             shell.matches.clear();
             shell.listFollow = -1;   // no half-walked list to finish
+            shell.listMerging = false;
+            shell.listIncoming.clear();
+            shell.listNewRooms = 0;
+            shell.lastAutoListAt = GetTime();
             shell.awaitingList = true;
             shell.lastListAt = GetTime();
             if (net.isOpen()) net.send(serializeList(0));
@@ -1476,6 +1546,10 @@ int main(int argc, char** argv) {
                         shell.browseStatus.clear();
                         shell.matches.clear();
                         shell.listFollow = -1;   // no half-walked list to finish
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
+                        shell.lastAutoListAt = GetTime();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         askToMove(serializeQuick(), /*retryable*/ true);
@@ -1488,6 +1562,10 @@ int main(int argc, char** argv) {
                         shell.browseStatus.clear();
                         shell.matches.clear();
                         shell.listFollow = -1;   // no half-walked list to finish
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
+                        shell.lastAutoListAt = GetTime();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         if (net.isOpen()) net.send(serializeList(0));
@@ -1636,6 +1714,10 @@ int main(int argc, char** argv) {
                 shell.browseStatus.clear();
                 shell.matches.clear();
                 shell.listFollow = -1;   // no half-walked list to finish
+                shell.listMerging = false;
+                shell.listIncoming.clear();
+                shell.listNewRooms = 0;
+                shell.lastAutoListAt = GetTime();
                 shell.awaitingList = true;
                 shell.lastListAt = GetTime();
                 if (net.isOpen()) net.send(serializeList(0));
@@ -1699,6 +1781,10 @@ int main(int argc, char** argv) {
                         shell.browseStatus.clear();
                         shell.matches.clear();
                         shell.listFollow = -1;   // no half-walked list to finish
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
+                        shell.lastAutoListAt = GetTime();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         if (net.isOpen()) net.send(serializeList(0));
@@ -1752,15 +1838,39 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // NO AUTO-POLL. This screen used to re-ask every two seconds, which
-            // was harmless while the server ordered the list by room code - a key
-            // that never changes, so a reply could only ever update the numbers in
-            // rows that stayed put. The list is now ordered by how full each room
-            // is, so a poll can REORDER IT, and reordering a list somebody is
-            // reaching for is how you make them click the room next to the one
-            // they aimed at. The list is a snapshot; REFRESH is how you take a
-            // new one.
             const double nowT = GetTime();
+
+            // THE BACKGROUND REFRESH, and why it is not the poll that used to be
+            // here. A room in GAMEOVER is a joinable lobby a minute later and a
+            // room with one seat left can lose it, so a list nobody re-reads
+            // starts lying and offers joins that bounce. But this screen sorts by
+            // how full a room is, so the old two-second poll would now RE-ORDER
+            // the list - and a row that moves while somebody is reaching for it is
+            // a join to the room next to the one they aimed at.
+            //
+            // So the walk happens, and the result is MERGED rather than adopted:
+            // rows update where they sit and nothing moves without a REFRESH. See
+            // mergeMatchList.
+            //
+            // THE INTERVAL SCALES WITH THE LIST, because a walk costs one request
+            // per page and the budget refills at one a second - so a fixed period
+            // that is comfortable at 12 rooms quietly saturates the limiter at 40,
+            // and the pages that get dropped are the ones this exists to fetch.
+            // Two seconds per page, never faster than six.
+            //
+            // Six is the number to keep honest if GAMEOVER_LOBBY_SECONDS changes:
+            // a room winding down returns to its lobby after that (10 s), and
+            // catching the moment it becomes joinable again is the case this whole
+            // mechanism was asked for.
+            const int    listPages   = (int)(shell.matches.size() + 7) / 8;
+            const double autoEverySec = std::max(6.0, listPages * 2.0);
+            if (net.isOpen() && shell.listFollow < 0 && !shell.matches.empty() &&
+                nowT - shell.lastAutoListAt > autoEverySec) {
+                shell.lastAutoListAt = nowT;
+                shell.listMerging    = true;
+                shell.listIncoming.clear();
+                net.send(serializeList(0));
+            }
 
             // Finish assembling the list if a follow-up page never arrived. The
             // `list` budget is a burst then one a second, and anything over it is
@@ -1770,6 +1880,12 @@ int main(int argc, char** argv) {
             if (shell.listFollow >= 0 && net.isOpen() && nowT - shell.listFollowAt > 1.2) {
                 if (shell.listFollowTry >= 4) {
                     shell.listFollow = -1;    // what we have is what they get
+                    // A background walk that could not finish is ABANDONED, never
+                    // half-merged: a merge from a partial snapshot would mark every
+                    // room on the pages that never arrived as `gone`, turning a
+                    // dropped datagram into a browser full of dead rows.
+                    shell.listMerging = false;
+                    shell.listIncoming.clear();
                 } else {
                     shell.listFollowTry++;
                     shell.listFollowAt = nowT;
@@ -1797,7 +1913,14 @@ int main(int argc, char** argv) {
                         shell.awaitingList = true;
                         shell.listCursor = 0;
                         shell.listFollow = -1;   // abandon any half-walked list
+                        // This is the one action that adopts a new ORDER and a new
+                        // membership, so a background walk in flight is dropped
+                        // rather than merged on top of the list it is replacing.
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
                         shell.lastListAt = nowT;
+                        shell.lastAutoListAt = nowT;
                         net.send(serializeList(0));
                         break;
                     case BrowseAction::Quick:

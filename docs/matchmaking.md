@@ -257,10 +257,23 @@ A snapshot is held per connection (on the rate-limit record, which is already
 keyed by connection id and already swept) and is at most `MATCH_MAX_CONCURRENT`
 rows.
 
-The client side of this is that the browser **does not poll**. It used to re-ask
-every two seconds, which was harmless against a key that never changed but would
-now reorder the list under a player reaching for a row. The list is a snapshot;
-REFRESH sends `cur = 0` and is the only thing that takes a new one.
+The client side of this splits a refresh into the two things it does, because
+only one of them is safe to do while somebody is reaching for a row:
+
+- **Contents** — how full a room is, its phase, whether it can be joined. A
+  background walk updates each row **in place**, matched by code, every few
+  seconds. Nothing moves. This is what stops a `gameover` room from still reading
+  ENDING ten seconds after it became a joinable lobby again.
+- **Order and membership** — which rooms exist and in what sequence. Only
+  **REFRESH** changes those, because that is the moment the player is not
+  mid-reach. A room the background walk can no longer find is greyed in place and
+  labelled GONE rather than removed (removing it would shift every row below);
+  rooms it finds that are not on screen are offered as a count beside the button
+  rather than inserted.
+
+The old client simply re-asked every two seconds and replaced the list. That was
+harmless against a key that never changed, and became a way to make somebody
+click the room next to the one they aimed at the moment the order went live.
 
 **Paging never reaches the player.** The client asks for `cur = 0`, then follows
 `next` to the end of the snapshot and concatenates, so the browser shows ONE

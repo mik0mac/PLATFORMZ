@@ -170,10 +170,14 @@ The directory is ordered by **how close each room is to being a game** — joina
 lobbies first, then fewest free spots, then the `options.h` preset ramp, then the
 code. It is a *live* key, which has two consequences worth knowing before touching
 it: paging past page 0 serves a per-connection **snapshot** (re-sorting between
-pages could show a room twice or skip it), and the client's browser **does not
-poll** — REFRESH is the only thing that re-reads the world, because a list that
-reorders under a player is a list they misclick. `probe_listorder.py` tests both
-halves; `docs/matchmaking.md` has the full contract.
+pages could show a room twice or skip it), and the client's browser never adopts
+a new ORDER on its own. A background walk refreshes each row **in place** every
+few seconds — so a `gameover` room stops claiming ENDING once it is a lobby again
+— while order and membership change only on REFRESH, because a list that reorders
+under a player is a list they misclick. A room that vanishes greys out where it
+sits (removing it would shift every row below); new ones are offered as a count
+beside the button. `probe_listorder.py` tests the ordering and the snapshot;
+`docs/matchmaking.md` has the full contract.
 
 **Paging is a wire detail, not a UI.** The one-datagram cap is why `matchlist` is
 paged; the client follows `next` to the end of the snapshot and shows one
