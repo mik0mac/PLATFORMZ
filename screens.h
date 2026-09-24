@@ -1009,18 +1009,23 @@ inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
     // There is a LOCAL board now, so there is always something behind it - and
     // the offline player, who has no other high-score display at all, is the one
     // who benefits most.
+    //
+    // HIGH SCORES, not SCORES: one name for one board, matching the modal's own
+    // heading and the word the lobby used to use (#155). The row is re-spaced
+    // around it rather than the label trimmed to fit a 110px button - there is
+    // half the window free either side of it.
     float by = screenHeight - 100.0f;
 #if defined(__EMSCRIPTEN__)
     // No QUIT in a browser tab: breaking the loop would leave a dead canvas with
     // no way back. Closing the tab is the platform's own quit.
-    if (uiEnabled && UiButton({325, by, 160, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
-    if (uiEnabled && UiButton({515, by, 160, 44}, "SCORES", 16))
+    if (uiEnabled && UiButton({314, by, 170, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
+    if (uiEnabled && UiButton({496, by, 190, 44}, "HIGH SCORES", 16))
         action = TitleAction::Leaderboard;
 #else
-    if (uiEnabled && UiButton({325, by, 110, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
-    if (uiEnabled && UiButton({445, by, 110, 44}, "SCORES", 16))
+    if (uiEnabled && UiButton({278, by, 140, 44}, "CONTROLS", 16)) action = TitleAction::Controls;
+    if (uiEnabled && UiButton({430, by, 170, 44}, "HIGH SCORES", 16))
         action = TitleAction::Leaderboard;
-    if (uiEnabled && UiButton({565, by, 110, 44}, "QUIT", 16))     action = TitleAction::Quit;
+    if (uiEnabled && UiButton({612, by, 110, 44}, "QUIT", 16))     action = TitleAction::Quit;
 #endif
 
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
