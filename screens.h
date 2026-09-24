@@ -155,6 +155,14 @@ struct ShellState {
     // named lands us in one we never chose, so only the server knows.
     std::string inMatchCode;
     MatchKind   inMatchKind = MatchKind::Custom;
+    // What the room is called, and the preset it plays. Both from the same
+    // welcome, and for the same reason: quick match picks the room, so the name
+    // we typed on the CUSTOM screen is not it, and nothing else on the wire says
+    // which preset a room we are already standing in was seeded from. The lobby
+    // heads the screen with the name and looks the preset's description up in
+    // options.h, which this client compiles too.
+    std::string inMatchName;
+    std::string inMatchPreset;
 
     // Set when WE asked to move rooms (join / quick / create), so the welcome
     // that lands us somewhere new can be told apart from the one every client
@@ -798,6 +806,20 @@ inline int HostSlot(const std::vector<Player>& players) {
 }
 
 //MARK: Shared chrome
+// How wide the typed name may render, in pixels, at a given field font size.
+//
+// Let the name fill the space the UI allots but never overflow it. The tightest
+// renderer is the roster row: "%d. NAME (YOU)" at font 18 inside the 300px
+// players panel. Convert its leftover width to the field's font size and let
+// UiTextField reject chars past that budget.
+//
+// Shared because the field is on two screens now - the title router and the
+// lobby (#157). Two copies of this arithmetic would drift, and the one that
+// drifted upward would let a name be typed that the roster then clips.
+inline int NameFieldBudget(int fieldFontSize) {
+    return (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * fieldFontSize / 18;
+}
+
 // Master volume, pinned bottom-right on every setup screen. Rides the dB scale
 // (0 dB full, MASTER_VOLUME_MIN_DB = mute at the far left) so track travel
 // matches perceived loudness instead of bunching everything audible into the top
@@ -853,14 +875,15 @@ inline float DrawRosterPanel(ShellState& s, const std::vector<Player>& players,
     UiPanel(box);
     DrawText("PLAYERS", (int)box.x + 10, (int)box.y + 8, 14, ui::OUTLINE);
 
-    // Which room this is, right-aligned in the header. The code IS the invite for
-    // an invite-only room, so a player who cannot see it cannot ask anyone to join
-    // them.
+    // How this room is governed, right-aligned in the header. It used to carry
+    // the CODE as well, which was the only place the code appeared for a player
+    // who needed to invite someone. The lobby now heads the screen with an INVITE
+    // CODE button (#157), so repeating it here is furniture - and the pair of
+    // words that survives, OFFICIAL / CUSTOM, is the one the browser rows use.
     if (networked && !roomCode.empty()) {
-        const char* tag   = roomKind == MatchKind::Official ? "OFFICIAL" : "ROOM";
-        const char* label = TextFormat("%s %s", tag, roomCode.c_str());
-        DrawText(label, (int)(box.x + box.width - 10 - MeasureText(label, 14)),
-                 (int)box.y + 8, 14, GRAY);
+        const char* tag = roomKind == MatchKind::Official ? "OFFICIAL" : "CUSTOM";
+        DrawText(tag, (int)(box.x + box.width - 10 - MeasureText(tag, 14)),
+                 (int)box.y + 8, 14, ui::OUTLINE);
     }
 
     if (networked) {
@@ -942,13 +965,9 @@ inline TitleAction DrawTitle(ShellState& s, int screenWidth, int screenHeight,
     // Name entry stays: it is identity for every path below it.
     UiTextCentered("NAME", screenWidth, 215, 20, ui::OUTLINE);
     Rectangle nameBox = {350, 240, 300, 40};
-    // Let the name fill the space the UI allots but never overflow it. The
-    // tightest renderer is the lobby roster row: "%d. NAME (YOU)" at font 18
-    // inside the 300px players panel. Convert its leftover width to the field's
-    // font size (20) and let UiTextField reject chars past that budget.
-    int nameBudget = (280 - MeasureText("8. ", 18) - MeasureText(" (YOU)", 18)) * 20 / 18;
     nameEdited = UiTextField(nameBox, s.playerName, s.nameFocused,
-                             PLAYER_NAME_MAX_CHARS, 20, &s.namePristine, nameBudget);
+                             PLAYER_NAME_MAX_CHARS, 20, &s.namePristine,
+                             NameFieldBudget(20));
 
     float y = 322.0f;
     auto row = [&](const char* label, bool enabled) {
@@ -1097,11 +1116,41 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
 //   official             the head count, then the countdown. No START at all:
 //                        the server rejects options/start/endmatch from every
 //                        connection in an official room.
-enum class LobbyAction { None, Start, Options, Controls, Leaderboard, CopyInvite, Leave };
+// No Leaderboard. HIGH SCORES is a place to LOOK, and a lobby is a place to
+// wait in a room with other people - the board is one Esc and one click away on
+// the title screen, and the four-button grid it sat in is what pushed the roster
+// down (#155, #157).
+enum class LobbyAction { None, Start, Options, Controls, CopyInvite, Leave };
 
 struct LobbyResult {
     LobbyAction action = LobbyAction::None;
+    // The display-name field is on this screen too now, so its edits have to get
+    // out the same way the title screen's do: main() owns the socket and pushes
+    // each change as a `name` message.
+    bool nameEdited = false;
 };
+
+// One line saying what kind of game this room is, under its name.
+//
+// An OFFICIAL room plays a preset, and the preset table (options.h) is compiled
+// into this client as well as the server - so the wire carries the preset's KEY
+// and the sentence is looked up here. An exact match only: MatchPresetByName
+// falls back to DEFAULT for an unknown name, which is right when it is seeding a
+// room and wrong here, where it would confidently describe a room as something
+// else.
+//
+// A CUSTOM room has no authored description - its rules are whatever its host
+// dialed - so until there is a generator that reads MatchOptions back into a
+// sentence, it says which arena it is being played in. That is also the line
+// that used to be a stray "MAP  LARGE" under the waiting message for non-hosts.
+inline std::string RoomDescription(const ShellState& s, const MatchOptions& opt) {
+    if (s.inMatchKind == MatchKind::Official) {
+        for (const auto& [key, preset] : matchOptionPresets)
+            if (key == s.inMatchPreset && !preset.description.empty())
+                return preset.description;
+    }
+    return opt.mapSize + " MAP";
+}
 
 inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
                              int myIndex, const std::string& myName,
@@ -1110,26 +1159,68 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
     LobbyResult out;
     const bool official = (s.inMatchKind == MatchKind::Official);
 
-    UiTextCentered(official ? "OFFICIAL MATCH" : "MATCH LOBBY", screenWidth, 100, 44, RAYWHITE);
-    if (!s.inMatchCode.empty()) {
-        UiTextCentered(TextFormat("CODE  %s", s.inMatchCode.c_str()), screenWidth, 152, 22,
-                       official ? GRAY : ui::OUTLINE);
-        // The code is the whole invite for an invite-only room, so it needs to be
-        // gettable, not just readable off the screen.
-        if (uiEnabled && UiButton({620, 148, 130, 30}, "COPY INVITE", 14))
+    // THE ROOM'S OWN NAME heads the screen. "MATCH LOBBY" was true of every room
+    // on the server and so told a player nothing about the one they were standing
+    // in - least of all after a quick match, which picks the room for them. The
+    // generic heading survives only as the fallback for a server that does not
+    // send a name (#157).
+    const std::string heading = !s.inMatchName.empty() ? s.inMatchName
+                              : official ? std::string("OFFICIAL MATCH")
+                                         : std::string("MATCH LOBBY");
+    const int headFont = 34;
+
+    // Name and invite button as ONE centred group. They were two rows before -
+    // a heading, then a CODE line, then a COPY INVITE button beside it, then a
+    // line of advice under that - which is four rows of chrome for two facts.
+    // Folding the code into the button it was already sitting next to buys the
+    // vertical space the name field below needs.
+    const bool  hasCode     = !s.inMatchCode.empty();
+    // A std::string, not TextFormat's rotating static buffer: this one is held
+    // across a measure and a draw, and raylib recycles those buffers after four
+    // calls.
+    const std::string inviteLabel = "INVITE CODE: " + s.inMatchCode;
+    const float inviteW = hasCode ? (float)MeasureText(inviteLabel.c_str(), 14) + 28.0f : 0.0f;
+    const float headW       = (float)MeasureText(heading.c_str(), headFont);
+    const float gap         = hasCode ? 24.0f : 0.0f;
+    const float groupX      = ((float)screenWidth - (headW + gap + inviteW)) / 2.0f;
+
+    DrawText(heading.c_str(), (int)groupX, 62, headFont, RAYWHITE);
+    if (hasCode) {
+        // Sized like the COPY INVITE button it replaces (30 tall, font 14), wide
+        // enough for the code it now carries, and vertically centred on the name.
+        const Rectangle inviteBtn = {groupX + headW + gap, 62.0f + (headFont - 30) / 2.0f,
+                                     inviteW, 30.0f};
+        if (uiEnabled && UiButton(inviteBtn, inviteLabel.c_str(), 14))
             out.action = LobbyAction::CopyInvite;
-        if (!official)
-            UiTextCentered(s.copyNotice.empty() ? "SHARE IT TO INVITE ANYONE"
-                                                : s.copyNotice.c_str(),
-                           screenWidth, 184, 15,
-                           s.copyNotice.empty() ? GRAY : ui::OUTLINE);
     }
+
+    // What kind of game this is. The preset's own sentence for an official room,
+    // the arena for a custom one - never "SHARE IT TO INVITE ANYONE", which was
+    // advice about the button rather than anything about the room.
+    UiTextCentered(RoomDescription(s, opt).c_str(), screenWidth, 110, 18, ui::OUTLINE);
+    // The COPIED confirmation, on its own line so the description never jumps.
+    if (!s.copyNotice.empty())
+        UiTextCentered(s.copyNotice.c_str(), screenWidth, 134, 15, RAYWHITE);
+
+    // The display-name field, back in the room it belongs in. It lived here in
+    // the one-room build and was lost to the title screen when rooms arrived,
+    // which put the only way to fix a name on the far side of leaving the room -
+    // and the roster you are looking at is exactly where you notice it is wrong.
+    UiTextCentered("NAME", screenWidth, 158, 16, ui::OUTLINE);
+    // Drawn even behind a modal - a field that vanishes when OPTIONS opens reads
+    // as a bug - but never FOCUSED behind one, so keystrokes meant for the popup
+    // cannot land in the name.
+    if (!uiEnabled) s.nameFocused = false;
+    out.nameEdited =
+        UiTextField({375, 178, 250, 34}, s.playerName, s.nameFocused,
+                    PLAYER_NAME_MAX_CHARS, 18, &s.namePristine, NameFieldBudget(18))
+        && uiEnabled;
 
     const int  hostSlot = HostSlot(players);
     const bool amHost   = (myIndex >= 0 && myIndex == hostSlot);
 
     const float bottom = DrawRosterPanel(s, players, myIndex, myName, opt, /*networked*/ true,
-                                         s.inMatchCode, s.inMatchKind, /*top*/ 220.0f);
+                                         s.inMatchCode, s.inMatchKind, /*top*/ 226.0f);
     const float startY = bottom + 26.0f;
 
     if (!ready) {
@@ -1169,31 +1260,36 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
     } else if (hostSlot >= 0) {
         std::string hostName = !players[hostSlot].name.empty()
             ? players[hostSlot].name : TextFormat("PLAYER %d", hostSlot + 1);
+        // No MAP line. It was here because a non-host had no other way to learn
+        // the arena, and it read as a stray label under a sentence; the room's
+        // description line at the top says it now, for host and guest alike.
         UiTextCentered(TextFormat("Waiting for %s to start the game.", hostName.c_str()),
                        screenWidth, (int)startY + 14, 20, GRAY);
-        UiTextCentered(TextFormat("MAP  %s", opt.mapSize.c_str()),
-                       screenWidth, (int)startY + 40, 16, ui::OUTLINE);
     } else {
         // Custom room with nobody hosting it: only possible in the gap between a
         // host leaving and the next state packet.
         UiTextCentered("WAITING FOR A HOST...", screenWidth, (int)startY + 14, 20, GRAY);
     }
 
-    // A GRID, filled in order, not a column. OPTIONS is conditional, so a column
-    // would leave a hole wherever it is hidden - and four stacked rows under a
-    // full eight-slot roster run off the bottom of the window.
-    float bx = 300.0f, by = startY + (amHost && !official ? 70.0f : 44.0f);
+    // ONE ROW, laid out from the middle. Three buttons at most now that HIGH
+    // SCORES has gone back to the title screen, so the grid that used to wrap
+    // onto a second row - and cost the name field its space - is a strip. It is
+    // centred rather than left-anchored because OPTIONS is conditional: a fixed
+    // first column would leave a gap in every official room.
+    const float btnW = 170.0f, btnGap = 14.0f;
+    const int   btnCount = (amHost && !official) ? 3 : 2;
+    float by = startY + (amHost && !official ? 70.0f : 44.0f);
+    float bx = ((float)screenWidth - (btnCount * btnW + (btnCount - 1) * btnGap)) / 2.0f;
     auto button = [&](const char* label) {
-        Rectangle r = {bx, by, 180, 44};
-        if (bx < 400.0f) { bx = 520.0f; } else { bx = 300.0f; by += 52.0f; }
-        return uiEnabled && UiButton(r, label);
+        Rectangle r = {bx, by, btnW, 44};
+        bx += btnW + btnGap;
+        return uiEnabled && UiButton(r, label, 18);
     };
     // OPTIONS reconfigures the whole match, so it is the host's alone - and in an
     // official room it belongs to nobody, because the preset is the point.
     if (amHost && !official && button("OPTIONS")) out.action = LobbyAction::Options;
-    if (button("LEADERBOARD")) out.action = LobbyAction::Leaderboard;
-    if (button("CONTROLS"))    out.action = LobbyAction::Controls;
-    if (button("LEAVE"))       out.action = LobbyAction::Leave;
+    if (button("CONTROLS")) out.action = LobbyAction::Controls;
+    if (button("LEAVE"))    out.action = LobbyAction::Leave;
 
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
     return out;

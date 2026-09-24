@@ -295,6 +295,14 @@ struct Match {
     // is whatever a player typed, and somebody can call their custom room
     // "OFFICIAL MATCH", so only the kind is safe to filter on.
     std::string matchName;
+    // The preset this room was seeded from ("DEFAULT", "MAYHEM", ...), copied in
+    // beside the name and for the same reason. Rides the welcome so the lobby can
+    // say what KIND of game this room is - the client owns the same preset table
+    // (options.h is shared) and looks the description up locally, so the wire
+    // carries a short key rather than a sentence that would then exist in two
+    // places and drift. The rules themselves still arrive in the state packet's
+    // option block; this is the label for them.
+    std::string matchPreset;
 
     // Auto-start countdown, LOBBY only. Armed once connectedCount reaches this
     // room's pendingMinHumans, disarmed if it empties back below it.

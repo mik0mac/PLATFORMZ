@@ -1048,12 +1048,15 @@ void Match::rebuildWelcomeStatic() {
 std::string Match::buildWelcome(int playerId) {
     std::string statik;
     { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStatic; }
-    // "m" and "k": which room this is and how it is run. See buildWelcomeBinary
-    // for why the client cannot work either out for itself.
+    // "m", "k", "n" and "p": which room this is, how it is run, what it is
+    // called and which preset it was seeded from. See buildWelcomeBinary for why
+    // the client cannot work any of them out for itself.
     return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
          + ",\"tick\":" + std::to_string(serverTick.load())
          + ",\"m\":" + js(matchCode)
          + ",\"k\":" + js(matchKindWire(matchKind))
+         + ",\"n\":" + js(matchName)
+         + ",\"p\":" + js(matchPreset)
          + "," + statik + "}";
 }
 
@@ -1066,14 +1069,18 @@ std::string Match::buildWelcomeBinary(int playerId) {
     nb::putU8(b, nb::WELCOME_BIN_VERSION);
     nb::putI32(b, playerId);
     nb::putU32(b, serverTick.load());
-    // Room identity. Neither is derivable client-side: a player may have arrived
-    // by quick match or by connecting with no room named, so the code they think
-    // they asked for is not authoritative - and nothing else on the wire says how
-    // a room they are already inside is governed, which is what decides whether
-    // they get a START button or a countdown. Inserted BEFORE the static world,
-    // so the layout moved and the tag had to move with it.
+    // Room identity. None of it is derivable client-side: a player may have
+    // arrived by quick match or by connecting with no room named, so the code
+    // they think they asked for is not authoritative - and nothing else on the
+    // wire says how a room they are already inside is governed, what it is
+    // called, or which preset it plays. The kind decides whether they get a
+    // START button or a countdown; the name and preset are what the lobby puts
+    // at the top of the screen instead of a generic heading. Inserted BEFORE the
+    // static world, so the layout moved and the tag had to move with it.
     nb::putStr(b, matchCode);
     nb::putU8(b, matchKind == MatchKind::Official ? 1 : 0);
+    nb::putStr(b, matchName);
+    nb::putStr(b, matchPreset);
     b += statik;   // f32 half, u16 platformCount, platforms
     return b;
 }

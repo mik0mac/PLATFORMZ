@@ -873,8 +873,10 @@ int main(int argc, char** argv) {
             // on the way back out of a room after LEAVE.
             if (shell.joinPending) { shell.joinPending = false; shell.roomChanged = true; }
             shell.pendingMoveMsg.clear();   // answered
-            shell.inMatchCode = m.matchCode;
-            shell.inMatchKind = m.matchKind;
+            shell.inMatchCode   = m.matchCode;
+            shell.inMatchKind   = m.matchKind;
+            shell.inMatchName   = m.matchName;
+            shell.inMatchPreset = m.matchPreset;
             // Now that we know our real slot, assert our name: send our display
             // name (custom, or the correct "PLAYER {slot+1}" default). The server
             // slot may carry a leftover lobby bot name, and pre-welcome
@@ -893,7 +895,12 @@ int main(int argc, char** argv) {
             const bool wasSeated = myIndex >= 0;
             netAcked = true;
             myIndex  = -1;
-            if (wasSeated) { shell.inMatchCode.clear(); shell.roomLost = true; }
+            if (wasSeated) {
+                shell.inMatchCode.clear();
+                shell.inMatchName.clear();
+                shell.inMatchPreset.clear();
+                shell.roomLost = true;
+            }
             TraceLog(LOG_INFO, "Connected, holding no room");
             return true;
         }
@@ -1728,14 +1735,15 @@ int main(int argc, char** argv) {
 
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
             if (shell.showOptions  && IsKeyPressed(KEY_ESCAPE)) shell.showOptions  = false;
-            if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
             // Let the COPIED confirmation fade rather than sitting there forever.
             if (!shell.copyNotice.empty() && GetTime() - shell.copyNoticeAt > 4.0)
                 shell.copyNotice.clear();
             const bool controlsWasOpen = shell.showControls;
             const bool optionsWasOpen  = shell.showOptions;
-            const bool scoresWasOpen   = shell.showScores;
-            const bool uiEnabled = !shell.showControls && !shell.showOptions && !shell.showScores;
+            // No HIGH SCORES modal here any more: the button that opened it left
+            // with the lobby's four-button grid (#155/#157), so a lobby has two
+            // popups, not three.
+            const bool uiEnabled = !shell.showControls && !shell.showOptions;
 
             BeginDrawing();
                 ClearBackground(BLACK);
@@ -1744,6 +1752,10 @@ int main(int argc, char** argv) {
                 LobbyResult r = DrawLobby(shell, gameSpace.getPlayers(), myIndex,
                                           myDisplayName(), onlineOpt, screenWidth, screenHeight,
                                           ready, netCountdown, uiEnabled);
+                // The name field is on this screen too now (#157). Same rule as
+                // the title screen's: push every edit, so the latest typed name
+                // is the one the roster shows for everybody.
+                if (r.nameEdited && net.isOpen()) net.send(serializeName(shell.playerName));
                 switch (r.action) {
                     case LobbyAction::Start:
                         startGame();
@@ -1762,13 +1774,6 @@ int main(int argc, char** argv) {
                     }
                     case LobbyAction::Options:     shell.showOptions  = true; break;
                     case LobbyAction::Controls:    shell.showControls = true; break;
-                    case LobbyAction::Leaderboard:
-                        // Standing in a lobby means there IS a server, so this
-                        // one opens on the online board; the tab is still there
-                        // for a look at your offline best.
-                        shell.showScores = true;
-                        shell.scoresShowLocal = false;
-                        break;
                     case LobbyAction::Leave:
                         // The server parks us: no room, and an `unseated` saying
                         // so. joinPending stays false, so nothing can bounce us
@@ -1798,8 +1803,6 @@ int main(int argc, char** argv) {
                     && net.isOpen())
                     net.send(serializeOptions(onlineOpt));
                 if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
-                if (shell.showScores)
-                    DrawLeaderboardModal(shell, screenWidth, scoresWasOpen, net.isOpen());
             EndDrawing();
             continue;
         }

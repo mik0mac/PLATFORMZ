@@ -198,13 +198,21 @@ cannot land on the new one's spawn state.
 |---|---|---|
 | `challenge` | `c` | UDP only. Not a refusal — answer it and hello again |
 | `identity` | `tok` | a token to store and present from now on. Sent when you had none, or yours no longer verifies |
-| **welcome** | slot + room identity + static world | JSON over WS, binary tag `0x0A` over UDP |
+| **welcome** | slot + room identity + static world | JSON over WS, binary tag `0x0C` over UDP |
 | **state** | phase, countdown, epoch, options, roster | JSON over WS, binary tag `0x09` over UDP, 60 Hz |
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |
 | `leaderboard` | `lb[{n,s,b}]`, optional `best` | the best RUNS, already ranked. `b` marks the bot row. `best` is this client's own best run, pinned under the board — absent when they have none, and absent when it is already up there. This is the **ONLINE** tab of the client's HIGH SCORES modal; the LOCAL tab is a second board the client keeps itself (`local_scores.h`, fed only by offline matches) and never reaches the wire |
 | *(chunk)* | tag `0x03` | transport framing, reassembled below the protocol |
+
+**Room identity** in the welcome is `m`, `k`, `n`, `p` — code, kind, name, and
+the preset it was seeded from. None of it is derivable client-side: quick match
+picks the room, and connecting with no room named lands you in one you never
+chose, so the code you think you asked for proves nothing. The preset travels as
+its **key**, not its description: `options.h` is compiled into both ends, so the
+client looks the sentence up locally rather than having it exist in two places.
+The lobby heads the screen with `n` and describes the room from `p`.
 
 A `matchlist` row is `{c, n, pre, k, map, ph, p, max, j}` — code, name, preset,
 kind, map, phase, players, max players, joinable. **`j` is honest**: a room that
@@ -448,5 +456,13 @@ stale binary shipping quietly.
 
 `STATE_BIN_VERSION` is at `0x0B`: the per-tick option block grew two `u8`s, for
 `maxBots` and `minHumansToStart`, straight after the roster size. It skipped
-`0x0A` (the welcome's) and `0x06` (burned by the retired FULL packet). The flags
-byte could not absorb them — it has two free bits and these need four each.
+`0x0A` (the welcome's at the time) and `0x06` (burned by the retired FULL
+packet). The flags byte could not absorb them — it has two free bits and these
+need four each.
+
+`WELCOME_BIN_VERSION` is at `0x0C`: the room identity block grew the room's
+**name** and **preset key**, two length-prefixed strings after the kind byte and
+still ahead of the static world. `0x0A` is burned by the layout without them — a
+client that predates the change would read the name's length byte as the
+boundary half-size and mis-slice every platform after it, so the tag bump is what
+turns silent corruption into an honest mismatch.
