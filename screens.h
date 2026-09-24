@@ -587,7 +587,13 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     // Total count, so a capped page is not mistaken for the whole world. While
     // the follow-up pages are still arriving this and matches.size() disagree,
     // which is exactly right: it says how many there ARE while the list fills in.
-    DrawText(s.listTotal == 1 ? "1 MATCH" : TextFormat("%d MATCHES", s.listTotal),
+    //
+    // ROOMS, not MATCHES. A room outlives the match inside it - the row you are
+    // counting may be a lobby, a game in progress, or one winding down - so
+    // counting "matches" promised a game where there was only a place to wait.
+    // The screen is still called FIND A MATCH, because a match is what a player
+    // came for; what the list holds is the rooms they are held in.
+    DrawText(s.listTotal == 1 ? "1 ROOM" : TextFormat("%d ROOMS", s.listTotal),
              (int)listX, (int)listY - 40, 18, ui::OUTLINE);
     // Rooms a background refresh found that are not in the rows. They are not
     // inserted, because inserting shifts every row below the insertion point and
@@ -654,7 +660,7 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                        screenW, (int)(listY + listH / 2 - 20), 20, ui::OUTLINE);
         if (!s.awaitingList)
             UiTextCentered("CREATE ONE, OR TRY QUICK MATCH",
-                           screenW, (int)(listY + listH / 2 + 8), 16, GRAY);
+                           screenW, (int)(listY + listH / 2 + 8), 16, RAYWHITE);
     } else {
         // Clip to the panel so a row scrolled half past the edge is cut rather
         // than drawn over the frame - raylib's scissor is glScissor, so this
@@ -675,25 +681,36 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             // is what clears it away, because that is when re-ordering is asked
             // for.
             const bool dead = m.gone;
-            DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18,
-                     dead ? GRAY : RAYWHITE);
+            // GREY MEANS ONE THING: you cannot have this. A row you can walk
+            // into is drawn in full colour, every field of it; a row you cannot -
+            // reaped, full, or winding down - goes grey WHOLE, the same grey the
+            // dead REFRESH button and the disabled title-screen rows use. It used
+            // to be spent on ordinary information instead (the map, a CUSTOM tag,
+            // any phase but "playing"), which left a joinable room looking half
+            // disabled and a full one looking joinable.
+            const bool live = !dead && m.joinable;
+            // Two live colours under that rule. The ACCENT classifies the room -
+            // how full it is, and who runs it - and white carries the rest.
+            const Color accent    = live ? ui::OUTLINE : GRAY;
+            const Color secondary = live ? RAYWHITE    : GRAY;
+            DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18, secondary);
             DrawText(dead ? "--" : TextFormat("%d/%d", m.players, m.maxPlayers),
-                     (int)listX + 300, (int)ry + 10, 18, dead ? GRAY : ui::OUTLINE);
+                     (int)listX + 300, (int)ry + 10, 18, accent);
             // The arena, which the browser could not show at all until the map
             // moved into MatchOptions - before that it did not exist until
             // somebody pressed a START button.
-            DrawText(m.map.c_str(), (int)listX + 360, (int)ry + 10, 16, GRAY);
+            DrawText(m.map.c_str(), (int)listX + 360, (int)ry + 10, 16, secondary);
             // Kind, not preset. "DEFAULT" in every row tells a player nothing,
             // where OFFICIAL vs CUSTOM tells them whether the rules are fixed and
             // the room starts itself, or whether somebody is running it and
-            // decides both. Official is drawn brighter because it is the row you
-            // can join and expect a game from without knowing anyone.
+            // decides both. SAME colour for both: they are two answers to one
+            // question, and drawing CUSTOM in grey said "this row is worth less"
+            // when it only ever meant "somebody is running this one".
             const bool official = (m.kind == MatchKind::Official);
             DrawText(official ? "OFFICIAL" : "CUSTOM",
-                     (int)listX + 460, (int)ry + 10, 16,
-                     (official && !dead) ? ui::OUTLINE : GRAY);
+                     (int)listX + 460, (int)ry + 10, 16, accent);
             DrawText(dead ? "closed" : m.phase.c_str(), (int)listX + 570, (int)ry + 10, 16,
-                     (m.phase == "playing" && !dead) ? ui::OUTLINE : GRAY);
+                     secondary);
 
             // Clear of the scrollbar at listW-9: this ends at listW-14.
             Rectangle joinBtn = {listX + listW - 100.0f, ry + 4.0f, 86.0f, 30.0f};
@@ -735,18 +752,25 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     // not "wait".
     if (s.listFollow >= 0 && connected)
         DrawText(TextFormat("LOADING %d OF %d...", (int)s.matches.size(), s.listTotal),
-                 (int)listX, (int)(listY + listH + 10), 16, GRAY);
+                 (int)listX, (int)(listY + listH + 10), 16, RAYWHITE);
 
     const float by = listY + listH + 56.0f;
     if (UiButton({listX, by, 170.0f, 44.0f}, "QUICK MATCH") && connected)
         out.action = BrowseAction::Quick;
-    if (UiButton({listX + 190.0f, by, 170.0f, 44.0f}, "CREATE MATCH") && connected)
+    // CUSTOM MATCH, matching the title screen's word for the same destination -
+    // it is the same CUSTOM screen either way, and a player who took CUSTOM MATCH
+    // from the router should not have to work out that CREATE MATCH is where it
+    // went. 190 wide rather than 170: the longer label had 15px of air either
+    // side of it, which reads as a label that only just fit.
+    if (UiButton({listX + 190.0f, by, 190.0f, 44.0f}, "CUSTOM MATCH") && connected)
         out.action = BrowseAction::Create;
 
-    // Join by code, for a private room whose code arrived out of band.
-    DrawText("CODE", (int)listX + 390, (int)by + 14, 16, ui::OUTLINE);
-    UiTextField({listX + 440.0f, by, 110.0f, 44.0f}, s.joinCode, s.joinCodeFocused, 8, 20);
-    if (UiButton({listX + 560.0f, by, 100.0f, 44.0f}, "GO", 20) && connected && !s.joinCode.empty()) {
+    // Join by code, for a private room whose code arrived out of band. Shifted
+    // right with the wider button above, and GO trimmed to 90, so the row still
+    // clears BACK at the far edge.
+    DrawText("CODE", (int)listX + 400, (int)by + 14, 16, ui::OUTLINE);
+    UiTextField({listX + 450.0f, by, 110.0f, 44.0f}, s.joinCode, s.joinCodeFocused, 8, 20);
+    if (UiButton({listX + 580.0f, by, 90.0f, 44.0f}, "GO", 20) && connected && !s.joinCode.empty()) {
         out.action   = BrowseAction::Join;
         out.code     = s.joinCode;
         out.joinCode = s.joinCode;  // a private room's code doubles as its password
