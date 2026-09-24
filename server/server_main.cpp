@@ -44,7 +44,7 @@
 #include <boost/asio/strand.hpp>  // per-session strands (serialize each Session's handlers)
 
 #include <iostream>
-#include <cstdlib>   // getenv (join key)
+#include <cstdlib>   // getenv (join key), _Exit (shutdown - see the SIGTERM branch)
 #include <cstring>   // strcmp (join refusal tokens)
 #include <csignal>   // SIGTERM/SIGINT - flush the scoreboard before exiting
 #include <memory>
@@ -3671,7 +3671,32 @@ void SimulationLoop() {
                 scoreboard.save();
             }
             std::cout << "Server stopped after " << g_uptimeSeconds.load() << "s\n";
-            std::exit(0);
+
+            // _Exit, NOT exit. This runs on the SIMULATION thread while the asio
+            // threads are still accepting datagrams, and std::exit runs static
+            // destructors - so the global connection maps (g_unseated, g_udpIndex,
+            // g_connMatch) would be torn down underneath a live ForgetConn on the
+            // network thread. TSan reports exactly that, three times, and then
+            // wedges the process mid-exit in an unkillable state, which holds
+            // port 9000 and takes the rest of the probe run down with it.
+            //
+            // The race was always here; it only became reachable in practice when
+            // connecting stopped seating you (C6). A connection that is PARKED
+            // sends its `goodbye` through the unseated dispatch, which is the path
+            // that calls ForgetConn - so what used to need unlucky timing now
+            // happens on almost every probe teardown.
+            //
+            // Nothing is lost by skipping the unwind: the scoreboard was just
+            // flushed above, and the OS closes the sockets. Only stdout needs
+            // saying goodbye to first, since _Exit does not flush it.
+            //
+            // The alternative - stopping the io_context and joining the pool - is
+            // a bigger change than it looks, because SimulationLoop is DETACHED:
+            // returning from main cleanly would still leave this thread running
+            // through the same destructors. Ending the process outright is the
+            // honest description of what a SIGTERM'd game server is doing.
+            std::cout.flush();
+            std::_Exit(0);
         }
     }
 }

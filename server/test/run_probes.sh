@@ -15,6 +15,12 @@
 #   PLATFORMZ_SERVER_BIN   which binary in server/ to run (e.g. gameserver-tsan)
 #   PLATFORMZ_PROBE_SET    a space-separated subset, instead of all of them
 #   PLATFORMZ_NO_BUILD     skip the rebuild below and run the binary as it is
+#   PLATFORMZ_PORT         listen somewhere other than 9000. The escape hatch for
+#                          a stray server that cannot be killed: a process wedged
+#                          mid-exit holds the port and, without this, makes the
+#                          whole suite unrunnable until the machine is rebooted.
+#                          That is not hypothetical - a TSan build did exactly
+#                          that, which is how this option came to exist.
 # Defaults reproduce exactly what a bare run has always done.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -86,7 +92,9 @@ trap cleanup EXIT INT TERM PIPE
 # previous one lets go means it dies on bind and the probe silently talks to the
 # OLD server - which is how a stale registry full of another probe's rooms once
 # produced a page of nonsense failures.
-port_free() { ! lsof -nP -iTCP:9000 -sTCP:LISTEN >/dev/null 2>&1; }
+PORT="${PLATFORMZ_PORT:-9000}"
+export PLATFORMZ_PORT="$PORT"   # both the server and probe.py read this
+port_free() { ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
 
 # shellcheck disable=SC2086  # $PROBES is a word list on purpose
 for probe in $PROBES; do
@@ -94,7 +102,7 @@ for probe in $PROBES; do
   rm -f "$TMP/$probe.scores"
 
   for _ in $(seq 1 40); do port_free && break; sleep 0.25; done
-  if ! port_free; then echo "port 9000 still held; cannot run $probe"; exit 1; fi
+  if ! port_free; then echo "port $PORT still held; cannot run $probe (PLATFORMZ_PORT picks another)"; exit 1; fi
 
   # `exec` matters: without it the subshell forks gameserver as a CHILD, so $!
   # is the subshell's pid and killing it leaves the server running - which is how
