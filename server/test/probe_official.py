@@ -14,7 +14,7 @@ Takes ~25 s: PUBLIC_AUTOSTART_SECONDS is 10, and waiting it out is the test.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, wait_until, handshake_landed
 
 # constants.h - if this changes there, change it here.
 PUBLIC_AUTOSTART_SECONDS = 10.0
@@ -36,9 +36,9 @@ print("a public CUSTOM room still obeys its host")
 # room could not exist: it is listed for anyone to find, AND its creator runs it.
 h = C("HOST")
 h.hello()
-time.sleep(1.0)
+wait_until(lambda: handshake_landed(h), 8.0)
 h.send({"type": "create", "n": "OPEN HOUSE", "pre": "DEFAULT", "priv": False, "code": ""})
-time.sleep(1.2)
+wait_until(lambda: bool(h.created) and h.matchCode == h.created[-1], 8.0)
 check(len(h.created) == 1, f"created a public room: {h.created}")
 # The welcome names the room and how it is run. Neither is inferable: quick match
 # picks the room for you, and connecting with no room named lands you in one you
@@ -48,10 +48,14 @@ check(h.matchCode == (h.created[-1] if h.created else None),
 check(h.matchKind == "custom", f"...and calls it custom: {h.matchKind!r}")
 check(h.phase == "lobby", f"and it waits in the lobby (phase={h.phase})")
 h.send({"type": "start", **OPTS})
-time.sleep(7.0)   # START -> COUNTDOWN -> PLAYING; long enough to clear the countdown
+# START -> COUNTDOWN -> PLAYING. Waited for rather than slept through: the
+# countdown is ~5 s against ./gameserver and appreciably longer against
+# gameserver-tsan, and a fixed 7 s was close enough to the line that the
+# sanitizer run failed here intermittently.
+wait_until(lambda: h.phase == "playing", 20.0)
 check(h.phase == "playing", f"the host's START is obeyed (phase={h.phase})")
 h.send({"type": "endmatch"})
-time.sleep(1.0)
+wait_until(lambda: h.phase == "gameover", 8.0)
 check(h.phase == "gameover", f"and so is the host's ENDMATCH (phase={h.phase})")
 h.alive = False
 h.send({"type": "goodbye"})
@@ -59,9 +63,9 @@ h.send({"type": "goodbye"})
 print("an OFFICIAL room refuses a player's START")
 a = C("SOLO")
 a.hello()
-time.sleep(1.0)
+wait_until(lambda: handshake_landed(a), 8.0)   # UDP's handshake is two round trips
 a.send({"type": "quick"})            # quick goes to official rooms only
-time.sleep(1.2)
+wait_until(lambda: a.slot is not None, 8.0)
 check(a.slot is not None, f"quick match put us in a room (slot={a.slot})")
 check(a.phase == "lobby", f"which is in its lobby (phase={a.phase})")
 check(a.matchKind == "official", f"welcome calls it official: {a.matchKind!r}")
@@ -107,9 +111,9 @@ others = []
 for i in range(need - 1):
     o = C(f"PLAYER{i + 2}")
     o.hello()
-    time.sleep(1.0)
+    wait_until(lambda: handshake_landed(o), 8.0)
     o.send({"type": "quick"})
-    time.sleep(1.2)
+    wait_until(lambda: o.slot is not None, 8.0)
     others.append(o)
     check(o.slot is not None and o.slot != a.slot,
           f"player {i + 2} joined (slots {a.slot}, {o.slot})")

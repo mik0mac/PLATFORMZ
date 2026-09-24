@@ -316,6 +316,26 @@ def take_any_room(client, timeout=6.0):
     return ""
 
 
+def wait_until(pred, timeout=8.0, step=0.1):
+    """Block until pred() is true, or the timeout. Returns pred()'s final value.
+
+    For a check that waits for something to HAPPEN. A fixed sleep has to be long
+    enough for the slowest build anyone runs, and the number that is comfortable
+    against ./gameserver is marginal against gameserver-tsan, which is an order of
+    magnitude slower - so fixed sleeps turn the sanitizer job into a coin flip and
+    the failure reads as a protocol bug rather than a slow machine.
+
+    NOT for a check that waits for something NOT to happen. Those need a real
+    sleep: polling would return the moment the thing has not happened yet, which
+    is immediately, and the assertion would pass without waiting at all.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred(): return True
+        time.sleep(step)
+    return pred()
+
+
 def handshake_landed(client):
     """Is this client through the door, seated or not?
 
