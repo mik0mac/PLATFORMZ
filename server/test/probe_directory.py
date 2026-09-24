@@ -9,7 +9,7 @@ exercised by probe_multimatch.py.
 """
 import sys, os, time, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C
+from probe import C, handshake_landed
 
 fails = 0
 def check(ok, what):
@@ -20,7 +20,10 @@ def check(ok, what):
 a = C("BROWSER")
 a.hello()
 time.sleep(1.0)
-check(a.slot is not None, "joined the default room")
+# Connecting no longer puts you anywhere (C6b) - the directory is the point of
+# this probe, and you now browse it from exactly that state.
+check(handshake_landed(a), "connected")
+check(a.slot is None, "...holding no room, which is what the browser is for")
 
 print("list")
 a.send({"type": "list", "cur": 0})
@@ -28,7 +31,7 @@ time.sleep(0.6)
 check(len(a.matchlists) >= 1, "a match list came back")
 lst = a.matchlists[-1] if a.matchlists else {}
 rows = lst.get("m", [])
-check(lst.get("total", 0) >= 1, f"at least the default room is listed (total={lst.get('total')})")
+check(lst.get("total", 0) >= 1, f"the official rooms are listed (total={lst.get('total')})")
 check(all(k in rows[0] for k in ("c", "n", "ph", "p", "max", "j", "k", "map")) if rows else False,
       "rows carry code/name/phase/players/max/joinable/kind/map")
 check(rows[0].get("map") in ("SMALL", "MEDIUM", "LARGE", "XL") if rows else False,
@@ -105,25 +108,59 @@ b.send({"type": "goodbye"})
 time.sleep(0.3)
 
 print("paging + capacity")
-for i in range(20):                       # cap is 12; this must start refusing
+# FILL UNTIL REFUSED, rather than a fixed number of attempts. This used to send
+# exactly 20 creates with the comment "cap is 12; this must start refusing",
+# which quietly made MATCH_MAX_CONCURRENT untouchable: raise it past 20 and the
+# probe fails on a server that is behaving perfectly, reporting a capacity bug
+# where there is only a stale constant in a test. The cap is meant to go up when
+# the box it runs on does, so nothing here may assume its value.
+made = 0
+for i in range(400):
     a.send({"type": "create", "n": f"ROOM{i}", "pre": "DEFAULT", "priv": False, "code": ""})
-    time.sleep(0.12)
+    time.sleep(0.05)
+    if "server_full" in a.joinfails: break
+    made += 1
 time.sleep(0.8)
-check("server_full" in a.joinfails, "creation refused once at capacity")
-a.send({"type": "list", "cur": 0})
-time.sleep(0.6)
-p0 = a.matchlists[-1]
-check(len(p0.get("m", [])) <= 8, f"page is capped at 8 rows (got {len(p0.get('m', []))})")
-if p0.get("next", -1) > 0:
-    a.send({"type": "list", "cur": p0["next"]})
-    time.sleep(0.6)
-    p1 = a.matchlists[-1]
-    check(p1.get("cur") == p0["next"], "second page starts where the first ended")
-    codes0 = {r["c"] for r in p0["m"]}
-    codes1 = {r["c"] for r in p1["m"]}
-    check(not (codes0 & codes1), "pages do not repeat a room")
-else:
-    check(False, "expected more than one page after filling the server")
+check("server_full" in a.joinfails,
+      f"creation refused once at capacity (after {made} rooms)")
+# This probe runs with the per-address budget turned OFF, so every refusal here
+# is the registry genuinely being out of rooms. Asserting the OTHER reason is
+# absent is what keeps the two apart: they used to share one token, which is how
+# "you already have three rooms" came to read as "SERVER IS AT CAPACITY" with a
+# third of the registry free.
+check("too_many_rooms" not in a.joinfails,
+      f"...as capacity, not as a room budget that is switched off here: {set(a.joinfails)}")
+
+# WALK EVERY PAGE, however many there are. This is the assembly the real client
+# performs to show one scrollable list, so it has to hold at whatever size the
+# registry is - not merely for the two pages a 12-room cap happens to produce.
+pages, seen, dupes, cur = 0, [], set(), 0
+total = None
+while True:
+    a.matchlists.clear()
+    a.send({"type": "list", "cur": cur})
+    deadline = time.time() + 4.0
+    while time.time() < deadline and not a.matchlists: time.sleep(0.1)
+    if not a.matchlists:
+        check(False, f"page at cur={cur} never came back")
+        break
+    p = a.matchlists[-1]
+    pages += 1
+    if total is None: total = p.get("total", -1)
+    rows = p.get("m", [])
+    check(len(rows) <= 8, f"page {pages} is capped at 8 rows (got {len(rows)})") if pages == 1 else None
+    for r in rows:
+        if r["c"] in seen: dupes.add(r["c"])
+        seen.append(r["c"])
+    if p.get("next", -1) < 0: break
+    check(p["next"] == cur + len(rows), "a page starts where the last one ended")
+    cur = p["next"]
+    time.sleep(1.1)          # E1 allows a burst then one list a second
+
+check(pages > 1, f"filling the server took more than one page ({pages})")
+check(not dupes, f"no room appears on two pages: {sorted(dupes)}")
+check(len(seen) == total,
+      f"every room was reachable by paging: walked {len(seen)}, server says {total}")
 
 print("refusals are answered, not left to time out")
 n = len(a.joinfails)

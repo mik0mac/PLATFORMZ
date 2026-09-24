@@ -110,10 +110,21 @@ driver).
 ## 3. Click and type
 
 ```bash
-"$SCRATCH/uidriver" click 734 627        # screen POINTS
-"$SCRATCH/uidriver" key 46               # M - end match
-"$SCRATCH/uidriver" chord 55 9 cmd       # Cmd+V (paste)
+"$SCRATCH/uidriver" click 734 627            # screen POINTS
+"$SCRATCH/uidriver" key 46                   # M - end match
+"$SCRATCH/uidriver" chord 55 9 cmd           # Cmd+V (paste)
+"$SCRATCH/uidriver" scroll 700 380 -4        # wheel, 4 lines DOWN, at that point
+"$SCRATCH/uidriver" drag 1129 481 1129 300   # press, move, release - scrollbars
 ```
+
+`scroll` moves the pointer first and stamps the location onto the event: a scroll
+event carries no position of its own, and a list that only scrolls while hovered
+(the match browser does, so a scroll aimed at the page cannot move a row out from
+under the cursor) would ignore one posted at the wrong place.
+
+`drag` posts **intermediate motion**, which is what makes it a drag rather than a
+click. An immediate-mode widget samples the mouse once a frame, so a straight
+jump from press to release looks like a click on the starting point.
 
 **Do not use `osascript`/System Events for input.** Two traps, both of which
 make working code look broken:
@@ -142,7 +153,25 @@ Accessibility grant at all:
 ./platformz bench 120 128 18 4                   # skip the menus into a match
 ```
 
-Drive the *other* side with the protocol probes - they need no UI:
+**To look at a browser with rooms in it, use `populate.py`** rather than writing
+another throwaway filler - it fills to capacity with varied occupancy, presets
+and a couple of private rooms, prints the order you should expect, and holds
+every connection open:
+
+```bash
+cd server && PLATFORMZ_MAX_ROOMS_PER_ADDR=0 ./gameserver &   # budget OFF, see below
+python3 server/test/populate.py --seed 7                     # same layout every time
+```
+
+Two things it exists to stop you rediscovering. **Rooms are reaped 30 s after
+going empty**, so whatever made them has to stay connected - run it in its own
+terminal and Ctrl-C when done. And **E2's per-address room budget is 3**, which
+every client on one machine shares, so without `PLATFORMZ_MAX_ROOMS_PER_ADDR=0`
+you get three rooms and a puzzle; the script detects that refusal by name and
+prints the fix.
+
+For anything else, drive the other side with the probe client directly - it
+needs no UI:
 
 ```python
 import sys, os, time

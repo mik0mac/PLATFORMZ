@@ -65,6 +65,11 @@ int main() {
         check(MapSizeName(m->pendingMap.load()) == p.options.mapSize, "...and round-trips by name");
         check(MatchPresetByName("NOPE").options.numPlayers == p.options.numPlayers,
               "unknown preset falls back to DEFAULT");
+        // The two rules with no OPTIONS slider. Nothing in the UI would notice
+        // if ApplyPreset stopped copying them, so the test has to.
+        check(m->pendingMaxBots.load() == p.options.maxBots, "maxBots copied from preset");
+        check(m->pendingMinHumans.load() == p.options.minHumansToStart,
+              "minHumansToStart copied from preset");
     }
 
     printf("every preset is dialable in the UI\n");
@@ -90,6 +95,8 @@ int main() {
             };
             inRange(OPT_RANGE_NUM_PLAYERS,         (float)o.numPlayers,    "numPlayers");
             inRange(OPT_RANGE_BOT_DIFFICULTY,      o.botDifficulty,        "botDifficulty");
+            inRange(OPT_RANGE_MAX_BOTS,            (float)o.maxBots,       "maxBots");
+            inRange(OPT_RANGE_MIN_HUMANS,          (float)o.minHumansToStart, "minHumansToStart");
             inRange(OPT_RANGE_WALL_ELASTICITY,     o.wallElasticity,       "wallElasticity");
             inRange(OPT_RANGE_PLATFORM_ELASTICITY, o.platformElasticity,   "platformElasticity");
             inRange(OPT_RANGE_SPEED_BOOST,         o.speedBoost,           "speedBoost");
@@ -102,6 +109,15 @@ int main() {
             // substitute MEDIUM for a typo, so the room would run, on the wrong map.
             const std::string arena = name + ".mapSize \"" + o.mapSize + "\" is a real arena";
             check(mapSizePresets.find(o.mapSize) != mapSizePresets.end(), arena.c_str());
+
+            // The authoring rule the runtime clamp deliberately does NOT
+            // enforce: a room needing more humans than it has slots could never
+            // start, and narrowing it silently would hide the mistake rather
+            // than report it.
+            const std::string fits = name + ".minHumansToStart (" +
+                                     std::to_string(o.minHumansToStart) +
+                                     ") fits in numPlayers (" + std::to_string(o.numPlayers) + ")";
+            check(o.minHumansToStart <= o.numPlayers, fits.c_str());
         }
 
         // And the defaults themselves, which are what an untouched modal shows.
@@ -112,6 +128,16 @@ int main() {
               clamped.speedBoost == d.speedBoost && clamped.fuelConsumption == d.fuelConsumption &&
               clamped.fuelRegenPct == d.fuelRegenPct && clamped.mapSize == d.mapSize,
               "MatchOptions{} is already in range - clamping it changes nothing");
+
+        // The promise the two sliderless rules were added under: at their defaults
+        // a room behaves exactly as it did before they existed - every unclaimed
+        // slot bot-filled, auto-start arming at PUBLIC_MIN_PLAYERS. Asserted
+        // rather than remembered, because every preset that says nothing about
+        // them inherits these.
+        check(d.maxBots == GAMESPACE_NUMBER_OF_PLAYERS - 1,
+              "MatchOptions{}.maxBots fills every unclaimed slot but one");
+        check(d.minHumansToStart == PUBLIC_MIN_PLAYERS,
+              "MatchOptions{}.minHumansToStart is the old compile-time threshold");
     }
 
     // The point of #107: governance comes from KIND, and visibility is a

@@ -22,7 +22,7 @@ C answers challenges automatically, which is exactly the behaviour under test.
 import sys, os, time, json, socket
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe
-from probe import C, enc
+from probe import C, handshake_landed, enc
 
 fails = 0
 def check(ok, what):
@@ -95,17 +95,25 @@ check(jb is not None and jb.get("type") == "challenge",
       "a made-up cookie gets challenged again rather than seated")
 
 print("echoing the cookie completes the handshake")
-welcome, wn = exchange_binary(a, hello_bytes(cookie))
-check(welcome is not None and welcome[0] != 0x7B,
-      "the cookie buys a binary welcome")
-# Reported, not asserted. The welcome measured here is a LOBBY welcome and is
-# tiny (~21 B) because the world is not generated until a match starts - the
-# ~3 KB one this whole feature exists to stop reflecting is a LARGE/XL welcome
-# from a room mid-match, which is not worth building a probe around. The number
-# that IS pinned down is the one above: whatever the welcome grows to, an
-# unproven address gets 51 bytes and no more.
+# It used to buy a binary WELCOME, because a hello naming no room was seated in
+# a landing room. It now buys an `unseated` ack (C6b): you are through the door
+# and holding nothing until you pick a room.
+#
+# That is strictly better for the thing this probe is about. The welcome was the
+# big reply an amplification attack wanted; a spoofed hello now draws a few dozen
+# bytes of JSON and no world at all, because no world is chosen yet.
+accepted, wn = exchange(a, hello_bytes(cookie))
+ja = as_json(accepted)
+check(ja is not None and ja.get("type") != "challenge",
+      f"the cookie is accepted, not challenged again (got {ja.get('type') if ja else None!r})")
+# Reported, not asserted. A proven address now gets an `unseated` ack rather
+# than a welcome, so the big reply this feature exists to stop reflecting - a
+# LARGE/XL welcome from a room mid-match, ~3 KB - cannot be drawn by a hello at
+# all any more. You have to pick a room first, which takes a second round trip
+# from an address that has already proved itself. The number that IS pinned down
+# is the one above: an unproven address gets 51 bytes and no more.
 print(f"  note  challenge {n}B for a {len(req)}B hello = {n/len(req):.1f}x; "
-      f"this room's lobby welcome is {wn}B, a mid-match LARGE one ~3 KB")
+      f"a proven address gets {wn}B (an ack, not a world)")
 
 print("the cookie is bound to the address it was minted for")
 b = raw()   # same machine, different source PORT - a different endpoint
@@ -143,7 +151,10 @@ print("list budget: a small burst, then one reply per second per connection")
 lister = C("LISTER")
 lister.hello()
 time.sleep(1.2)
-check(lister.slot is not None, "the probe client got seated (it answers challenges for us)")
+# Unseated is fine and is now the normal resting state - the list budget is a
+# property of the CONNECTION, not of a seat, and browsing is exactly what a
+# roomless client does.
+check(handshake_landed(lister), "the probe client is through (it answers challenges for us)")
 check(lister.challenges >= 1, f"...after being challenged {lister.challenges}x")
 lister.matchlists.clear()
 for _ in range(25):
@@ -163,7 +174,7 @@ print("bad join codes: five a minute, then refused")
 guesser = C("GUESSER")
 guesser.hello()
 time.sleep(1.2)
-check(guesser.slot is not None, "the guesser got seated")
+check(handshake_landed(guesser), "the guesser is through")
 for i in range(9):
     guesser.send({"type": "join", "m": f"ZZ{i:02d}", "code": ""})
     time.sleep(0.08)

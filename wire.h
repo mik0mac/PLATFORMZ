@@ -86,11 +86,20 @@ struct MatchSummary {
     // Not the same question as public-vs-invite-only - a public room can be
     // either kind, and only public ones are listed here anyway.
     MatchKind kind = MatchKind::Custom;
+
+    // CLIENT-SIDE ONLY - never on the wire. Set when a background refresh finds
+    // this room is no longer listed (reaped, or gone private). The row is kept in
+    // place and drawn dead rather than removed, because removing it would shift
+    // every row below it - and not shifting rows under the player is the entire
+    // reason the background refresh merges instead of replacing. It disappears on
+    // the next manual REFRESH, which is when re-ordering is expected.
+    bool gone = false;
 };
 
 // Why a join was refused. Kept as an enum rather than a free string so the client
 // can render a sentence a player understands instead of echoing wire text.
-enum class JoinFailure { None, NotFound, Full, BadCode, InProgress, ServerFull, RateLimited, Unknown };
+enum class JoinFailure { None, NotFound, Full, BadCode, InProgress, ServerFull,
+                         TooManyRooms, RateLimited, Unknown };
 
 inline JoinFailure joinFailureFromWire(const std::string& s) {
     if (s == "notfound")     return JoinFailure::NotFound;
@@ -98,6 +107,10 @@ inline JoinFailure joinFailureFromWire(const std::string& s) {
     if (s == "badcode")      return JoinFailure::BadCode;
     if (s == "inprogress")   return JoinFailure::InProgress;
     if (s == "server_full")  return JoinFailure::ServerFull;
+    // Distinct from server_full on purpose: that one is the registry being out
+    // of rooms, this one is YOUR budget, and only the second is fixed by waiting
+    // a couple of minutes or reusing a room you already have.
+    if (s == "too_many_rooms") return JoinFailure::TooManyRooms;
     if (s == "rate_limited") return JoinFailure::RateLimited;
     return JoinFailure::Unknown;
 }
@@ -111,6 +124,7 @@ inline const char* joinFailureWire(JoinFailure f) {
         case JoinFailure::BadCode:     return "badcode";
         case JoinFailure::InProgress:  return "inprogress";
         case JoinFailure::ServerFull:  return "server_full";
+        case JoinFailure::TooManyRooms: return "too_many_rooms";
         case JoinFailure::RateLimited: return "rate_limited";
         default:                       return "unknown";
     }
@@ -123,7 +137,14 @@ inline const char* joinFailureText(JoinFailure f) {
         case JoinFailure::Full:        return "MATCH IS FULL";
         case JoinFailure::BadCode:     return "WRONG CODE";
         case JoinFailure::InProgress:  return "MATCH ALREADY STARTED";
-        case JoinFailure::ServerFull:  return "SERVER IS AT CAPACITY";
+        // "TRY AGAIN SHORTLY" is advice, not padding: an idle room is reaped
+        // after MATCH_EMPTY_GRACE_IDLE_SEC (30 s), so waiting genuinely is the
+        // fix, and without saying so a full server reads as a dead end.
+        case JoinFailure::ServerFull:  return "SERVER IS AT CAPACITY - TRY AGAIN SHORTLY";
+        // Kept short deliberately: this one renders on the CUSTOM screen, whose
+        // bottom-right corner belongs to the volume slider. "YOU" matters - the
+        // limit is the player's own, not the server's.
+        case JoinFailure::TooManyRooms: return "YOU HAVE TOO MANY ROOMS - USE ONE, OR WAIT";
         case JoinFailure::RateLimited: return "TOO MANY ATTEMPTS - WAIT A MOMENT";
         default:                       return "COULD NOT JOIN";
     }
@@ -133,8 +154,13 @@ struct ServerMessage {
     // No `Full`. It used to be its own message and its own binary tag, sent just
     // before the server hung up on you; E2 retired both. Fullness is a JoinFail
     // now (reason `full` or `server_full`) and nobody gets hung up on.
+    // `Unseated` is the seatless counterpart of `Welcome`: the handshake landed,
+    // and we hold no slot. Without it those two are indistinguishable from the
+    // client's side - a welcome is the only proof a connection got through, and
+    // it cannot exist without a seat.
     enum class Type { None, Welcome, State, VersionMismatch, Leaderboard,
-                      MatchList, JoinFail, Created, Challenge, Identity, Unknown };
+                      MatchList, JoinFail, Created, Challenge, Identity,
+                      Unseated, Unknown };
     // Server match phase, carried in every state packet. Drives the networked
     // client's screen: Lobby -> TITLE, Countdown -> COUNTDOWN, Playing -> PLAYING,
     // GameOver -> GAME_OVER.
@@ -323,6 +349,8 @@ inline std::string serializeGoodbye() {
 // ("options", "start", and the server's "opt" echo) uses these keys.
 inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
     j["nplayers"] = o.numPlayers;           // requested match size (server clamps to connected)
+    j["maxbots"]  = o.maxBots;              // how many unclaimed slots get bot-filled; the rest stay empty
+    j["minhumans"] = o.minHumansToStart;    // humans an official room waits for before auto-starting
     j["diff"]     = o.botDifficulty;        // bot difficulty center [0..BOT_DIFFICULTY]
     j["welast"]   = o.wallElasticity;       // OPTIONS: WALL ELASTICITY (players only)
     j["pelast"]   = o.platformElasticity;   // OPTIONS: PLATFORM ELASTICITY (players only)
@@ -514,6 +542,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     // state builder exactly (server_main.cpp).
     msg.hasOptions               = true;
     msg.opt.numPlayers           = r.u8();
+    msg.opt.maxBots              = r.u8(); // state tag 0x0B+
+    msg.opt.minHumansToStart     = r.u8(); // state tag 0x0B+
     msg.opt.botDifficulty        = r.f32();
     msg.opt.wallElasticity       = r.f32();
     msg.opt.platformElasticity   = r.f32();
@@ -808,6 +838,13 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.createdCode = j.value("m", std::string());
         return msg;
     }
+    // Connected, holding no slot. Carries nothing: WHY is either a `joinfail`
+    // that arrives beside this, or - once the client picks its own room - not a
+    // failure at all.
+    if (type == "unseated") {
+        msg.type = ServerMessage::Type::Unseated;
+        return msg;
+    }
     if (type == "joinfail") {
         msg.type     = ServerMessage::Type::JoinFail;
         msg.joinFail = joinFailureFromWire(j.value("why", std::string()));
@@ -844,6 +881,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
     msg.epoch     = j.value("ep", 0u);          // match epoch; echoed back in our input
 
+
     // Lobby options snapshot (match-wide). Present every state packet; the client
     // applies these to its OPTIONS modal so any client's change shows live.
     if (j.contains("opt")) {
@@ -851,6 +889,8 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         msg.hasOptions = true;
         MatchOptions d; // absent keys fall back to the compile-time defaults
         msg.opt.numPlayers           = o.value("nplayers", d.numPlayers);
+        msg.opt.maxBots              = o.value("maxbots",  d.maxBots);
+        msg.opt.minHumansToStart     = o.value("minhumans", d.minHumansToStart);
         msg.opt.botDifficulty        = o.value("diff",     d.botDifficulty);
         msg.opt.wallElasticity       = o.value("welast",   d.wallElasticity);
         msg.opt.platformElasticity   = o.value("pelast",   d.platformElasticity);

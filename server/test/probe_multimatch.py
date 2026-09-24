@@ -9,7 +9,7 @@ that changed nothing a player could observe.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS, handshake_landed
 
 fails = 0
 def check(ok, what):
@@ -19,11 +19,15 @@ def check(ok, what):
 
 def wait(secs=1.2): time.sleep(secs)
 
-print("both clients land in the default room")
+print("both clients connect, and land nowhere")
 a, b = C("ALPHA"), C("BRAVO")
 a.hello(); wait(0.4); b.hello(); wait()
-check(a.slot is not None and b.slot is not None, f"joined (slots {a.slot}, {b.slot})")
-check(a.slot != b.slot, "different slots in the same room")
+# There is no room to "land in" any more (C6b): you arrive in the directory and
+# choose. Each of them makes its own room below, which is what gives this probe
+# the two independent rooms it is actually about.
+check(handshake_landed(a) and handshake_landed(b), "both are through the handshake")
+check(a.slot is None and b.slot is None,
+      f"...and neither holds a room (slots {a.slot}, {b.slot})")
 
 print("ALPHA makes a room - and is put in it")
 # PRIVATE on purpose - but only so the next check can prove a private room stays
@@ -44,6 +48,17 @@ wait()
 listed = [r.get("n") for r in (b.matchlists[-1].get("m", []) if b.matchlists else [])]
 check("ALPHA HOUSE" not in listed, f"BRAVO cannot see it: {listed}")
 
+print("BRAVO takes a room of its own")
+# BRAVO used to just sit in the landing room, which is OFFICIAL: locked, and it
+# starts itself once its threshold is met. That made "BRAVO is still in the
+# lobby" a statement about auto-start rather than about room isolation, and it
+# broke outright once a preset asked for only one human. A room BRAVO hosts does
+# nothing until BRAVO says so, which is what these checks are actually about.
+b.send({"type": "create", "n": "BRAVO HOUSE", "priv": False, "code": ""})
+wait(1.5)
+bravoRoom = b.created[-1] if b.created else None
+check(bool(bravoRoom), f"BRAVO has its own room: {b.created}")
+
 print("they are now in different rooms")
 a.send({"type": "start", **OPTS})     # only ALPHA's room starts
 wait(7.0)
@@ -57,10 +72,17 @@ wait(1.5)
 check(a.phase == "gameover", f"ALPHA's match ended (phase={a.phase})")
 check(b.phase == "lobby",    f"BRAVO untouched (phase={b.phase})")
 
-print("leaving comes home")
+print("leaving leaves you nowhere")
+was = a.unseated
 a.send({"type": "leave"})
 wait(1.5)
-check(a.phase in ("lobby", "gameover"), f"ALPHA is back in the default room (phase={a.phase})")
+# Leaving used to hand you a landing room. It now hands you the directory: no
+# slot, no room, and an `unseated` saying so. That last part is what stops a
+# roomless client looking like one whose connection died.
+check(a.unseated > was, f"ALPHA was told it is unseated ({was} -> {a.unseated})")
+check(a.slot is None and not a.matchCode,
+      f"...and holds nothing (slot={a.slot}, room={a.matchCode!r})")
+check(b.matchCode == bravoRoom, f"BRAVO is untouched by it (in {b.matchCode})")
 
 print("refusals are specific")
 n = len(a.joinfails)

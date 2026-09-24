@@ -40,9 +40,23 @@ name crosses the wire as a *string*, never an index, so adding one is a server
 rebuild and nothing else — an old client naming a preset that no longer exists
 gets `DEFAULT` rather than a failed join.
 
+Two match options have no slider in the OPTIONS modal, because they are things a
+preset's author sets rather than things a player dials: `maxBots` and
+`minHumansToStart`. `maxBots` caps how many
+unclaimed roster slots are filled with bots — a room is still `numPlayers` slots
+and any of them can be taken by a human, so this does not change capacity; the
+slots past the cap are simply **empty**. An empty slot has no body at all: it is
+not drawn, not shootable, and not counted when the server asks whether one player
+is left standing — but it is still in the roster and still joinable, including
+mid-match. A client learns a slot is empty from the per-player `active` flag it
+already receives, not from `maxBots` — but both rules ride the options block like
+every other, so the lobby can say how many more players a room is waiting for and
+a host's START echoes the room's own values back rather than resetting them.
+
 **Kind and visibility are different questions,** and conflating them was a real
 bug (#107). *Kind* says who is in charge: an **official** room has its options
-locked and starts itself once `PUBLIC_MIN_PLAYERS` arrive, so it promises a game
+locked and starts itself once its preset's `minHumansToStart` (default
+`PUBLIC_MIN_PLAYERS`) arrive, so it promises a game
 that begins; a **custom** room is run by the person who created it, who owns the
 options and the START button. *Visibility* only says whether it is advertised. A
 public custom room is an ordinary thing to want.
@@ -75,6 +89,23 @@ entirely, which is what makes its code a real capability rather than a formality
 ---
 
 ## Connecting
+
+**Connecting does not put you in a room.** Name one and you get it, or a refusal
+saying why; name none and you hold none, which is the ordinary way to arrive. You
+browse, you pick, and only then do you have a slot. `leave` returns you to that
+state, and a refused `join` leaves you in it - there is no fallback room, because
+a seat in a room nobody asked for is the thing this removes.
+
+A client learns the handshake landed from a `welcome` if it got a seat, and from
+an `unseated` if it did not. Before that second message existed, holding no room
+was indistinguishable from a handshake that never arrived, and the only recovery
+was to keep re-helloing. A **bare hello is not a request for a seat** - it is a
+client saying it is still there - so re-sending one never seats you.
+
+A connection with no room is a working connection: it can `list`, `join`,
+`create` and `quick`, and it is sent the leaderboard, which is not a property of
+a room. Over UDP it must still keep up its heartbeat - `UDP_CLIENT_TIMEOUT_LOBBY`
+is 3 seconds and applies to everyone, seated or not.
 
 Everything a client sends is JSON. Everything it receives is JSON **except** the
 welcome and the per-tick state over UDP, which are binary (`netbin.h`) so a full
@@ -185,6 +216,82 @@ The list is **capped to one datagram** (~1160 bytes, 8 rows) and paged with
 deliberately *below* the room cap so the paging path runs from day one rather
 than rotting until the cap is raised.
 
+#### The order
+
+Rooms come back **sorted by how close each one is to being a game**, outermost
+key first:
+
+1. **Band.** Joinable lobbies (`lobby`/`countdown`), then joinable matches
+   already in progress, then rooms you cannot enter at all (full, or `gameover`).
+   A 7/8 room that is already playing is a worse offer than a 2/8 lobby, so
+   fullness is not allowed to lift it above one. Unjoinable rooms are still
+   *listed* — the browser draws an inert reason on the row rather than making it
+   vanish — but never above something you can actually join.
+2. **Fewest free spots.** The anti-fragmentation rule: five players spread across
+   five empty rooms is the failure state of a small-population game, so the
+   second person to arrive should land on the first person's room rather than
+   beside it. Free spots, **not** head count — rosters differ per preset, so
+   ranking by players would put a 5/8 room above a 3/4 room that is one person
+   from starting.
+3. **Preset rank** — the typical-to-niche ramp in `options.h`, the same one QUICK
+   MATCH walks.
+4. **Code**, which makes the order *total*: without it, many rooms of one preset
+   at one occupancy would have no defined order and could shuffle between two
+   requests.
+
+Every **empty** room is clamped to the same free-spot key, so empty rooms tie and
+fall through to the preset ramp. That is what makes a freshly booted server —
+where every room is empty — list in exactly preset order, every time, with no
+separate mechanism keeping it there.
+
+#### Paging is a snapshot
+
+`cur = 0` means **take a fresh snapshot**; every other cursor is a slice of that
+same frozen vector, contents included. This is not an optimisation. The order
+above is derived from *live* occupancy, so re-deriving it for page 1 could cut
+that page from a list sorted differently to the one page 0 came from — showing a
+room on both pages, or on neither. Sorting by room code used to make that
+invariant free.
+
+A snapshot is held per connection (on the rate-limit record, which is already
+keyed by connection id and already swept) and is at most `MATCH_MAX_CONCURRENT`
+rows.
+
+The client side of this splits a refresh into the two things it does, because
+only one of them is safe to do while somebody is reaching for a row:
+
+- **Contents** — how full a room is, its phase, whether it can be joined. A
+  background walk updates each row **in place**, matched by code, every few
+  seconds. Nothing moves. This is what stops a `gameover` room from still reading
+  ENDING ten seconds after it became a joinable lobby again.
+- **Order and membership** — which rooms exist and in what sequence. Only
+  **REFRESH** changes those, because that is the moment the player is not
+  mid-reach. A room the background walk can no longer find is greyed in place and
+  labelled GONE rather than removed (removing it would shift every row below);
+  rooms it finds that are not on screen are offered as a count beside the button
+  rather than inserted.
+
+The old client simply re-asked every two seconds and replaced the list. That was
+harmless against a key that never changed, and became a way to make somebody
+click the room next to the one they aimed at the moment the order went live.
+
+**Paging never reaches the player.** The client asks for `cur = 0`, then follows
+`next` to the end of the snapshot and concatenates, so the browser shows ONE
+scrollable list of every public room rather than pages to click through. That is
+only coherent because of the snapshot above — pages cut from a list re-sorted
+between requests would assemble into one that never existed at any single moment.
+Assembly is bounded by the registry cap, but it is also rate limited (a burst,
+then one `list` a second, and an over-budget request is dropped in silence), so
+the client re-asks for a page that does not come back and gives up after four
+tries rather than spinning: a short list somebody can act on beats a spinner.
+
+The REFRESH button goes inert for a second after the **last page** of a refresh
+lands, not the first. A refresh costs one request per page while the budget
+refills at one a second, so timing it from page 0 would let a multi-page
+directory drain the bucket faster than it fills.
+
+`probe_listorder.py` is the test for all of it.
+
 ### `joinfail` reasons
 
 | `why` | Means |
@@ -192,7 +299,8 @@ than rotting until the cap is raised.
 | `notfound` | no such room, or it was reaped |
 | `badcode` | wrong join code for a private room |
 | `full` | that room has no free slot — you were put somewhere else, or left where you were |
-| `server_full` | nowhere free at all, or you are over your room-creation budget |
+| `server_full` | the registry has no free room at all |
+| `too_many_rooms` | *you* are over your own room-creation budget. Distinct from `server_full` on purpose: that one is the whole server and clears in seconds as empty rooms are reaped, this one is your three rooms and comes back one every two minutes. They shared a token until it was pointed out that "SERVER IS AT CAPACITY" was being shown with a third of the registry free |
 | `rate_limited` | too many attempts; wait |
 | `inprogress` | **defined but never sent.** The client renders it ("MATCH ALREADY STARTED") and the enum carries it, but no server path emits it: a match in progress either has a free slot, in which case you join it, or it is `full` |
 
@@ -298,7 +406,7 @@ recognisable rather than mysterious.
 | Limit | Default | Refused with |
 |---|---|---|
 | Rooms on the server | 12 | `server_full` |
-| Rooms one **address** may mint | 3, one back every 2 min | `server_full` |
+| Rooms one **address** may mint | 3, one back every 2 min | `too_many_rooms` |
 | Room moves (join / quick / leave) | 5 in hand, 1/s | `rate_limited` |
 | Wrong room codes | 5 per minute per connection | `rate_limited` |
 | `list` replies | 3 in hand, 1/s | *silently dropped* |
@@ -337,3 +445,8 @@ it latches `SERVER VERSION MISMATCH` and never recovers — so bump once, ship b
 ends together, and never reuse a retired value. `server/test/ci_smoke.sh` checks
 the running server's tags against `netbin.h` on every push, which is what stops a
 stale binary shipping quietly.
+
+`STATE_BIN_VERSION` is at `0x0B`: the per-tick option block grew two `u8`s, for
+`maxBots` and `minHumansToStart`, straight after the roster size. It skipped
+`0x0A` (the welcome's) and `0x06` (burned by the retired FULL packet). The flags
+byte could not absorb them — it has two free bits and these need four each.

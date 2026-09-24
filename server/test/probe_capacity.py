@@ -19,7 +19,7 @@ Then the budgets: rooms per address, and moves per second.
 """
 import sys, os, time, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C
+from probe import C, take_any_room, handshake_landed
 
 fails = 0
 def check(ok, what):
@@ -29,13 +29,15 @@ def check(ok, what):
 
 def wait(t=0.8): time.sleep(t)
 
-print("fill the default room")
-# One client first, to learn the default room's code off its welcome.
+print("fill a room")
+# One client first, to learn a room's code off its welcome. It has to ASK for a
+# seat now - connecting lands you in the directory holding nothing (C6b) - so
+# this is the probe's QUICK MATCH. Everyone after it names the room it landed in.
 first = C("P0")
 first.hello()
 wait(1.2)
-home = first.matchCode
-check(first.slot is not None, f"first client seated in {home}")
+home = take_any_room(first)
+check(first.slot is not None, f"first client seated in {home!r}")
 
 crowd = [first]
 for i in range(1, 12):                  # more than the 8 slots, on purpose
@@ -87,6 +89,14 @@ if waiting is None:
     check(False, "needed a second unseated client")
 else:
     check(waiting.slot is None, "still unseated to begin with")
+    # C6a: being parked is ANNOUNCED. Without this the client cannot tell a
+    # connection that got through and found no seat from one whose handshake
+    # never landed - a welcome is the only other proof it is connected, and that
+    # cannot exist without a seat.
+    check(waiting.unseated > 0,
+          f"...and was told so, not left to infer it ({waiting.unseated} acks)")
+    check(bool(waiting.leaderboards),
+          "...and still got the leaderboard, which is not a property of a room")
     seated[0].drop(goodbye=True)         # frees a slot in `home` immediately
     wait(0.4)
     waiting.hello()                      # the real client does this every 0.5s
@@ -102,7 +112,9 @@ print("rooms per address")
 maker = C("MAKER")
 maker.hello()
 wait(1.2)
-check(maker.slot is not None, "the room-maker is seated")
+check(handshake_landed(maker), "the room-maker is through")
+# Creating does not need a seat first - a roomless client is exactly who
+# makes a room, and `create` puts them in the one they just made.
 # The first one carries a deliberately hostile name, because there is nowhere
 # better to test that and it costs nothing. Sent as RAW BYTES: the server parses
 # JSON by string search, so a control character has to actually be in the
@@ -120,8 +132,15 @@ wait(0.8)
 # five makes exactly three rooms.
 check(len(maker.created) == 3,
       f"3 rooms minted from one address, then refused: {maker.created}")
-check(maker.joinfails.count("server_full") == 2,
+check(maker.joinfails.count("too_many_rooms") == 2,
       f"the extra attempts were refused: {maker.joinfails}")
+# ITS OWN REASON. The registry has eight free rooms at this point, so calling
+# this "server_full" - which it did - told the player to go and look at a server
+# that was two thirds empty. The two failures clear on completely different
+# terms (seconds, as rooms are reaped, versus one room back every two minutes),
+# so a client cannot give useful advice unless it can tell them apart.
+check("server_full" not in maker.joinfails,
+      f"...as a room budget, not as a full server: {set(maker.joinfails)}")
 
 print("match names are sanitised like player names")
 maker.matchlists.clear()

@@ -134,6 +134,23 @@ public:
 
     bool isBot = false; // Whether the player is a bot or a human player.
 
+    // Server-owned, like isConnected and isBot: this slot has NO BODY. It exists
+    // in the roster (so a human can still join it) but nothing is driving it and
+    // nothing is standing in the arena - it is an unclaimed slot the room's
+    // preset declined to paper over with a bot (MatchOptions::maxBots, options.h).
+    //
+    // Always carried with isAlive == false, which is what keeps it out of
+    // collisions, the death FX, last-man-standing and the scoreboard. Never set
+    // by the local sim - a local match fills every slot - and never sent on the
+    // wire: the client learns a slot is empty from the `active`/isConnected flag
+    // the state packet already carries.
+    //
+    // Distinct from a mid-match LEAVER's slot, which is also unclaimed and also
+    // not a bot, but DOES have a body: it keeps drifting, keeps its name and
+    // score, and stays killable while its owner might reconnect (see
+    // Match::HandleMidMatchLeavers).
+    bool isVacant = false;
+
     // Runs this room: may open OPTIONS and press START. Server-owned, like
     // isConnected and isBot - the client cannot derive it, because the host is
     // the room's CREATOR rather than whoever holds the lowest slot, and an
@@ -389,7 +406,11 @@ public:
         // modes via updatePositions -> updatePos: on the server for networked play
         // (authoritative; the flag/timer are synced to clients), on the client for
         // local play. Bots are excluded so a dead AI slot doesn't fly around.
-        if (!isAlive && !isBot && !isSpectating) {
+        // isVacant is excluded for the same reason isBot is: there is nobody in
+        // this slot to become a spectator. Without it an empty slot would drift
+        // into free-fly and updateFuel below would keep topping up a tank that
+        // belongs to no one.
+        if (!isAlive && !isBot && !isVacant && !isSpectating) {
             spectatingTimer -= dt;
             if (spectatingTimer < 0.0f) isSpectating = true;
         }

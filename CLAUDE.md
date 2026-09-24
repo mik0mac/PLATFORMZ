@@ -92,15 +92,24 @@ only `main.cpp` and `collisions.cpp` as translation units.
   the `localStorage` key, so a second store reuses the atomic replace and the
   caught-exception web path instead of copying them. Tests: `test/run.sh`.
 - `options.h` — everything that defines **what a match is**: the arenas
-  (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (the 15
-  player-selectable rules the OPTIONS modal drives), **the compile-time default
+  (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (17 rules,
+  the 15 with sliders being what the OPTIONS modal drives), **the compile-time default
   of every one of those rules**, their **legal ranges** (`OPT_RANGE_*` +
   `ClampOptions` — read by the OPTIONS sliders, by `profile::SanitizeOptions`,
   and asserted against every preset in `registry_test.cpp`, so a range and a
   clamp can no longer disagree), and `matchOptionPresets` — the named variants,
   ordered typical-gameplay-first because quick match walks that order to break
   ties between equally empty rooms. The rule defaults used to be scattered across
-  seven sections of `constants.h`. **Do not add repo `#include`s here**:
+  seven sections of `constants.h`.
+  Two of the 17 rules have **no slider** — they are authored by a preset rather
+  than dialed by a player, so they are absent from the OPTIONS modal while living
+  in `MatchOptions` like everything else: `maxBots` caps how many unclaimed roster
+  slots get bot-filled (the rest stay genuinely **empty** — no body, not
+  shootable, not counted for last-man-standing, and still joinable, so human
+  capacity is unchanged), and `minHumansToStart` is the head count an official
+  room's auto-start arms on. Both default to the old behaviour. LOCAL play
+  deliberately ignores `maxBots` and fills every slot — an empty slot exists so a
+  human can join it, and offline nobody can. **Do not add repo `#include`s here**:
   `elements.h` includes this file, so anything added lands in the lowest layer of
   the game; `constants.h` is the only one allowed, and the dependency never runs
   back the other way.
@@ -108,7 +117,8 @@ only `main.cpp` and `collisions.cpp` as translation units.
   (`GAMESPACE_NUMBER_OF_PLAYERS` sizes a `std::array` and a `static_assert`),
   audio ids, VFX, bot AI tuning, match lifecycle and network limits. Where a pair
   got split — `WALL_ELASTICITY_PLAYER` is a rule, `..._ASTEROID` is not — the one
-  that stayed carries a pointer comment.
+  that stayed carries a pointer comment. `PUBLIC_MIN_PLAYERS` is a third shape:
+  still here, but now only the **default** for `MatchOptions::minHumansToStart`.
 - `runboard.h` — what an arcade high-score board **is**, with no opinion about
   where it is stored: `RunRow`, the `'-'` bot-id convention, and the rules
   (`TrimRuns` caps each identity at 3 rows and all bots at 1 between them;
@@ -147,7 +157,35 @@ Four docs, and it is worth reading the right one before changing anything here:
   decisions that were *not* taken and why.
 
 `make -C server` builds it; `./server/test/run_all.sh` and `run_probes.sh` are the
-tests, and CI runs both on every push.
+tests, and CI runs both on every push. The two live runners (`run_probes.sh`,
+`ci_smoke.sh`) **build what they are about to test** - they used to only check the
+binary existed, which meant an uncompiled change was silently tested as the
+previous build.
+
+Connecting puts a client in the **directory, not a room**: it holds no slot until
+it picks one, `leave` returns it to that state, and a refused join leaves it
+there. `probe_unseated.py` is the probe for that whole lifecycle.
+
+The directory is ordered by **how close each room is to being a game** — joinable
+lobbies first, then fewest free spots, then the `options.h` preset ramp, then the
+code. It is a *live* key, which has two consequences worth knowing before touching
+it: paging past page 0 serves a per-connection **snapshot** (re-sorting between
+pages could show a room twice or skip it), and the client's browser never adopts
+a new ORDER on its own. A background walk refreshes each row **in place** every
+few seconds — so a `gameover` room stops claiming ENDING once it is a lobby again
+— while order and membership change only on REFRESH, because a list that reorders
+under a player is a list they misclick. A room that vanishes greys out where it
+sits (removing it would shift every row below); new ones are offered as a count
+beside the button. `probe_listorder.py` tests the ordering and the snapshot;
+`docs/matchmaking.md` has the full contract.
+
+**Paging is a wire detail, not a UI.** The one-datagram cap is why `matchlist` is
+paged; the client follows `next` to the end of the snapshot and shows one
+scrollable list, so there are no page buttons. The scroll lives in `screens.h`
+(`BeginScissorMode` to clip rows, `GetMouseWheelMove` + a draggable bar), and the
+JOIN hit-test is gated on the pointer being inside the panel — the scissor clips
+what is *drawn*, never what `UiButton` hit-tests, so without that gate a button
+scrolled out of view would still take a click.
 
 ## Collision system (collisions.cpp)
 - `RunCollisionChecks()` runs once per frame (after positions update, before

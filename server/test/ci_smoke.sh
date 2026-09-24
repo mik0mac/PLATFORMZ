@@ -22,9 +22,31 @@
 # It also exercises /status itself, which is the endpoint a deploy is verified
 # with - an endpoint nobody tests is an endpoint that quietly stops answering.
 set -uo pipefail
+
+# Everything that talks to the server reads this, so an override reaches the
+# status probe AND the load harness. They used to be separately hardcoded, which
+# meant PLATFORMZ_PORT moved the server and left loadtest dialling 9000 - it then
+# hung against whatever was there instead of failing.
+PZ_PORT="${PLATFORMZ_PORT:-9000}"
+export PLATFORMZ_PORT="$PZ_PORT"
 cd "$(dirname "$0")/../.."
 
 SERVER_BIN="${PLATFORMZ_SERVER_BIN:-gameserver}"
+
+# BUILD FIRST, always - and the harness too. Checking only that these existed is
+# exactly how this script once reported "sustained 0.0% of the expected broadcast
+# rate" after a STATE_BIN_VERSION bump: the server was new, `loadtest` was six
+# days old and still decoding the retired tag, and the failure named the symptom
+# rather than the cause. A test run against a binary you did not just compile is
+# not a test of your change.
+#
+# Both names are their own make target, so one line each. make is incremental, so
+# this is two no-op lines when nothing changed. PLATFORMZ_NO_BUILD=1 skips it,
+# for the case where the binary under test came from somewhere else.
+if [ -z "${PLATFORMZ_NO_BUILD:-}" ]; then
+  make -C server "$SERVER_BIN" || { echo "build failed: $SERVER_BIN"; exit 1; }
+  make -C server loadtest      || { echo "build failed: loadtest (needs nlohmann-json)"; exit 1; }
+fi
 [ -x "server/$SERVER_BIN" ] || { echo "build the server first: make -C server"; exit 1; }
 [ -x server/loadtest ] || { echo "build the harness first: make -C server loadtest"; exit 1; }
 
@@ -58,7 +80,7 @@ fi
 want_state=$((16#$want_state))
 want_welcome=$((16#$want_welcome))
 
-status=$(curl -fsS --max-time 5 "http://127.0.0.1:9000/status" 2>&1) || {
+status=$(curl -fsS --max-time 5 "http://127.0.0.1:$PZ_PORT/status" 2>&1) || {
   echo "GET /status failed: $status"; tail -20 "$LOG"; exit 1
 }
 echo "status: $status"
@@ -102,7 +124,7 @@ fi
 
 # --- The transports actually carrying clients -----------------------------
 echo
-if ./server/loadtest --mode ws-smoke; then
+if ./server/loadtest --port "$PZ_PORT" --mode ws-smoke; then
   echo "  ok   WebSocket transport"
 else
   echo "FAIL WebSocket smoke test"; fail=1
@@ -112,7 +134,7 @@ echo
 # Small on purpose: this is a "does the harness still work" gate, not a
 # measurement. Real numbers come from running it against the box with the server
 # on its own machine - see the header of server/loadtest.cpp.
-if ./server/loadtest --matches 2 --clients 2 --seconds 10; then
+if ./server/loadtest --port "$PZ_PORT" --matches 2 --clients 2 --seconds 10; then
   echo "  ok   UDP load harness drove two matches"
 else
   echo "FAIL load harness"; fail=1

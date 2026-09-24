@@ -302,6 +302,8 @@ inline nlohmann::json OptionsToJson(const MatchOptions& o) {
     return {
         {"map",         o.mapSize},
         {"players",     o.numPlayers},
+        {"maxbots",     o.maxBots},
+        {"minhumans",   o.minHumansToStart},
         {"botDiff",     o.botDifficulty},
         {"wallElast",   o.wallElasticity},
         {"platElast",   o.platformElasticity},
@@ -373,6 +375,8 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
         const nlohmann::json& o = *oi;
         str    (o, "map",          m.mapSize);
         integer(o, "players",      m.numPlayers);
+        integer(o, "maxbots",      m.maxBots);
+        integer(o, "minhumans",    m.minHumansToStart);
         flt    (o, "botDiff",      m.botDifficulty);
         flt    (o, "wallElast",    m.wallElasticity);
         flt    (o, "platElast",    m.platformElasticity);

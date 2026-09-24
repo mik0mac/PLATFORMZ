@@ -702,6 +702,75 @@ The LOBBY screen shows the code and a COPY INVITE action.
 
 ---
 
+### C6. No room until you choose one
+
+**The problem.** A connection has always had to be *somewhere*. Connect without
+naming a room and the server quietly seats you in a landing room you never
+picked — for most of this project's life a public CUSTOM room called PLATFORMZ,
+left over from when the server held exactly one match and there was nowhere else
+to be.
+
+That room was worse than redundant. Being custom, it had a host; being
+server-created, it had no creator to *be* the host, so the fallback handed the
+role to whoever held the lowest slot — in practice the first stranger to connect.
+They could retune every rule and press START in a public room everyone else also
+lands in, and when they left, control passed silently to the next person in line.
+That is precisely the problem A9 fixed for official rooms; the landing room was
+simply never brought along.
+
+Pointing the landing room at the first OFFICIAL room (done, alongside E5) fixes
+the accidental host — official rooms have no host and nobody can start them. But
+it does not fix the real thing: **you still arrive somewhere you did not choose**,
+and it is now a room that will start a match around you on its own schedule.
+
+**Scope.** Connecting puts you in the directory and nowhere else. You see the
+browser, you pick, and only then do you hold a slot. LEAVE returns you to the
+browser rather than to another room.
+
+**Most of this already exists.** `HandleUnseatedMessage` already serves a parked
+connection the whole directory (`list`/`join`/`create`/`quick`), and
+`ParkConn`/`g_unseated` already hold a live connection with no room — that path
+runs today whenever the server is full, and `probe_capacity` covers it. This is
+not new machinery; it is removing the forced seat and teaching the client that
+"connected" and "seated" are different things.
+
+Three things force a seat today, and the second is what makes it circular:
+
+1. `SeatOrPark` defaults an empty room code to `g_defaultCode`.
+2. The client re-sends `hello` every 0.5 s while it has no slot, and the unseated
+   handler's `hello` branch calls `SeatOrPark`. So a parked connection re-seats
+   itself half a second later, however carefully the server parked it.
+3. `leave` moves you to `g_defaultCode` instead of to nothing.
+
+**A refusal leaves you parked.** Asking for a room that is full or gone gets a
+`joinfail` and nothing else — no fallback room, no consolation seat. The browser
+is already the right place to be told, and a fallback would reintroduce exactly
+the "somewhere you did not choose" this entry removes.
+
+**One new message, JSON.** The client learns it is connected by receiving a
+*welcome*, which cannot exist without a seat. A parked connection needs an
+equivalent ack. JSON on both transports, like everything except the welcome and
+the per-tick state — so no binary tag and no `STATE_BIN_VERSION` bump.
+
+**The trap.** `UDP_CLIENT_TIMEOUT_LOBBY` is **3 seconds**, and the client's
+keepalive is gated on holding a slot (`main.cpp`). A parked UDP client survives
+today only because its own hello retry doubles as a heartbeat. Stop the retry
+without moving the keepalive gate and every parked UDP player is reaped three
+seconds after arriving — invisible over WebSocket, where TCP keeps the session up.
+
+**`myIndex < 0` is the client's whole difficulty.** It currently means both
+"still handshaking" and "connected, no room". Splitting those two is the change;
+the screen routing, the keepalive gate, and `shell.serverFull` — which stops
+being an error and becomes the normal resting state — all fall out of it.
+
+**Retires** `g_defaultMatch` / `g_defaultCode` entirely. Heartbeat and perf
+reporting read them for a tick source and need repointing first.
+
+**Files:** `server/server_main.cpp` (`SeatOrPark`, `HandleUnseatedMessage`,
+`leave`, boot), `wire.h`, `main.cpp`, `screens.h`, `server/test/probe.py`.
+
+---
+
 # Epic D — Identity
 
 ### D1. `profile.h` — persistent local profile — **DONE**
@@ -1540,6 +1609,110 @@ and, from E3's measurements, the capacity paragraph that says plainly that **CPU
 is not the constraint and ~6 live matches is what 2 TB/month pays for.** The
 key-vs-code distinction and the abuse-limit table landed earlier, with E2.
 
+### E5. Empty slots: `maxBots` and `minHumansToStart` — **DONE**
+
+Two new `MatchOptions` rules: `maxBots` caps how many unclaimed roster slots get
+bot-filled, and `minHumansToStart` is the head count an official room's auto-start
+arms on. Both default to the old behaviour, so a LOCAL or CUSTOM match is
+unchanged.
+
+**They have no OPTIONS slider, and that is the only thing unusual about them.**
+They are authored by a preset rather than dialed by a player. The first cut put
+them on `MatchPreset` instead, which kept them off the wire entirely — but it
+meant a preset was written two ways, `o.speedBoost = …` inside the tune lambda
+and a `WithMaxBots(…)` wrapper around it, and the second is exactly the kind of
+positional afterthought the `MakePreset` comment argues against. Being in
+`MatchOptions` costs a range, a clamp, a profile key and two wire keys; it buys
+one way to write a preset, and the round-trip that lets a host's START echo the
+room's own values back instead of resetting them.
+
+**LOCAL ignores `maxBots`** and fills every slot. An empty slot exists so a human
+can walk into it later; offline nobody ever can, so one there would just be a hole
+in the match. At the default the two are identical anyway.
+
+**How an empty slot is represented.** A server-owned `Player::isVacant`, always
+carried with `isAlive = false`. Rejected alternatives:
+
+- *Shrink the roster to `humans + bots`.* `registry.h`'s `joinable` test is
+  `players < rosterSize`, so a shrunk room advertises as FULL and stops being
+  joinable — the opposite of the intent. Growing it back mid-match would also
+  append a `Player` with no `placePlayersSpread` and change
+  `MaxAsteroidsForRoster` under a live match.
+- *Reuse `isSpectating`.* It is wire-synced, drives the client's greyscale ramp,
+  and `updateFuel` would keep topping up a tank belonging to nobody.
+- *Derive it* from `!claimed && !isBot && !isAlive`. The two guards that most need
+  it (`gamespace.h`'s death burst, `elements.h`'s spectator promotion) live in
+  shared headers with no access to `clients`.
+
+**Bots fill low, vacancies collect high.** Not arbitrary: humans are compacted
+into the lowest slots, and `setPlayerCount` pops from the tail, so a match start
+that shrinks the roster discards empty slots first and never disturbs the bot set.
+Bot names are indexed by slot rather than by bot ordinal, so nothing thrashes as
+humans come and go.
+
+**The one place this was load-bearing** rather than cosmetic: match-end counted
+`players.size() >= 2` to decide whether the single-survivor clause applied. That
+is roster size. With empty slots in the roster, a one-human `maxBots = 0` match
+satisfied "only one player left standing" on its first PLAYING tick and ended
+instantly. It now counts participants. `probe_maxbots.py` is the regression test.
+
+**One version bump, covering both.** The options block grew two `u8`s, which cost
+`STATE_BIN_VERSION` `0x09 → 0x0B` (the flags byte has two free bits; these need
+four each). Worth it for `minHumansToStart` alone: without it the lobby could no
+longer say *how many more* players it was waiting for, which is a real loss in
+exactly the rooms the feature exists for. `maxBots` rides along for free, and the
+client never needed it to *render* an empty slot — the per-player `active` flag
+already told it to skip one, and widening that to exclude vacant slots was a
+one-line change at each of the two builders.
+
+### E6. The browser's order — **DONE**
+
+The match list was sorted by room code. Arbitrary, but *constant*, which is why
+nothing downstream had to think about it. It is now sorted by how close each room
+is to being a game: band, then fewest free spots, then preset rank, then code.
+The full contract is in `docs/matchmaking.md`; what belongs here is why it is not
+one of the two schemes that came first.
+
+**Rejected: encode the order into the room code.** The original idea — mint
+official rooms with a numeric prefix so they sort above alphabetical custom codes
+— fails on three counts, and the third is the one that matters. The code alphabet
+deliberately excludes `0`, `1`, `O` and `I` so a code can be read aloud, so an
+index prefix starting at 0 reintroduces exactly the two characters that alphabet
+exists to avoid. It also would not separate the two kinds: the first eight
+alphabet characters *are* digits, so about a quarter of custom codes already
+begin with one. And codes are permanent (`retired_` never reuses one), so a
+positional prefix spends **identity** on **presentation** — any later reordering
+becomes unreachable without re-minting.
+
+**Rejected: a preset-ranked sort, official rooms first.** The cheap version of
+the same goal, and it dies on a structural fact rather than a detail: the boot
+loop's one-official-room-per-preset is a coincidence of today's code, not a law.
+A preset is a *template* and will eventually spawn many rooms, so grouping by
+preset means twenty CLASSIC rooms bury every other preset on page three — which
+is the burial the ordering was supposed to prevent.
+
+**Deferred, not rejected: the shelf.** "One curated set always at the top" is a
+real want and it is a *different mechanism* — a slate of N entries held apart from
+both the preset and the room, in a declared order. Three shapes were considered:
+a rank on the room (dead front row the moment that specific room fills), a rank
+on a slot with the room rotating through it, and a shelf that is not rooms at all
+— the top of the browser becoming *the ways to play*, with the room list below.
+The third dissolves the problem instead of solving it (static data cannot be
+buried, go stale, or fill up) and is the one to build if the shelf comes back. It
+waits because the fullness sort turned out to cover the need: at cold boot every
+room is empty, every room ties, and the preset ramp is the whole answer — so a
+restart-consistent order falls out for free.
+
+**What the live key cost.** Exactly one invariant, and it had to be bought back:
+sorting on occupancy means page 1 can be cut from a differently-sorted list than
+page 0, showing a room twice or skipping it. Hence the per-connection page-0
+snapshot, and hence the client's browser no longer polling — a two-second re-ask
+would reorder the list under a player reaching for a row. That failure mode is
+not hypothetical here: a "join does nothing until the second click" bug earlier
+in this epic was *misdiagnosed* as list re-ordering, and was only ruled out
+because `buildMatchList` sorted on a key that could not move. The next such bug
+would not have that alibi, so the snapshot is what keeps it available.
+
 ---
 
 # Epic F — Road to Steam (macOS + Windows), web maintained
@@ -1634,6 +1807,12 @@ Filed 2026-08-30 as [#71-#98](https://github.com/mik0mac/PLATFORMZ/issues?q=is%3
 | C3 | #83 | Client: split `LOBBY` off the title screen, add LEAVE | client | C1, A3 |
 | C4 | #84 | Client: QUICK MATCH and CREATE MATCH | client | C2, B1 |
 | C5 | #85 | Client: invite links (`?match=`) and join-by-code | client | C2 |
+| C6a | #149 | Protocol: an ack for a connection that holds no slot | protocol | B1 |
+| C6b | #150 | Server: stop seating a connection that asked for no room | server | C6a |
+| C6c | #151 | Client: tell "connected" apart from "seated" | client | C6a |
+| C6d | #152 | Client: connect lands in the match browser, not a room | client | C6c |
+| C6e | #153 | Server: retire the default landing room | server | C6b, C6d |
+| C6f | #154 | Testing: probe harness for a connection with no room | testing | C6b |
 | D1 | #86 | Client: persistent local profile (name, `clientId`, `token`, volume, options) | client | — |
 | D3 | #97 | Server-issued identity token (stateless HMAC; unblocks leaderboards later) | server, security | D1 |
 | D2 | #87 | Reconnect into your own slot (use the existing 15 s grace) | server, client | D1, D3, A3 |

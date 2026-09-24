@@ -478,6 +478,21 @@ int main(int argc, char** argv) {
     // --- Networking (networked mode only) ---
     NetClient net;
     int       myIndex   = -1;     // our player slot, from the server's welcome packet
+    // Has the server ANSWERED our handshake? Not the same question as "do we
+    // hold a slot", and conflating the two is what this flag exists to undo.
+    //
+    // `myIndex < 0` used to mean both "still handshaking" and "connected,
+    // holding no room". That was harmless only while arriving always put you in
+    // a room: the moment it stopped (C6b), every myIndex-based test below was
+    // asking the wrong question - the hello retry would never stop, the UDP
+    // auto-fallback would fire on a perfectly healthy connection, and the
+    // keepalive would never start, so the server would reap us after three
+    // seconds of silence.
+    //
+    // Set by EITHER answer: a welcome (we have a seat) or an `unseated` (we are
+    // through and hold nothing). Cleared only when the connection itself
+    // restarts, which is the one case where the handshake really must run again.
+    bool      netAcked  = false;
     bool      protoMismatch = false; // server is speaking a different build's binary protocol (see netbin.h tags)
     uint32_t  inputSeq  = 0;      // monotonically increasing input sequence number
     // Handshake/reconnect bookkeeping (networked): resend hello until welcomed, and
@@ -646,6 +661,12 @@ int main(int argc, char** argv) {
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
         ps[0].name = myDisplayName();
+        // LOCAL deliberately ignores maxBots and fills every slot. An empty slot
+        // exists so a human can walk into it later, and offline nobody ever can -
+        // one here would just be a hole in the match. At the default it is the
+        // same thing anyway (MAX_BOTS_DEFAULT is one short of the roster ceiling,
+        // so numPlayers - 1 bots is always within it); the two only diverge for a
+        // hand-edited profile.json.
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
@@ -789,16 +810,69 @@ int main(int argc, char** argv) {
     // right after restarting the client, because the join path re-sends the table
     // behind the welcome, and that lands on the menu drain.
     //
+    // Fold a background refresh into the list already on screen.
+    //
+    // WHAT THIS DELIBERATELY DOES NOT DO IS RE-ORDER. The browser sorts by how
+    // full a room is, so adopting a fresh snapshot wholesale moves rows - and a
+    // row that moves while somebody is reaching for it is a join to the room next
+    // to the one they aimed at. That is why the old two-second poll was removed
+    // when the ordering went live, and re-adding one naively would have put the
+    // bug back.
+    //
+    // So this updates what a row SAYS and never where it sits:
+    //
+    //   matched by code   the mutable facts - players, phase, joinable, map
+    //   no longer listed  marked `gone` and drawn dead, still in its place. It is
+    //                     NOT removed, because removing it would shift every row
+    //                     below it, which is the thing this exists to avoid
+    //   newly listed      counted only. Inserting would shift rows too, so the
+    //                     header offers them and REFRESH is what adopts them
+    //
+    // `listTotal` is the server's count for the snapshot we just walked, so it is
+    // adopted here rather than when the pages arrived - the header would
+    // otherwise advertise rooms that are not in the rows yet.
+    auto mergeMatchList = [&](int freshTotal) {
+        std::unordered_map<std::string, const MatchSummary*> fresh;
+        fresh.reserve(shell.listIncoming.size());
+        for (const MatchSummary& r : shell.listIncoming) fresh[r.code] = &r;
+
+        for (MatchSummary& row : shell.matches) {
+            auto it = fresh.find(row.code);
+            if (it == fresh.end()) { row.gone = true; continue; }
+            const MatchSummary& f = *it->second;
+            row.gone       = false;   // it came back - a reaped code is never reused
+            row.players    = f.players;
+            row.maxPlayers = f.maxPlayers;
+            row.phase      = f.phase;
+            row.joinable   = f.joinable;
+            row.map        = f.map;   // the host can change the arena from the lobby
+        }
+
+        std::unordered_set<std::string> showing;
+        showing.reserve(shell.matches.size());
+        for (const MatchSummary& row : shell.matches) showing.insert(row.code);
+        int added = 0;
+        for (const MatchSummary& r : shell.listIncoming)
+            if (!showing.count(r.code)) added++;
+
+        shell.listNewRooms = added;
+        shell.listTotal    = freshTotal;
+        shell.listIncoming.clear();
+        shell.listMerging  = false;
+    };
+
     // Returns true if it handled the message, so callers only deal with State.
     auto applyNonStateMessage = [&](ServerMessage& m) -> bool {
         if (m.type == ServerMessage::Type::Welcome) {
             myIndex = m.playerId;
+            netAcked = true;
             shell.serverFull = false;
             // A welcome arrives on connect, after a re-slot, and after a move.
             // Only a move WE asked for should change screens - hence joinPending
             // rather than "the code differs", which is also true on connect and
             // on the way back out of a room after LEAVE.
             if (shell.joinPending) { shell.joinPending = false; shell.roomChanged = true; }
+            shell.pendingMoveMsg.clear();   // answered
             shell.inMatchCode = m.matchCode;
             shell.inMatchKind = m.matchKind;
             // Now that we know our real slot, assert our name: send our display
@@ -807,6 +881,20 @@ int main(int argc, char** argv) {
             // (myIndex == -1) every client's default would have been "PLAYER 1".
             net.send(serializeName(myDisplayName()));
             TraceLog(LOG_INFO, "Joined as player slot %d", myIndex);
+            return true;
+        }
+        if (m.type == ServerMessage::Type::Unseated) {
+            // Through the door, holding nothing. This is a normal resting state
+            // now, not a failure and not a queue: you arrive here and pick a room.
+            //
+            // It also UNDOES a welcome, which is what makes it more than a log
+            // line - LEAVE lands here, and without dropping the slot we would go
+            // on believing we were in the room we just left.
+            const bool wasSeated = myIndex >= 0;
+            netAcked = true;
+            myIndex  = -1;
+            if (wasSeated) { shell.inMatchCode.clear(); shell.roomLost = true; }
+            TraceLog(LOG_INFO, "Connected, holding no room");
             return true;
         }
         if (m.type == ServerMessage::Type::Identity) {
@@ -843,28 +931,80 @@ int main(int argc, char** argv) {
             return true;
         }
         if (m.type == ServerMessage::Type::MatchList) {
-            shell.matches     = std::move(m.matches);
+            // ONE LIST, ASSEMBLED FROM PAGES. The reply is capped to a single
+            // datagram, which is a transport limit and not something the player
+            // should ever have to click through, so cursor 0 starts a list and
+            // every later page is appended to it.
+            //
+            // This is only coherent because the SERVER pages from a snapshot:
+            // pages cut from a list re-sorted between requests would concatenate
+            // into one that never existed at any single moment - the same room
+            // twice, another missing entirely.
+            // A BACKGROUND refresh goes to a staging buffer and is merged into the
+            // list already on screen once every page is in - see mergeMatchList.
+            // A refresh the player ASKED for replaces outright, because pressing
+            // REFRESH is exactly the moment re-ordering is wanted.
+            std::vector<MatchSummary>& into =
+                shell.listMerging ? shell.listIncoming : shell.matches;
+            if (m.listCursor <= 0) {
+                into = std::move(m.matches);
+                if (!shell.listMerging)
+                    shell.browseScrollPx = 0.0f;   // a new list starts at the top
+            } else {
+                into.insert(into.end(),
+                            std::make_move_iterator(m.matches.begin()),
+                            std::make_move_iterator(m.matches.end()));
+            }
             shell.listCursor  = m.listCursor;
             shell.listNext    = m.listNext;
-            shell.listTotal   = m.listTotal;
-            shell.browseScroll = 0;
             shell.awaitingList = false;
+            // The count is the SERVER's, and during a background walk it belongs
+            // to a snapshot we have not adopted yet - so hold it back until the
+            // merge, or the header would claim rooms the rows do not show.
+            if (!shell.listMerging) shell.listTotal = m.listTotal;
+
+            // Walk to the end of the snapshot. Bounded by the registry cap, so
+            // this is a handful of requests at worst - but it IS rate limited
+            // (a burst, then one a second), and an over-budget `list` is dropped
+            // in silence, so the ask is recorded and the BROWSE screen re-asks
+            // if nothing comes back. Without that a truncated list would look
+            // exactly like a server with fewer rooms on it.
+            shell.listFollow = m.listNext;
+            if (m.listNext >= 0) {
+                shell.listFollowAt  = GetTime();
+                shell.listFollowTry = 0;
+                // The REFRESH cooldown counts from the LAST page fetched, not the
+                // first, so it scales with the size of the list instead of the
+                // number of times the button was pressed. A refresh costs one
+                // request per page while the budget refills at one a second, so
+                // timing it from page 0 would let a two-page directory drain the
+                // bucket faster than it fills and start losing follow-up pages.
+                //
+                // A BACKGROUND walk does not touch it: the button must not grey
+                // itself out because of work the player did not ask for.
+                if (!shell.listMerging) shell.lastListAt = GetTime();
+                if (net.isOpen()) net.send(serializeList(m.listNext));
+            } else if (shell.listMerging) {
+                mergeMatchList(m.listTotal);       // the last page of a background walk
+            }
             return true;
         }
         if (m.type == ServerMessage::Type::JoinFail) {
             // The move we were waiting on is not happening; leave the flag set and
             // the NEXT welcome for any reason would fling us into a lobby.
             shell.joinPending = false;
+            shell.pendingMoveMsg.clear();   // answered, unhappily
             // Render a sentence, never the wire token - joinFailureText owns that
             // mapping so the client and the protocol can drift apart safely.
             shell.setBrowseStatus(joinFailureText(m.joinFail), GetTime());
             shell.awaitingList = false;
-            // Before we hold a slot, a refusal IS the connection status: we are
-            // connected and being told there is nowhere to sit. The browse status
-            // line above is only on screen in the browser, so drive the same flag
-            // the retired `full` message used to, and the lobby keeps saying
-            // "match in progress" instead of "connecting" forever. Cleared by the
-            // next welcome, which is what getting in looks like.
+            // "The room we asked for had no seat", not "we are connected with
+            // nowhere to be" - holding no room is ordinary now and says nothing
+            // about fullness. Still worth a flag of its own because a refusal is
+            // the one case where the player asked for something specific and did
+            // not get it, and the browse status line above is only on screen in
+            // the browser. Cleared by the next welcome, which is what getting in
+            // looks like.
             if (myIndex < 0 && (m.joinFail == JoinFailure::Full ||
                                 m.joinFail == JoinFailure::ServerFull))
                 shell.serverFull = true;
@@ -934,6 +1074,12 @@ int main(int argc, char** argv) {
                     // latch so a control we're actively dragging isn't stomped.
                     if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
                     if (!shell.sliderDiffActive)    onlineOpt.botDifficulty      = m.opt.botDifficulty;
+                    // No sliders for these two, so nothing to guard against: take
+                    // the server's value every tick. They still have to round-trip
+                    // - the host's next START sends the whole bundle back, and
+                    // dropping them here would silently reset the room's preset.
+                    onlineOpt.maxBots          = m.opt.maxBots;
+                    onlineOpt.minHumansToStart = m.opt.minHumansToStart;
                     if (!shell.sliderWElastActive)  onlineOpt.wallElasticity     = m.opt.wallElasticity;
                     if (!shell.sliderPElastActive)  onlineOpt.platformElasticity = m.opt.platformElasticity;
                     if (!shell.sliderBoostActive)   onlineOpt.speedBoost         = m.opt.speedBoost;
@@ -969,6 +1115,17 @@ int main(int argc, char** argv) {
         return phase;
     };
 
+    // Ask the server to put us in a room, remembering how so a lost answer can be
+    // asked again. `retryable` is false for a create, which is not idempotent -
+    // re-sending it would make a second room (see the recovery in the net block).
+    auto askToMove = [&](const std::string& msg, bool retryable) {
+        shell.joinPending      = true;
+        shell.pendingMoveMsg   = retryable ? msg : std::string();
+        shell.pendingMoveAt    = GetTime();
+        shell.pendingMoveTries = 0;
+        if (net.isOpen()) net.send(msg);
+    };
+
     // GAME_OVER/title -> TITLE. Local: wipe the world for a clean restart.
     // Networked: stay connected (back to the lobby) so START can restart; the
     // server owns the world and resyncs it. The NetClient dtor closes on exit.
@@ -990,8 +1147,29 @@ int main(int argc, char** argv) {
         // Networked: we are still IN the room whose match just ended, so go back
         // to its lobby. Dropping to the router would look like being kicked, and
         // the server would still be holding our slot.
+        //
+        // Unless we are NOT in it any more - a slot lost while the match was
+        // winding down leaves nothing to return to, and the lobby would render a
+        // roster we have no part in. The browser is where a roomless client
+        // belongs, so send them there to pick again.
         if (networked) shell.syncShadows(onlineOpt);
-        screen = networked ? GameScreen::LOBBY : GameScreen::TITLE;
+        const bool haveRoom = myIndex >= 0;
+        if (networked && !haveRoom) {
+            shell.roomLost = false;      // acted on
+            shell.browseStatus.clear();
+            shell.matches.clear();
+            shell.listFollow = -1;   // no half-walked list to finish
+            shell.listMerging = false;
+            shell.listIncoming.clear();
+            shell.listNewRooms = 0;
+            shell.lastAutoListAt = GetTime();
+            shell.awaitingList = true;
+            shell.lastListAt = GetTime();
+            if (net.isOpen()) net.send(serializeList(0));
+        }
+        screen = !networked      ? GameScreen::TITLE
+               : haveRoom        ? GameScreen::LOBBY
+                                 : GameScreen::BROWSE;
         // An offline match is over; the session is online again if it ever was.
         networked = sessionOnline;
     };
@@ -1170,19 +1348,23 @@ int main(int argc, char** argv) {
             // match we did not start, which is the bug this whole flag exists for.
             if (!networked) { net.poll(); lastStateTime = GetTime(); }
             // Auto-fallback (baked-in UDP default only): if the UDP handshake never
-            // completes (no welcome, myIndex still -1) within the timeout, the path
+            // completes (no answer of EITHER kind - see netAcked) within the timeout, the path
             // is likely blocking UDP - switch once to WebSocket at the same host and
             // restart the handshake. WsTransport then retries on its own thread.
-            if (autoFallback && udpTransport && myIndex < 0 && nowT - connectStartTime > 3.0) {
+            if (autoFallback && udpTransport && !netAcked && nowT - connectStartTime > 3.0) {
                 TraceLog(LOG_WARNING, "UDP handshake timed out; falling back to WebSocket: %s",
                          fallbackWsUrl.c_str());
                 net.connect(dialUrl(fallbackWsUrl)); // swaps UdpTransport -> WsTransport (old socket closed by its dtor)
                 udpTransport = false;       // stop UDP-only keepalive / silence-reset below
                 autoFallback = false;       // one-shot
                 connectStartTime = nowT;
+                netAcked = false;           // new socket, unanswered again
                 lastHelloTime = 0.0;        // send hello immediately on the new socket
             }
-            if (net.isOpen() && myIndex < 0 && nowT - lastHelloTime > 0.5) {
+            // Until the server answers, not until it seats us. Retrying past the
+            // answer is what made a parked connection impossible to hold: the
+            // server parks us and our own next hello asks to be seated again.
+            if (net.isOpen() && !netAcked && nowT - lastHelloTime > 0.5) {
                 // Only carry a name if the user actually set one (same gate as
                 // serializeName). Before welcome myIndex is -1, so myDisplayName()
                 // would send the slot-0 default "PLAYER 1" for EVERY client and
@@ -1203,12 +1385,52 @@ int main(int argc, char** argv) {
             // and the server's idle-reaper would free its slot mid-countdown. A
             // 1s heartbeat keeps the slot alive on every screen. UDP only - WS is
             // kept alive by TCP and is never reaped.
-            if (udpTransport && myIndex >= 0 && nowT - lastKeepaliveTime > 1.0) {
+            //
+            // Gated on being ANSWERED, not on holding a slot. A client sitting in
+            // the browser holds no slot and sends no input, and the reaper does
+            // not care why it is quiet: UDP_CLIENT_TIMEOUT_LOBBY is 3 seconds, so
+            // without this it is dropped almost immediately. It used to survive
+            // that only because the hello retry above doubled as a heartbeat -
+            // and stopping that retry is the other half of this change, so the
+            // two have to move together.
+            if (udpTransport && netAcked && nowT - lastKeepaliveTime > 1.0) {
                 net.send(serializeKeepalive());
                 lastKeepaliveTime = nowT;
             }
-            if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0)
-                myIndex = -1; // UDP only: treat as disconnected; resume the hello handshake
+            // Seated and hearing nothing: the connection is gone. Gated on
+            // holding a slot on purpose - a parked client is ENTITLED to silence,
+            // since state packets belong to a room and it is not in one.
+            // A move we asked for that nobody answered. This is the one gap the
+            // two recoveries below and above cannot cover between them: the hello
+            // retry stops once the server has answered us AT ALL (netAcked), and
+            // the silence-reset only runs while we already hold a slot. A welcome
+            // dropped on the way to a joining client falls exactly between, and
+            // leaves the server thinking we are in a room this client is not
+            // showing. Ask again, a few times, then say so rather than sitting
+            // there.
+            if (shell.joinPending && net.isOpen() && nowT - shell.pendingMoveAt > 1.5) {
+                const bool canRetry = !shell.pendingMoveMsg.empty();
+                // A create is not idempotent, so it recovers by NAME: the
+                // `created` reply already told us the code, and asking for that
+                // room is safe however many times we do it.
+                const bool canRejoin = !canRetry && !shell.createdCode.empty();
+                if ((canRetry || canRejoin) && shell.pendingMoveTries < 3) {
+                    ++shell.pendingMoveTries;
+                    shell.pendingMoveAt = nowT;
+                    net.send(canRetry ? shell.pendingMoveMsg
+                                      : serializeJoin(shell.createdCode, shell.createdCode));
+                    TraceLog(LOG_WARNING, "No answer to our join; asking again (%d/3)",
+                             shell.pendingMoveTries);
+                } else {
+                    shell.joinPending = false;
+                    shell.pendingMoveMsg.clear();
+                    shell.setBrowseStatus("NO ANSWER FROM THE SERVER - TRY AGAIN", nowT);
+                }
+            }
+            if (networked && udpTransport && myIndex >= 0 && lastStateTime > 0.0 && nowT - lastStateTime > 3.0) {
+                myIndex  = -1;      // UDP only: treat as disconnected...
+                netAcked = false;   // ...and let the hello handshake run again
+            }
         }
 
         // Web only: tell shell.html whether the mouse belongs to the UI, so its
@@ -1283,10 +1505,9 @@ int main(int argc, char** argv) {
             // to a connection the server has not finished setting up.
             if (sessionOnline && !inviteCode.empty() && net.isOpen() && myIndex >= 0) {
                 shell.setBrowseStatus("JOINING " + inviteCode + "...", GetTime());
-                shell.joinPending = true;
                 // The code doubles as the password for an invite-only room, which
                 // is what makes one string the whole invite.
-                net.send(serializeJoin(inviteCode, inviteCode));
+                askToMove(serializeJoin(inviteCode, inviteCode), /*retryable*/ true);
                 inviteCode.clear();
             }
             // A completed move lands us in the room's lobby. Only a move WE asked
@@ -1324,10 +1545,15 @@ int main(int argc, char** argv) {
                         // BROWSE is what turns that into a lobby.
                         shell.browseStatus.clear();
                         shell.matches.clear();
+                        shell.listFollow = -1;   // no half-walked list to finish
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
+                        shell.lastAutoListAt = GetTime();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
-                        shell.joinPending = true;
-                        if (net.isOpen()) { net.send(serializeQuick()); net.send(serializeList(0)); }
+                        askToMove(serializeQuick(), /*retryable*/ true);
+                        if (net.isOpen()) net.send(serializeList(0));
                         shell.setBrowseStatus("FINDING A MATCH...", GetTime());
                         screen = GameScreen::BROWSE;
                         break;
@@ -1335,6 +1561,11 @@ int main(int argc, char** argv) {
                         screen = GameScreen::BROWSE;
                         shell.browseStatus.clear();
                         shell.matches.clear();
+                        shell.listFollow = -1;   // no half-walked list to finish
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
+                        shell.lastAutoListAt = GetTime();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         if (net.isOpen()) net.send(serializeList(0));
@@ -1351,6 +1582,9 @@ int main(int argc, char** argv) {
                         // One modal, two option sets: hand it the values it is
                         // about to edit, or its sliders show the other mode's.
                         shell.syncShadows(onlineOpt);
+                        // A refusal from the browser is not about this screen; only what CREATE
+                        // gets back belongs here.
+                        shell.browseStatus.clear();
                         screen = GameScreen::CUSTOM;
                         break;
                     case TitleAction::LocalMatch:
@@ -1450,9 +1684,9 @@ int main(int argc, char** argv) {
                                         !shell.showOptions)) {
                     case CustomAction::Options: shell.showOptions = true; break;
                     case CustomAction::Create:
-                        shell.joinPending = true;
-                        net.send(serializeCreate(shell.customName, "DEFAULT",
-                                                 shell.customPrivate, ""));
+                        askToMove(serializeCreate(shell.customName, "DEFAULT",
+                                                  shell.customPrivate, ""),
+                                  /*retryable*/ false);   // would make a second room
                         break;
                     case CustomAction::Back: screen = GameScreen::TITLE; break;
                     case CustomAction::None: break;
@@ -1472,6 +1706,24 @@ int main(int argc, char** argv) {
             ServerMessage::Phase p = pumpNet();
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // This screen is "a room we are standing in", so the moment we are
+            // not standing in one it has nothing to draw. Back to the browser to
+            // pick again, rather than showing the roster of a room we left.
+            if (shell.roomLost || myIndex < 0) {
+                shell.roomLost = false;
+                shell.browseStatus.clear();
+                shell.matches.clear();
+                shell.listFollow = -1;   // no half-walked list to finish
+                shell.listMerging = false;
+                shell.listIncoming.clear();
+                shell.listNewRooms = 0;
+                shell.lastAutoListAt = GetTime();
+                shell.awaitingList = true;
+                shell.lastListAt = GetTime();
+                if (net.isOpen()) net.send(serializeList(0));
+                screen = GameScreen::BROWSE;
+                continue;
+            }
             shell.roomChanged = false;   // already here; nothing to act on
 
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
@@ -1518,12 +1770,21 @@ int main(int argc, char** argv) {
                         shell.scoresShowLocal = false;
                         break;
                     case LobbyAction::Leave:
-                        // The server puts us back in its default room and welcomes
-                        // us there; joinPending stays false so that welcome cannot
-                        // bounce us into the room we just walked out of.
+                        // The server parks us: no room, and an `unseated` saying
+                        // so. joinPending stays false, so nothing can bounce us
+                        // into the room we just walked out of. We route to the
+                        // browser ourselves rather than waiting to be told, so
+                        // the screen changes on the click instead of a round trip
+                        // later - the roomLost guard above is the backstop for
+                        // every other way a slot can go.
                         if (net.isOpen()) net.send(serializeLeave());
                         shell.browseStatus.clear();
                         shell.matches.clear();
+                        shell.listFollow = -1;   // no half-walked list to finish
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
+                        shell.lastAutoListAt = GetTime();
                         shell.awaitingList = true;
                         shell.lastListAt = GetTime();
                         if (net.isOpen()) net.send(serializeList(0));
@@ -1557,6 +1818,18 @@ int main(int argc, char** argv) {
             // browser while a match we belong to begins without us.
             if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
             if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // Already where a lost room would send us, so there is nothing to
+            // act on - the mirror of the LOBBY screen's roomChanged line.
+            //
+            // Leaving it set was a bug with a very specific shape: LEAVE routes
+            // itself to this screen on the click, so the `unseated` that follows
+            // always lands while we are ALREADY standing here, and nothing here
+            // consumed it. The flag then sat true until the next join reached the
+            // lobby, whose guard fired on it and bounced straight back - so the
+            // first join after any leave appeared to do nothing, and the second
+            // worked because the bounce had cleared the flag on the way out.
+            shell.roomLost = false;
+
             // The join/quick we asked for landed - go stand in the room.
             if (shell.roomChanged) {
                 shell.roomChanged = false;
@@ -1565,12 +1838,59 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Poll the list while the screen is open. Rooms fill and empty
-            // constantly, and a stale list offers joins that bounce.
             const double nowT = GetTime();
-            if (net.isOpen() && nowT - shell.lastListAt > 2.0) {
-                shell.lastListAt = nowT;
-                net.send(serializeList(shell.listCursor));
+
+            // THE BACKGROUND REFRESH, and why it is not the poll that used to be
+            // here. A room in GAMEOVER is a joinable lobby a minute later and a
+            // room with one seat left can lose it, so a list nobody re-reads
+            // starts lying and offers joins that bounce. But this screen sorts by
+            // how full a room is, so the old two-second poll would now RE-ORDER
+            // the list - and a row that moves while somebody is reaching for it is
+            // a join to the room next to the one they aimed at.
+            //
+            // So the walk happens, and the result is MERGED rather than adopted:
+            // rows update where they sit and nothing moves without a REFRESH. See
+            // mergeMatchList.
+            //
+            // THE INTERVAL SCALES WITH THE LIST, because a walk costs one request
+            // per page and the budget refills at one a second - so a fixed period
+            // that is comfortable at 12 rooms quietly saturates the limiter at 40,
+            // and the pages that get dropped are the ones this exists to fetch.
+            // Two seconds per page, never faster than six.
+            //
+            // Six is the number to keep honest if GAMEOVER_LOBBY_SECONDS changes:
+            // a room winding down returns to its lobby after that (10 s), and
+            // catching the moment it becomes joinable again is the case this whole
+            // mechanism was asked for.
+            const int    listPages   = (int)(shell.matches.size() + 7) / 8;
+            const double autoEverySec = std::max(6.0, listPages * 2.0);
+            if (net.isOpen() && shell.listFollow < 0 && !shell.matches.empty() &&
+                nowT - shell.lastAutoListAt > autoEverySec) {
+                shell.lastAutoListAt = nowT;
+                shell.listMerging    = true;
+                shell.listIncoming.clear();
+                net.send(serializeList(0));
+            }
+
+            // Finish assembling the list if a follow-up page never arrived. The
+            // `list` budget is a burst then one a second, and anything over it is
+            // dropped WITHOUT a reply, so a big directory can out-run the limiter
+            // mid-walk. Re-ask on the limiter's own cadence, and give up rather
+            // than loop: a short list the player can act on beats a spinner.
+            if (shell.listFollow >= 0 && net.isOpen() && nowT - shell.listFollowAt > 1.2) {
+                if (shell.listFollowTry >= 4) {
+                    shell.listFollow = -1;    // what we have is what they get
+                    // A background walk that could not finish is ABANDONED, never
+                    // half-merged: a merge from a partial snapshot would mark every
+                    // room on the pages that never arrived as `gone`, turning a
+                    // dropped datagram into a browser full of dead rows.
+                    shell.listMerging = false;
+                    shell.listIncoming.clear();
+                } else {
+                    shell.listFollowTry++;
+                    shell.listFollowAt = nowT;
+                    net.send(serializeList(shell.listFollow));
+                }
             }
 
             if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
@@ -1585,20 +1905,27 @@ int main(int argc, char** argv) {
                         screen = GameScreen::TITLE;
                         break;
                     case BrowseAction::Refresh:
+                        // Cursor 0, not the page we happen to be on: that is what
+                        // tells the server to take a fresh snapshot (every other
+                        // cursor pages through the last one), and a page number
+                        // means nothing against a list that has been reordered
+                        // anyway - page 2 of the old order is not page 2 of the new.
                         shell.awaitingList = true;
+                        shell.listCursor = 0;
+                        shell.listFollow = -1;   // abandon any half-walked list
+                        // This is the one action that adopts a new ORDER and a new
+                        // membership, so a background walk in flight is dropped
+                        // rather than merged on top of the list it is replacing.
+                        shell.listMerging = false;
+                        shell.listIncoming.clear();
+                        shell.listNewRooms = 0;
                         shell.lastListAt = nowT;
-                        net.send(serializeList(shell.listCursor));
-                        break;
-                    case BrowseAction::Page:
-                        shell.awaitingList = true;
-                        shell.listCursor = r.cursor;
-                        shell.lastListAt = nowT;
-                        net.send(serializeList(r.cursor));
+                        shell.lastAutoListAt = nowT;
+                        net.send(serializeList(0));
                         break;
                     case BrowseAction::Quick:
                         shell.setBrowseStatus("FINDING A MATCH...", nowT);
-                        shell.joinPending = true;
-                        net.send(serializeQuick());
+                        askToMove(serializeQuick(), /*retryable*/ true);
                         break;
                     case BrowseAction::Create:
                         // Naming and visibility belong on their own screen now, so
@@ -1610,12 +1937,14 @@ int main(int argc, char** argv) {
                         // values.
                         onlineOpt = profile::Get().lastCustomOptions;
                         shell.syncShadows(onlineOpt);
+                        // A refusal from the browser is not about this screen; only what CREATE
+                        // gets back belongs here.
+                        shell.browseStatus.clear();
                         screen = GameScreen::CUSTOM;
                         break;
                     case BrowseAction::Join:
                         shell.setBrowseStatus("JOINING " + r.code + "...", nowT);
-                        shell.joinPending = true;
-                        net.send(serializeJoin(r.code, r.joinCode));
+                        askToMove(serializeJoin(r.code, r.joinCode), /*retryable*/ true);
                         break;
                     case BrowseAction::None:
                         break;
@@ -2011,6 +2340,7 @@ int main(int argc, char** argv) {
                 // so both ends share netbin.h's tags).
                 const char* msg = protoMismatch ? "SERVER VERSION MISMATCH"
                                 : myIndex >= 0  ? "JOINING GAME..."
+                                : netAcked      ? "NO MATCH - CHOOSE ONE FROM THE BROWSER"
                                                 : "CONNECTING TO SERVER...";
                 DrawText(msg, 20, 20, 20, protoMismatch ? RED : RAYWHITE);
                 DrawText(serverUrl.c_str(), 20, 48, 14, DARKGRAY);

@@ -304,13 +304,35 @@ Everything below runs against a plain `./gameserver` and needs no client.
 
 ```bash
 ./server/test/run_all.sh        # standalone C++ tests. Seconds, no server needed
-./server/test/run_probes.sh     # eleven live protocol probes, each on a fresh server
+./server/test/run_probes.sh     # live protocol probes, each on a fresh server
 ./server/test/ci_smoke.sh       # protocol tags + WebSocket + a two-match load run
 ```
 
+The last two **build what they are about to test** — `run_probes.sh` the server,
+`ci_smoke.sh` the server and the load harness — so you cannot accidentally test
+the previous build. They used to only check the binary existed, and a suite that
+passes against a binary you did not just compile is worse than one that fails,
+because you believe it. `make` is incremental, so this costs nothing when nothing
+changed; `PLATFORMZ_NO_BUILD=1` skips it if the binary came from somewhere else.
+
 **The probes** (`server/test/probe*.py`) are headless protocol clients, one per
 question — the lobby and host rules, the directory, reconnecting into your own
-slot, join-in-progress, the handshake cookie, the capacity budgets. Each gets its
+slot, join-in-progress, the handshake cookie, the capacity budgets.
+`probe_unseated.py` covers holding no room: that connecting lands you nowhere and
+**keeps** you there across the hello retries a real client sends, that a refusal
+never hands you a different room, and that leave-then-rejoin round-trips. Two cover the
+sliderless roster rules: `probe_maxbots.py` (a `maxBots = 0` room fields no bots,
+leaves its other slots genuinely empty, and — the regression that matters — keeps
+playing instead of ending on its first tick) and `probe_minhumans.py` (an official
+room arms on its own preset's head count, not the compile-time one; it waits out a
+countdown that must *not* fire, so it takes ~30 s). `probe_listorder.py` covers
+the browser's order and the snapshot that holds it still: that a freshly booted
+server lists in preset order, that occupancy outranks the preset ramp and a match
+already in progress outranks neither, and — the one worth understanding before
+changing it — that paging past page 0 slices the SAME snapshot even when
+occupancy changed in between. That last check only bites if the churn crosses the
+page boundary; the first cut moved a room around inside page 0 and passed against
+a server that re-sorted on every request. Each gets its
 own fresh server, because several leave state behind that would fail the next one
 for the wrong reason. Run one on its own while poking at the server:
 
@@ -318,6 +340,34 @@ for the wrong reason. Run one on its own while poking at the server:
 cd server && ./gameserver &
 python3 server/test/probe_capacity.py
 ```
+
+**`populate.py` is not a probe** — it asserts nothing. It fills a running server
+with rooms so you can *look* at the match browser with more than five empty
+official rooms in it: scroll a long list, watch the ordering shift as rooms fill,
+check how it wraps on a narrow window.
+
+```bash
+cd server && PLATFORMZ_MAX_ROOMS_PER_ADDR=0 ./gameserver &
+python3 server/test/populate.py              # fill to capacity, varied
+python3 server/test/populate.py --rooms 4    # just a few
+python3 server/test/populate.py --boring     # no variety, just a long list to scroll
+python3 server/test/populate.py --seed 7     # the same layout every time
+```
+
+It gives rooms a spread of occupancy, presets, a few private ones and a couple of
+matches actually running, because a browser full of identical 1/8 lobbies
+demonstrates nothing about an ordering built on how full a room is. It prints the
+order you should expect to see, which is the whole point — if the screen
+disagrees with that summary, the screen is wrong.
+
+Two things it exists to stop you rediscovering. **A room with nobody in it is
+reaped after 30 s**, so the script has to keep its connections open: leave it
+running in its own terminal and Ctrl-C when you are done (that drops everything
+with a `goodbye`, so the rooms go at once instead of lingering). And **the
+per-address room budget is 3** — every client on one machine shares one address —
+so without `PLATFORMZ_MAX_ROOMS_PER_ADDR=0` you get three rooms and a mystery.
+The script recognises that refusal by name and tells you rather than quietly
+making three.
 
 **The load harness** (`server/loadtest.cpp`) is the only way to see many rooms
 under real load:

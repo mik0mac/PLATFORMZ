@@ -110,13 +110,46 @@ struct ShellState {
     std::vector<int> botNameOrder = ShuffledIndices(BOT_NAME_COUNT);
 
     // ---- Match browser (BROWSE) -----------------------------------------
-    std::vector<MatchSummary> matches;      // current page, newest reply wins
+    // EVERY room, not one page. The wire still pages - the reply is capped to one
+    // datagram - but that is a transport fact the player should never meet, so
+    // the client follows `next` to the end of the snapshot and concatenates. What
+    // makes that safe is the snapshot itself: pages cut from a list re-sorted
+    // between requests would assemble into one that never existed at any single
+    // moment, with rooms appearing twice and others missing.
+    std::vector<MatchSummary> matches;
     int   listCursor  = 0;                  // page we asked for
     int   listNext    = -1;                 // cursor for the next page, -1 = last
     int   listTotal   = 0;                  // rooms the server says exist
-    int   browseScroll = 0;                 // first visible row
     double lastListAt = 0.0;                // GetTime() of the last refresh
     bool   awaitingList = false;            // a request is outstanding
+    // Set while we are still walking the snapshot. Separate from awaitingList,
+    // which is about a single request: this is "the list on screen is not the
+    // whole list yet", and it is what the follow-up pages are driven from.
+    int    listFollow    = -1;              // cursor still to fetch, -1 = done
+    double listFollowAt  = 0.0;             // when we asked for it
+    int    listFollowTry = 0;               // re-asks spent on it
+
+    // ---- The background refresh -----------------------------------------
+    // A room in GAMEOVER becomes a joinable lobby a minute later, and a room with
+    // one seat left can lose it - so a list nobody refreshes starts lying, and
+    // offers joins that bounce. But re-sorting the list under a player reaching
+    // for a row is how they end up in the room NEXT to the one they aimed at,
+    // which is why the old two-second poll had to go when the order became live.
+    //
+    // So the two halves of a refresh are separated. CONTENTS - how full a room
+    // is, its phase, whether you can join it - are updated in place on a slow
+    // timer, and nothing moves. ORDER and MEMBERSHIP only change when the player
+    // presses REFRESH, which is the moment they are not mid-reach.
+    std::vector<MatchSummary> listIncoming; // pages of a background refresh, staged
+    bool   listMerging   = false;           // this walk is a background one
+    double lastAutoListAt = 0.0;            // when the last background walk began
+    int    listNewRooms  = 0;               // rooms the merge saw that we are not showing
+    // Scroll offset in PIXELS, not rows. Smooth scrolling needs no more code than
+    // row-stepping once the panel is clipped, and a part-row at the bottom edge
+    // is the thing that tells a player there is more below.
+    float  browseScrollPx = 0.0f;
+    bool   browseDragging = false;          // the scrollbar thumb is held
+    float  browseDragGrab = 0.0f;           // where in the thumb it was grabbed
     // The room we are actually in, straight from the welcome - not the code we
     // asked for. Quick match picks a room for us, and connecting with no room
     // named lands us in one we never chose, so only the server knows.
@@ -128,7 +161,28 @@ struct ShellState {
     // gets on connect - and from the one that comes back after LEAVE, which
     // would otherwise bounce us straight into the room we just left.
     bool joinPending = false;
+    // The move we asked for and have not been answered about, kept so it can be
+    // asked AGAIN if the answer goes missing.
+    //
+    // Over UDP a welcome is just a datagram. Losing one leaves the server
+    // believing we are seated while this client sits in the browser forever,
+    // because nothing re-asks: the hello retry that used to cover it runs only
+    // until the server first answers us (netAcked), and the silence-reset that
+    // would notice runs only while we HOLD a slot. A dropped welcome falls
+    // exactly between the two.
+    //
+    // Empty means "do not re-send this one" - a `create` would make a second
+    // room, so it recovers by joining the code the `created` reply gave us.
+    std::string pendingMoveMsg;
+    double      pendingMoveAt = 0.0;
+    int         pendingMoveTries = 0;
     bool roomChanged = false;   // a requested move completed; the screen acts on it
+    // The mirror of roomChanged: we HELD a room and now hold none, because the
+    // server said `unseated`. LEAVE is the ordinary way to get here and routes
+    // itself, so this is for every other way - and it exists because a screen
+    // that assumes a room (the lobby, the countdown) has to stop assuming one
+    // the moment that stops being true, rather than sitting on a stale roster.
+    bool roomLost = false;
 
     // ---- Custom match setup (CUSTOM) ------------------------------------
     std::string customName;                 // room name, defaulted from the player's
@@ -458,16 +512,39 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     return optChanged;
 }
 
+//MARK: Refusals
+// The server's answer to something the player asked for, on whatever screen they
+// asked from.
+//
+// This used to be drawn inline in DrawBrowse and NOWHERE ELSE, which made a
+// refusal invisible to anyone who was not standing in the browser. CREATE is on
+// the CUSTOM screen, so an over-budget create - "you already have three rooms" -
+// set this string and then rendered on a screen the player had left behind. From
+// where they stood the button simply did nothing, which is the worst possible
+// report of a refusal: no error, no log line, nothing to search for.
+//
+// Fades after a few seconds so a stale message is never mistaken for the current
+// state.
+inline void DrawRefusalLine(const ShellState& s, int screenW, int y, double now) {
+    if (s.browseStatus.empty()) return;
+    const double age = now - s.browseStatusAt;
+    if (age >= 6.0) return;
+    Color c = age > 4.0 ? Fade(RED, (float)((6.0 - age) / 2.0)) : RED;
+    UiTextCentered(s.browseStatus.c_str(), screenW, y, 18, c);
+}
+
 //MARK: BROWSE
 // What the player asked for this frame. The screen reports intent only - main()
 // owns the socket and decides what to send - so this stays free of networking.
-enum class BrowseAction { None, Back, Refresh, Quick, Create, Join, Page };
+// No Page action any more: the list is scrolled, not paged. Paging survives on
+// the WIRE (the reply is capped to one datagram) but the client walks it to the
+// end and hands the player one list, so there is no page for them to ask for.
+enum class BrowseAction { None, Back, Refresh, Quick, Create, Join };
 
 struct BrowseResult {
     BrowseAction action = BrowseAction::None;
     std::string  code;       // Join: which room, from a row or the code field
     std::string  joinCode;   // Join: a private room's password, if one was typed
-    int          cursor = 0; // Page: which page to ask for
 };
 
 // The match browser. Immediate mode like everything in ui.h: call it every frame,
@@ -484,18 +561,90 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     const float listX = 100.0f, listY = 150.0f;
     const float listW = (float)screenW - 200.0f, listH = 330.0f;
     const float rowH  = 40.0f;
-    const int   rowsVisible = (int)(listH / rowH);
+    const Rectangle listRect = {listX, listY, listW, listH};
 
     UiTextCentered("FIND A MATCH", screenW, 80, 40, RAYWHITE);
 
-    if (UiButton({listX + listW - 130.0f, listY - 46.0f, 130.0f, 34.0f}, "REFRESH", 18) && connected)
-        out.action = BrowseAction::Refresh;
+    // REFRESH is the ONLY thing that re-orders this list (the browser stopped
+    // polling when the order became live), so it carries more weight than it used
+    // to - and it is worth not letting a player spend it on nothing. The server
+    // allows a small burst and then one list a second, and drops anything over
+    // budget WITHOUT A REPLY, so a mashed button would sit on "LOOKING FOR
+    // MATCHES..." with no request left alive to answer it. Inert for a second
+    // after each ask, drawn the same way an unjoinable row's button is: visible
+    // and obviously not available, rather than missing.
+    const Rectangle refreshBtn = {listX + listW - 130.0f, listY - 46.0f, 130.0f, 34.0f};
+    const bool refreshReady = connected && (now - s.lastListAt) >= 1.0;
+    if (refreshReady) {
+        if (UiButton(refreshBtn, "REFRESH", 18)) out.action = BrowseAction::Refresh;
+    } else {
+        UiPanel(refreshBtn, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));
+        int tw = MeasureText("REFRESH", 18);
+        DrawText("REFRESH", (int)(refreshBtn.x + (refreshBtn.width - tw) / 2),
+                 (int)(refreshBtn.y + 8), 18, GRAY);
+    }
 
-    // Total count, so a capped page is not mistaken for the whole world.
+    // Total count, so a capped page is not mistaken for the whole world. While
+    // the follow-up pages are still arriving this and matches.size() disagree,
+    // which is exactly right: it says how many there ARE while the list fills in.
     DrawText(s.listTotal == 1 ? "1 MATCH" : TextFormat("%d MATCHES", s.listTotal),
              (int)listX, (int)listY - 40, 18, ui::OUTLINE);
+    // Rooms a background refresh found that are not in the rows. They are not
+    // inserted, because inserting shifts every row below the insertion point and
+    // the whole reason that refresh merges is to never move anything. So they are
+    // OFFERED instead, and REFRESH is what takes them.
+    if (s.listNewRooms > 0) {
+        const char* n = s.listNewRooms == 1 ? "1 NEW - REFRESH"
+                                            : TextFormat("%d NEW - REFRESH", s.listNewRooms);
+        DrawText(n, (int)listX + 130, (int)listY - 40, 18, ui::OUTLINE);
+    }
 
-    UiPanel({listX, listY, listW, listH});
+    UiPanel(listRect);
+
+    // SCROLLING. The content is every room the snapshot held, so it can be taller
+    // than the panel; `browseScrollPx` is how far down it has been pushed.
+    const float contentH = (float)s.matches.size() * rowH + 12.0f;
+    const float maxScroll = contentH > listH ? contentH - listH : 0.0f;
+    const bool  mouseOverList = CheckCollisionPointRec(GetMousePosition(), listRect);
+
+    // The wheel only steers while the pointer is over the list, so a scroll aimed
+    // at the page does not quietly move a row out from under the cursor.
+    if (mouseOverList) {
+        const float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f) s.browseScrollPx -= wheel * rowH;
+    }
+    // Arrow keys do the same, for a trackpad-less mouse and for anyone who never
+    // thinks to scroll a list that has no visible bar until it overflows.
+    if (IsKeyDown(KEY_DOWN)) s.browseScrollPx += rowH * 0.25f;
+    if (IsKeyDown(KEY_UP))   s.browseScrollPx -= rowH * 0.25f;
+
+    // The bar. Drawn only when there is something to scroll - a permanent bar on
+    // a list of five rooms is furniture that means nothing.
+    const Rectangle barTrack = {listX + listW - 9.0f, listY + 4.0f, 6.0f, listH - 8.0f};
+    if (maxScroll > 0.0f) {
+        const float thumbH = std::max(24.0f, barTrack.height * (listH / contentH));
+        const float travel = barTrack.height - thumbH;
+        const Rectangle thumb = {barTrack.x, barTrack.y + travel * (s.browseScrollPx / maxScroll),
+                                 barTrack.width, thumbH};
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            CheckCollisionPointRec(GetMousePosition(), thumb)) {
+            s.browseDragging = true;
+            s.browseDragGrab = GetMousePosition().y - thumb.y;
+        }
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) s.browseDragging = false;
+        if (s.browseDragging && travel > 0.0f)
+            s.browseScrollPx = ((GetMousePosition().y - s.browseDragGrab) - barTrack.y)
+                             / travel * maxScroll;
+
+        DrawRectangleRec(barTrack, Fade(ui::OUTLINE, 0.15f));
+        DrawRectangleRec(thumb, s.browseDragging ? ui::OUTLINE : Fade(ui::OUTLINE, 0.55f));
+    } else {
+        s.browseDragging = false;
+    }
+    // Clamp AFTER every input, and after the list has changed size under us - a
+    // refresh that returns fewer rooms must not leave us scrolled past the end.
+    if (s.browseScrollPx > maxScroll) s.browseScrollPx = maxScroll;
+    if (s.browseScrollPx < 0.0f)      s.browseScrollPx = 0.0f;
 
     if (!connected) {
         UiTextCentered("NOT CONNECTED", screenW, (int)(listY + listH / 2 - 10), 20, GRAY);
@@ -507,15 +656,29 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             UiTextCentered("CREATE ONE, OR TRY QUICK MATCH",
                            screenW, (int)(listY + listH / 2 + 8), 16, GRAY);
     } else {
-        for (int i = 0; i < rowsVisible; ++i) {
-            const int idx = s.browseScroll + i;
-            if (idx >= (int)s.matches.size()) break;
+        // Clip to the panel so a row scrolled half past the edge is cut rather
+        // than drawn over the frame - raylib's scissor is glScissor, so this
+        // works the same in the browser. The part-row it leaves at the bottom is
+        // the affordance: it is what says "there is more below".
+        BeginScissorMode((int)listRect.x, (int)listRect.y,
+                         (int)listRect.width, (int)listRect.height);
+        for (int idx = 0; idx < (int)s.matches.size(); ++idx) {
             const MatchSummary& m = s.matches[idx];
-            const float ry = listY + 6.0f + i * rowH;
+            const float ry = listY + 6.0f + idx * rowH - s.browseScrollPx;
+            // Nothing to draw and nothing to click, well off either edge.
+            if (ry + rowH < listRect.y || ry > listRect.y + listRect.height) continue;
 
-            DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18, RAYWHITE);
-            DrawText(TextFormat("%d/%d", m.players, m.maxPlayers),
-                     (int)listX + 300, (int)ry + 10, 18, ui::OUTLINE);
+            // A room a background refresh could no longer find: reaped, or gone
+            // private. Drawn DEAD IN PLACE rather than removed - taking the row
+            // out would shift every row below it, and not moving rows under the
+            // player is the whole point of merging instead of replacing. REFRESH
+            // is what clears it away, because that is when re-ordering is asked
+            // for.
+            const bool dead = m.gone;
+            DrawText(m.name.c_str(), (int)listX + 14, (int)ry + 10, 18,
+                     dead ? GRAY : RAYWHITE);
+            DrawText(dead ? "--" : TextFormat("%d/%d", m.players, m.maxPlayers),
+                     (int)listX + 300, (int)ry + 10, 18, dead ? GRAY : ui::OUTLINE);
             // The arena, which the browser could not show at all until the map
             // moved into MatchOptions - before that it did not exist until
             // somebody pressed a START button.
@@ -527,13 +690,20 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
             // can join and expect a game from without knowing anyone.
             const bool official = (m.kind == MatchKind::Official);
             DrawText(official ? "OFFICIAL" : "CUSTOM",
-                     (int)listX + 460, (int)ry + 10, 16, official ? ui::OUTLINE : GRAY);
-            DrawText(m.phase.c_str(),  (int)listX + 570, (int)ry + 10, 16,
-                     m.phase == "playing" ? ui::OUTLINE : GRAY);
+                     (int)listX + 460, (int)ry + 10, 16,
+                     (official && !dead) ? ui::OUTLINE : GRAY);
+            DrawText(dead ? "closed" : m.phase.c_str(), (int)listX + 570, (int)ry + 10, 16,
+                     (m.phase == "playing" && !dead) ? ui::OUTLINE : GRAY);
 
+            // Clear of the scrollbar at listW-9: this ends at listW-14.
             Rectangle joinBtn = {listX + listW - 100.0f, ry + 4.0f, 86.0f, 30.0f};
-            if (m.joinable) {
-                if (UiButton(joinBtn, "JOIN", 16) && connected) {
+            if (m.joinable && !dead) {
+                // `mouseOverList` is what keeps a half-scrolled row honest. The
+                // scissor clips what is DRAWN, not what UiButton hit-tests, so
+                // without it the invisible half of a button scrolled past the
+                // panel edge would still take a click - from a spot where the
+                // player can see a different row entirely.
+                if (UiButton(joinBtn, "JOIN", 16) && connected && mouseOverList) {
                     out.action = BrowseAction::Join;
                     out.code   = m.code;
                 }
@@ -547,7 +717,8 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                 // of GAMEOVER_LOBBY_SECONDS, after every single match. The row
                 // already carries the phase and the counts, so no server help is
                 // needed to tell the two apart.
-                const char* why = (m.phase == "gameover") ? "ENDING"
+                const char* why = dead ? "GONE"
+                                : (m.phase == "gameover") ? "ENDING"
                                 : (m.players >= m.maxPlayers) ? "FULL"
                                 : "CLOSED";   // shouldn't happen; better than lying
                 UiPanel(joinBtn, Fade(ui::OUTLINE, 0.3f), Fade(ui::FILL, 0.4f));
@@ -556,21 +727,15 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
                          (int)(joinBtn.y + 7), 16, GRAY);
             }
         }
+        EndScissorMode();
     }
 
-    // Paging appears only when there is more than one page to see.
-    if (s.listNext >= 0 || s.listCursor > 0) {
-        if (s.listCursor > 0 &&
-            UiButton({listX, listY + listH + 8.0f, 90.0f, 30.0f}, "FIRST", 16) && connected) {
-            out.action = BrowseAction::Page;
-            out.cursor = 0;   // the wire protocol pages forward only
-        }
-        if (s.listNext >= 0 &&
-            UiButton({listX + 100.0f, listY + listH + 8.0f, 90.0f, 30.0f}, "MORE", 16) && connected) {
-            out.action = BrowseAction::Page;
-            out.cursor = s.listNext;
-        }
-    }
+    // Still filling in. Said under the panel rather than over the rows, because
+    // the rows that HAVE arrived are already usable - this is "more on the way",
+    // not "wait".
+    if (s.listFollow >= 0 && connected)
+        DrawText(TextFormat("LOADING %d OF %d...", (int)s.matches.size(), s.listTotal),
+                 (int)listX, (int)(listY + listH + 10), 16, GRAY);
 
     const float by = listY + listH + 56.0f;
     if (UiButton({listX, by, 170.0f, 44.0f}, "QUICK MATCH") && connected)
@@ -590,15 +755,7 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     if (UiButton({listX + listW - 110.0f, by, 110.0f, 44.0f}, "BACK"))
         out.action = BrowseAction::Back;
 
-    // Refusals and confirmations, fading after a few seconds so a stale message
-    // is never mistaken for the current state.
-    if (!s.browseStatus.empty()) {
-        const double age = now - s.browseStatusAt;
-        if (age < 6.0) {
-            Color c = age > 4.0 ? Fade(RED, (float)((6.0 - age) / 2.0)) : RED;
-            UiTextCentered(s.browseStatus.c_str(), screenW, (int)by + 60, 18, c);
-        }
-    }
+    DrawRefusalLine(s, screenW, (int)by + 60, now);
     return out;
 }
 
@@ -685,11 +842,17 @@ inline float DrawRosterPanel(ShellState& s, const std::vector<Player>& players,
     if (networked) {
         if (previewCount == 0)
             DrawText("Waiting for players...", (int)box.x + 10, (int)(box.y + headerH), 18, GRAY);
-        // Slots 0..previewCount-1 are all occupied (human or bot), so they draw as
-        // contiguous rows.
+        // Slots 0..previewCount-1 are contiguous rows, but they are no longer all
+        // occupied: a room whose preset caps maxBots leaves the slots past the cap
+        // genuinely empty. Those arrive neither connected nor bot-driven, and are
+        // drawn as OPEN - they are real, joinable seats, not missing rows.
         for (int i = 0; i < previewCount; ++i) {
             int  ry  = (int)(box.y + headerH + i * rowH);
             bool you = (i == myIndex);
+            if (!you && !players[i].isConnected && !players[i].isBot) {
+                DrawText(TextFormat("%d. -- OPEN --", i + 1), (int)box.x + 10, ry, 18, GRAY);
+                continue;
+            }
             // Our row shows the live-typed name; other rows show the server-synced
             // name, falling back to a slot label until they have set one.
             std::string shown = you ? myName
@@ -891,6 +1054,11 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
     if (uiEnabled && UiButton({350, 588, 300, 44}, "BACK", 18))
         action = CustomAction::Back;
 
+    // CREATE is on THIS screen, so its refusal has to be on this screen too. The
+    // per-address room budget is the one that actually turns up in practice, and
+    // without this the button looked broken rather than refused.
+    DrawRefusalLine(s, screenWidth, 646, GetTime());
+
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
     return action;
 }
@@ -955,7 +1123,10 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
         // to starting and nobody in it could tell.
         int humans = 0;
         for (const Player& p : players) if (p.isConnected && !p.isBot) humans++;
-        const int needed = PUBLIC_MIN_PLAYERS - humans;
+        // The room's own threshold, not the compile-time one: a preset may ask
+        // for more (opt.minHumansToStart), and a hard-coded 2 here would leave
+        // such a room counting down to nothing.
+        const int needed = opt.minHumansToStart - humans;
         if (autoStartIn > 0.0f) {
             UiTextCentered(TextFormat("MATCH STARTING IN %d...", (int)ceilf(autoStartIn)),
                            screenWidth, (int)startY + 14, 26, RAYWHITE);
