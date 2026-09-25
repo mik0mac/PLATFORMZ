@@ -445,6 +445,17 @@ static void ForgetConn(uint64_t connId);
 // gives those slots up anyway when nothing else is free: refusing a player
 // entry to protect a leaver who may never return is the worse trade, and the
 // leaver still gets a fresh slot if they come back.
+// See match.h. Idempotent, so the per-tick caller costs a compare when nothing
+// has changed.
+void Match::SizeLobbyRoster(int floorSlots) {
+    int want = pendingPlayers.load();
+    if (want < floorSlots) want = floorSlots;
+    if (want < 1) want = 1;
+    if (want > GAMESPACE_NUMBER_OF_PLAYERS) want = GAMESPACE_NUMBER_OF_PLAYERS;
+    if ((int)gameSpace.getPlayers().size() != want) gameSpace.setPlayerCount(want);
+    rosterSize.store(want);   // the directory's joinable test and its x/y read this
+}
+
 int Match::ClaimFreeSlot() {
     auto& players = gameSpace.getPlayers();
     SlotMask claimed = 0;
@@ -2375,7 +2386,9 @@ static std::string buildMatchList(uint64_t connId, int cursor) {
 static void PrimeLobby(Match& m) {
     std::lock_guard<std::mutex> lock(m.gameMutex);
     m.gameSpace.spawnPlayers();
-    m.rosterSize.store((int)m.gameSpace.getPlayers().size());
+    // Down to the size this room's preset asks for, before anything can list it
+    // or join it. Nobody is seated yet, so there is no floor to respect.
+    m.SizeLobbyRoster(/*floorSlots*/ 0);
     m.rebuildWelcomeStatic();
 }
 
@@ -3265,6 +3278,15 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN || ph == Phase::GAMEOVER);
             std::lock_guard<std::mutex> gc(clientMutex);
             SlotMask claimed = gatherClaimedSlots();
+            // A waiting room is the size its rules say. Here rather than in the
+            // `options` handler because that runs on a network thread holding
+            // neither lock, and here rather than once at creation because the
+            // host's size slider is live - and because a room coming back from
+            // GAMEOVER respawns a full eight slots on its way to LOBBY.
+            // BEFORE refreshBotSlots, which fills whatever roster it is handed.
+            // LOBBY only: from COUNTDOWN on, the roster is what the match is
+            // being built around.
+            if (ph == Phase::LOBBY) SizeLobbyRoster(SlotsNeeded(claimed));
             refreshBotSlots(claimed, allowBotify);
             HandleMidMatchLeavers(claimed, allowBotify, TICK_DT);
         }

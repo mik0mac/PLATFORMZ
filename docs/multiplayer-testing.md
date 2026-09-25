@@ -325,7 +325,13 @@ sliderless roster rules: `probe_maxbots.py` (a `maxBots = 0` room fields no bots
 leaves its other slots genuinely empty, and — the regression that matters — keeps
 playing instead of ending on its first tick) and `probe_minhumans.py` (an official
 room arms on its own preset's head count, not the compile-time one; it waits out a
-countdown that must *not* fire, so it takes ~30 s). `probe_listorder.py` covers
+countdown that must *not* fire, so it takes ~30 s). `probe_roomcap.py` covers the
+third: that `numPlayers` is the room's CAPACITY and not just the size its match
+starts at — a four-player room seats four humans, refuses the fifth, lists itself
+as 4/4, and a host shrinking it never evicts anyone already sitting in it. It
+exists because the lobby used to ignore the rule entirely: every waiting room had
+eight slots whatever its preset said, so a MAYHEM room took seven humans and
+advertised 7/8. `probe_listorder.py` covers
 the browser's order and the snapshot that holds it still: that a freshly booted
 server lists in preset order, that occupancy outranks the preset ramp and a match
 already in progress outranks neither, and — the one worth understanding before

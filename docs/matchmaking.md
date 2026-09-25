@@ -53,6 +53,14 @@ already receives, not from `maxBots` — but both rules ride the options block l
 every other, so the lobby can say how many more players a room is waiting for and
 a host's START echoes the room's own values back rather than resetting them.
 
+`numPlayers` is the room's **capacity**, not merely the size its match starts at.
+A room's roster is sized to it the moment the room is created, so a four-player
+preset lists itself as `x/4`, refuses the fifth human, and says FULL — the
+denominator in the browser is the room's own cap and never a fixed 8. In a custom
+room the host's size slider resizes the roster live, but **never below the people
+already seated**: the same clamp match start has always applied, so raising the
+cap is free and lowering it only takes effect as the room empties.
+
 **Kind and visibility are different questions,** and conflating them was a real
 bug (#107). *Kind* says who is in charge: an **official** room has its options
 locked and starts itself once its preset's `minHumansToStart` (default

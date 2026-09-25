@@ -134,6 +134,14 @@ inline bool SlotSet(SlotMask m, int slot) {
 inline void SlotAdd(SlotMask& m, int slot) {
     if (slot >= 0 && slot < 8) m |= (SlotMask)(1u << slot);
 }
+// One past the highest occupied slot - the smallest roster that still holds
+// everyone in this mask. 0 for an empty mask. What keeps a lobby resize from
+// popping a slot somebody is sitting in.
+inline int SlotsNeeded(SlotMask m) {
+    int n = 0;
+    for (int i = 0; i < 8; ++i) if (SlotSet(m, i)) n = i + 1;
+    return n;
+}
 
 //MARK: Match phase
 // The world doesn't exist until a client starts a match; after one ends, any
@@ -368,6 +376,21 @@ struct Match {
     bool              gameOverSimIdle = false; // logged the sim-stop once for this episode
 
     // ---- Roster helpers -------------------------------------------------
+    // LOBBY only: make the roster the size this room's RULES say it is.
+    //
+    // numPlayers is documented as the room's capacity ("roster size: humans +
+    // bots + empty slots") and is what the browser advertises as the denominator
+    // - but nothing applied it until a match STARTED, so every waiting room had
+    // eight slots whatever its preset said. A four-player MAYHEM room seated
+    // seven humans and listed itself as 7/8.
+    //
+    // `floorSlots` is the smallest roster that still holds everyone already
+    // seated (SlotsNeeded of the claimed mask). The cap never evicts: a host who
+    // drags the size slider below the people already in the room shrinks it only
+    // as far as they allow, exactly as the match-start clamp has always done.
+    // Caller MUST hold gameMutex, and must have gathered `floorSlots` under
+    // clientMutex.
+    void SizeLobbyRoster(int floorSlots);
     int  ClaimFreeSlot();
     void ReapIdleUdpClients();
     std::vector<uint64_t> CompactConnectedSlots();
