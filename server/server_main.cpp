@@ -3429,7 +3429,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         }
 
         //MARK: Scoreboard credit
-        // One-shot on the PLAYING -> GAMEOVER edge. Detected here rather than at
+        // One-shot on the ENTRY-into-GAMEOVER edge. Detected here rather than at
         // either site that sets GAMEOVER, because those two hold different locks:
         // the host's endmatch handler runs on a session strand with no gameMutex,
         // while last-player-standing (just above) runs here holding it. Watching
@@ -3440,7 +3440,17 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         // every player's score, so the credit has to happen before the next one.
         {
             Phase nowPhase = gamePhase.load();
-            if (prevPhase == Phase::PLAYING && nowPhase == Phase::GAMEOVER) {
+            // "We were not in GAMEOVER and now we are", NOT "we were PLAYING".
+            // A match can reach GAMEOVER on the very first tick it is live - the
+            // countdown expires and the end condition is already true, because
+            // everyone who was in the room walked out during the count. prevPhase
+            // is then COUNTDOWN, not PLAYING, so the old test missed the edge
+            // entirely: the wind-down clock below was never stamped, so
+            // gameOverStamped stayed false, so the room never returned to its
+            // lobby and sat in GAMEOVER forever (and its scores were never
+            // credited). Asking about the phase we are ENTERING cannot miss a
+            // transition however few ticks PLAYING lasted.
+            if (prevPhase != Phase::GAMEOVER && nowPhase == Phase::GAMEOVER) {
                 // Same edge the credit uses, so the wind-down clock below has one
                 // origin however the match ended (host request or last player).
                 gameOverAt      = now;

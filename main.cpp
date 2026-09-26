@@ -1133,6 +1133,26 @@ int main(int argc, char** argv) {
         if (net.isOpen()) net.send(msg);
     };
 
+    // Go stand in the match browser, holding no room: clear whatever the last
+    // room left on the shell, ask for a fresh list, and switch screens. Written
+    // out four times before this existed (LEAVE, the lobby's lost-seat guard,
+    // returnToTitle with nothing to return to, and the countdown's own guard),
+    // which is three chances for one of them to forget a field.
+    auto openBrowser = [&]() {
+        shell.roomLost = false;      // acted on
+        shell.browseStatus.clear();
+        shell.matches.clear();
+        shell.listFollow = -1;   // no half-walked list to finish
+        shell.listMerging = false;
+        shell.listIncoming.clear();
+        shell.listNewRooms = 0;
+        shell.lastAutoListAt = GetTime();
+        shell.awaitingList = true;
+        shell.lastListAt = GetTime();
+        if (net.isOpen()) net.send(serializeList(0));
+        screen = GameScreen::BROWSE;
+    };
+
     // GAME_OVER/title -> TITLE. Local: wipe the world for a clean restart.
     // Networked: stay connected (back to the lobby) so START can restart; the
     // server owns the world and resyncs it. The NetClient dtor closes on exit.
@@ -1161,19 +1181,7 @@ int main(int argc, char** argv) {
         // belongs, so send them there to pick again.
         if (networked) shell.syncShadows(onlineOpt);
         const bool haveRoom = myIndex >= 0;
-        if (networked && !haveRoom) {
-            shell.roomLost = false;      // acted on
-            shell.browseStatus.clear();
-            shell.matches.clear();
-            shell.listFollow = -1;   // no half-walked list to finish
-            shell.listMerging = false;
-            shell.listIncoming.clear();
-            shell.listNewRooms = 0;
-            shell.lastAutoListAt = GetTime();
-            shell.awaitingList = true;
-            shell.lastListAt = GetTime();
-            if (net.isOpen()) net.send(serializeList(0));
-        }
+        if (networked && !haveRoom) openBrowser();
         screen = !networked      ? GameScreen::TITLE
                : haveRoom        ? GameScreen::LOBBY
                                  : GameScreen::BROWSE;
@@ -1711,26 +1719,15 @@ int main(int argc, char** argv) {
         // the server's per-slot flag, and never decides either for itself.
         if (screen == GameScreen::LOBBY) {
             ServerMessage::Phase p = pumpNet();
-            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
-            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             // This screen is "a room we are standing in", so the moment we are
             // not standing in one it has nothing to draw. Back to the browser to
             // pick again, rather than showing the roster of a room we left.
-            if (shell.roomLost || myIndex < 0) {
-                shell.roomLost = false;
-                shell.browseStatus.clear();
-                shell.matches.clear();
-                shell.listFollow = -1;   // no half-walked list to finish
-                shell.listMerging = false;
-                shell.listIncoming.clear();
-                shell.listNewRooms = 0;
-                shell.lastAutoListAt = GetTime();
-                shell.awaitingList = true;
-                shell.lastListAt = GetTime();
-                if (net.isOpen()) net.send(serializeList(0));
-                screen = GameScreen::BROWSE;
-                continue;
-            }
+            // BEFORE the follow below, because the same pump can hand us both a
+            // room's `countdown` and the `unseated` that says we are no longer in
+            // it - and in that order, losing the seat is the newer news.
+            if (shell.roomLost || myIndex < 0) { openBrowser(); continue; }
+            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             shell.roomChanged = false;   // already here; nothing to act on
 
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
@@ -1775,25 +1772,29 @@ int main(int argc, char** argv) {
                     case LobbyAction::Options:     shell.showOptions  = true; break;
                     case LobbyAction::Controls:    shell.showControls = true; break;
                     case LobbyAction::Leave:
-                        // The server parks us: no room, and an `unseated` saying
-                        // so. joinPending stays false, so nothing can bounce us
-                        // into the room we just walked out of. We route to the
-                        // browser ourselves rather than waiting to be told, so
-                        // the screen changes on the click instead of a round trip
-                        // later - the roomLost guard above is the backstop for
-                        // every other way a slot can go.
+                        // The server parks us: no room, and an `unseated`
+                        // saying so. joinPending stays false, so nothing can
+                        // bounce us into the room we just walked out of, and the
+                        // roomLost guard above is the backstop for every other
+                        // way a slot can go.
                         if (net.isOpen()) net.send(serializeLeave());
-                        shell.browseStatus.clear();
-                        shell.matches.clear();
-                        shell.listFollow = -1;   // no half-walked list to finish
-                        shell.listMerging = false;
-                        shell.listIncoming.clear();
-                        shell.listNewRooms = 0;
-                        shell.lastAutoListAt = GetTime();
-                        shell.awaitingList = true;
-                        shell.lastListAt = GetTime();
-                        if (net.isOpen()) net.send(serializeList(0));
-                        screen = GameScreen::BROWSE;
+                        // Drop the seat HERE, not when the `unseated` answer
+                        // gets back. We already route ourselves to the browser
+                        // on the click, so between the click and that answer we
+                        // were a client that believed it still held a room -
+                        // and the state packets the room had already sent kept
+                        // arriving for those few frames. The browser follows a
+                        // `countdown` into the match (a room can start under
+                        // you), so one of those stale packets would throw us
+                        // onto the countdown screen for a room we had just
+                        // walked out of, where no further packet was ever
+                        // coming. Forgetting the room first is what makes the
+                        // seat guards below able to tell the two apart.
+                        myIndex = -1;
+                        shell.inMatchCode.clear();
+                        shell.inMatchName.clear();
+                        shell.inMatchPreset.clear();
+                        openBrowser();
                         break;
                     case LobbyAction::None: break;
                 }
@@ -1816,11 +1817,19 @@ int main(int argc, char** argv) {
         // turns the screen's reported intent into wire messages.
         if (screen == GameScreen::BROWSE) {
             ServerMessage::Phase p = pumpNet();
-            // The server can start a match under us - somebody else's room filling
-            // up, or the one we already sit in. Follow it rather than sitting in a
-            // browser while a match we belong to begins without us.
-            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
-            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // The server can start a match under us - the room we already sit in
+            // while browsing. Follow it rather than sitting in a browser while a
+            // match we belong to begins without us.
+            //
+            // ONLY while we sit in one. State packets belong to a room, so the
+            // only ones that can reach a seatless client are the last few from a
+            // room it has just left - and following those means following a
+            // match we are not in, onto a screen that will never hear from the
+            // server again.
+            if (myIndex >= 0) {
+                if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+                if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            }
             // Already where a lost room would send us, so there is nothing to
             // act on - the mirror of the LOBBY screen's roomChanged line.
             //
@@ -1960,6 +1969,21 @@ int main(int argc, char** argv) {
             float remaining;
             if (networked) {
                 ServerMessage::Phase p = pumpNet();
+                // The seat guard the other networked screens have, and the
+                // screen that most needs one: everything here is driven by the
+                // next state packet, and a client holding no room is never sent
+                // another one. Without this, landing here seatless - by leaving
+                // a room at the instant its countdown began - left the count
+                // frozen on its first number with no key, button or timeout
+                // that could get out of it.
+                //
+                // roomLost ONLY, deliberately - not `myIndex < 0` as the lobby
+                // tests. The UDP silence-reset clears myIndex for three seconds
+                // of quiet and lets the hello handshake put it back, which is an
+                // ordinary blip mid-count and must not cost anyone their place
+                // in the match. roomLost is the server saying we hold nothing,
+                // which no amount of packet loss can fake.
+                if (shell.roomLost) { openBrowser(); continue; }
                 if (p == ServerMessage::Phase::Playing) { enterNetworkedMatch(); continue; }
                 // Match ended/canceled before it began -> back to the lobby.
                 if (p == ServerMessage::Phase::Lobby || p == ServerMessage::Phase::GameOver) { returnToTitle(); continue; }

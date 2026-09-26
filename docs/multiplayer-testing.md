@@ -338,7 +338,15 @@ already in progress outranks neither, and — the one worth understanding before
 changing it — that paging past page 0 slices the SAME snapshot even when
 occupancy changed in between. That last check only bites if the churn crosses the
 page boundary; the first cut moved a room around inside page 0 and passed against
-a server that re-sorted on every request. Each gets its
+a server that re-sorted on every request. `probe_leaverace.py` covers a match
+that begins and ends inside a single tick: its last player leaves *during* the
+countdown, so the count expires onto an empty room and the end condition is
+already true. That is the only way to enter GAMEOVER from anywhere but PLAYING,
+and the wind-down clock used to be stamped on the PLAYING edge alone — so the
+room never came back and the directory advertised it as ENDING for the life of
+the process. The probe watches the room through the directory rather than a
+state packet, because once it is empty there is nobody left in it to be sent one.
+It waits out a 5 s countdown and a 10 s wind-down, so it takes ~20 s. Each gets its
 own fresh server, because several leave state behind that would fail the next one
 for the wrong reason. Run one on its own while poking at the server:
 
