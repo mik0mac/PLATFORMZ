@@ -101,15 +101,24 @@ only `main.cpp` and `collisions.cpp` as translation units.
   ordered typical-gameplay-first because quick match walks that order to break
   ties between equally empty rooms. The rule defaults used to be scattered across
   seven sections of `constants.h`.
-  Two of the 17 rules have **no slider** — they are authored by a preset rather
-  than dialed by a player, so they are absent from the OPTIONS modal while living
-  in `MatchOptions` like everything else: `maxBots` caps how many unclaimed roster
-  slots get bot-filled (the rest stay genuinely **empty** — no body, not
-  shootable, not counted for last-man-standing, and still joinable, so human
-  capacity is unchanged), and `minHumansToStart` is the head count an official
-  room's auto-start arms on. Both default to the old behaviour. LOCAL play
-  deliberately ignores `maxBots` and fills every slot — an empty slot exists so a
-  human can join it, and offline nobody can. **Do not add repo `#include`s here**:
+  One of the 17 rules has **no control at all** — `minHumansToStart`, the head
+  count an official room's auto-start arms on, which a preset authors rather than
+  a player dialing it. `maxBots` is the other sliderless one, but it does have
+  the **BOTS toggle**: the number (how many unclaimed roster slots get bot-filled;
+  the rest stay genuinely **empty** — no body, not shootable, not counted for
+  last-man-standing, and still joinable, so human capacity is unchanged) stays a
+  preset's to author, and the toggle only ever swings it between 0 and whatever
+  it last was. LOCAL play ignores the maxBots NUMBER and fills every slot — an
+  empty slot exists so a human can join it, and offline nobody can — but honours
+  **zero**, as a solo run against the asteroid field rather than as a roster full
+  of seats nobody can take.
+  `generateRoomDescription` reads a bundle back OUT into the one-line sentence
+  the lobby heads a CUSTOM room with (an official room uses the one its preset's
+  author wrote instead): the arena, then only the rules the host actually
+  changed, capped at `ROOM_DESC_MAX_CLAUSES` because that line is centred and
+  does not wrap. Tested in `test/options_test.cpp` — it is cosmetic, so nothing
+  else in either suite would fail if it quietly stopped reporting a rule.
+  **Do not add repo `#include`s here**:
   `elements.h` includes this file, so anything added lands in the lowest layer of
   the game; `constants.h` is the only one allowed, and the dependency never runs
   back the other way.

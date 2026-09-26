@@ -3,15 +3,20 @@
 #
 #   test/run.sh
 #
-# Three parts. The first two are profile.h's two storage backends, because a bug
-# in either one is invisible from the other; the third is the local score board,
-# which rides on the same storage layer but has rules of its own:
+# The first two are profile.h's two storage backends, because a bug in either one
+# is invisible from the other; the third is the local score board, which rides on
+# the same storage layer but has rules of its own:
 #   profile_test.cpp      the native file path  (round trip, corrupt files,
 #                         hand-edited values, atomic replace)
 #   web_profile_test.py   the localStorage path (runs emcc's own emitted JS
 #                         under node; skips if there is no web build)
 #   local_scores_test.cpp the LOCAL high-score board (the per-identity cap that
 #                         bounds the file, ranking, and hand-edited files)
+#
+# Plus options_test.cpp, which has nothing to do with storage: it covers the
+# one-line description a CUSTOM room generates from its rules. Cosmetic, so
+# nothing else in either suite would ever fail if it silently stopped reporting
+# a rule.
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -37,6 +42,10 @@ run_native profile_test.cpp profile_test
 echo
 echo "=== local_scores_test (native) ==="
 run_native local_scores_test.cpp local_scores_test
+
+echo
+echo "=== options_test (native) ==="
+run_native options_test.cpp options_test
 
 echo
 echo "=== web_profile_test (localStorage) ==="

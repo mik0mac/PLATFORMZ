@@ -24,6 +24,7 @@
 #include "ui.h"          // the immediate-mode widgets the screens are built from
 #include "audio.h"       // MasterVolumeAmpToDb/DbToAmp (the volume slider)
 
+#include <algorithm>     // std::max - the toggle row measures its own layout
 #include <string>
 #include <vector>
 
@@ -95,6 +96,13 @@ struct ShellState {
     bool optSentPhys  = ROCKETS_OBEY_PHYSICS;
     bool optSentFf    = FRIENDLY_FIRE;
     bool optSentCoast = COAST_MODE;
+    // BOTS is a toggle over a NUMBER, so its guard remembers the number rather
+    // than the on/off state: a preset's own cap (THE VOID asks for 3) has to
+    // keep round-tripping, or the host's next push would flatten it to ours.
+    int  optSentBots  = MAX_BOTS_DEFAULT;
+    // What BOTS ON restores. Switching them off must not throw away the cap the
+    // room came with - flip it back and you get the 3 you had, not the default 7.
+    int  optBotsWere  = MAX_BOTS_DEFAULT;
 
     // ---- Float shadows ---------------------------------------------------
     // UiSlider needs a float&; these three are ints in MatchOptions.
@@ -480,39 +488,77 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
              OPT_RANGE_EXPLOSION_RADIUS.min, OPT_RANGE_EXPLOSION_RADIUS.max,
              s.sliderXRadiusActive, OPT_RANGE_EXPLOSION_RADIUS.step)) optChanged = true;
 
-    // Toggles: three across, label on its own line, a compact ON/OFF
-    // control below (labels are long, so keep them off the control's
-    // line). Each defaults to its options.h value; applied at match
-    // start. Sliders use an 85px rhythm; this row sits just below them.
-    // Four explicit x positions (not the slider columns), spaced by
-    // measured label width at font 18 - 157 / 134 / 115 / 220 px
-    // left to right - so no label runs into its neighbor. The
-    // widest, ROCKETS OBEY PHYSICS, goes last, where it has the
-    // panel's right edge (m.x + m.width = 890) to grow into: it
-    // ends at 870. Each toggle sits under its label's left edge.
+    // Toggles: five across the bottom, label on its own line with a compact
+    // ON/OFF control below it (the labels are wider than the control, so they
+    // cannot share its line). Each defaults to its options.h value and is
+    // applied at match start. The sliders above use an 85px rhythm; this row
+    // sits one step below them.
+    //
+    // LAID OUT BY MEASURING, not by hand-placed x positions. The row used to
+    // carry four of those with their pixel widths written into a comment
+    // (157 / 134 / 115 / 220), which meant every relabel was an arithmetic
+    // exercise and a wrong answer was two labels touching. Now each toggle
+    // claims the wider of its label and its control, and whatever is left over
+    // is shared out evenly between them - so a label can be renamed, and a
+    // sixth toggle added, without anyone reaching for a calculator.
+    //
+    // ORDER IS BY DOMAIN, loosely under the sliders each belongs with: BOTS
+    // beneath BOT DIFFICULTY, WALLS beneath WALL ELASTICITY, COAST
+    // beneath SPEED BOOST, and the two rocket rules beneath the rocket column.
+    //
+    // The labels are terse on purpose. ROCKETS OBEY PHYSICS was 220px of the
+    // row on its own - a third of it - and shortening it to ROCKET PHYSICS is
+    // what made room for a fifth control at all. SELF-DAMAGE is not just
+    // shorter than FRIENDLY FIRE, it is what the rule actually does: the flag
+    // is read exactly once (collisions.cpp), to decide whether your OWN blast
+    // hurts you. It never protected anybody else.
     int y6 = y5 + 85;
-    float txBoundary = lxL;          // 150
-    float txFriendly = lxL + 190.0f; // 340
-    float txCoast    = lxL + 350.0f; // 500
-    float txPhysics  = lxL + 500.0f; // 650
+    const float togW = 100.0f, togH = 24.0f;
+    const float rowRight = m.x + m.width - 20.0f;   // the panel's inner right edge
 
-    DrawText("BOUNDARY WALLS", (int)txBoundary, y6, 18, RAYWHITE);
-    if (UiToggle({txBoundary, (float)(y6 + 26), 100, 24}, opt.wallsEnabled)) {
+    const char* togLabels[] = {"BOTS", "WALLS", "COAST",
+                               "SELF-DAMAGE", "ROCKET PHYSICS"};
+    const int togCount = (int)(sizeof(togLabels) / sizeof(togLabels[0]));
+    float togW_[togCount], togX[togCount], claimed = 0.0f;
+    for (int i = 0; i < togCount; ++i) {
+        togW_[i] = std::max((float)MeasureText(togLabels[i], 18), togW);
+        claimed += togW_[i];
+    }
+    // Never negative: if a future label makes the row overflow, the toggles
+    // simply butt up against each other rather than marching backwards.
+    const float togGap = std::max(0.0f, (rowRight - lxL - claimed) / (togCount - 1));
+    for (int i = 0, x = 0; i < togCount; ++i) {
+        togX[i] = lxL + x;
+        x += (int)(togW_[i] + togGap);
+    }
+    for (int i = 0; i < togCount; ++i)
+        DrawText(togLabels[i], (int)togX[i], y6, 18, RAYWHITE);
+
+    // BOTS. The only toggle that drives a NUMBER rather than a bool: maxBots is
+    // "how many unclaimed slots get papered over with a bot", and 0 is a
+    // humans-only room. Switching it off remembers what it was, so switching it
+    // back on restores the room's own cap instead of resetting it to the
+    // default - a preset that asked for 3 bots still has 3 afterwards.
+    bool botsOn = opt.maxBots > 0;
+    if (botsOn) s.optBotsWere = opt.maxBots;   // track the live value while it is visible
+    if (UiToggle({togX[0], (float)(y6 + 26), togW, togH}, botsOn)) {
+        opt.maxBots = botsOn ? (s.optBotsWere > 0 ? s.optBotsWere : MAX_BOTS_DEFAULT) : 0;
+        optChanged = true; s.optSentBots = opt.maxBots;
+    }
+
+    if (UiToggle({togX[1], (float)(y6 + 26), togW, togH}, opt.wallsEnabled)) {
         optChanged = true; s.optSentWalls = opt.wallsEnabled;
     }
 
-    DrawText("FRIENDLY FIRE", (int)txFriendly, y6, 18, RAYWHITE);
-    if (UiToggle({txFriendly, (float)(y6 + 26), 100, 24}, opt.friendlyFire)) {
-        optChanged = true; s.optSentFf = opt.friendlyFire;
-    }
-
-    DrawText("COAST MODE", (int)txCoast, y6, 18, RAYWHITE);
-    if (UiToggle({txCoast, (float)(y6 + 26), 100, 24}, opt.coastMode)) {
+    if (UiToggle({togX[2], (float)(y6 + 26), togW, togH}, opt.coastMode)) {
         optChanged = true; s.optSentCoast = opt.coastMode;
     }
 
-    DrawText("ROCKETS OBEY PHYSICS", (int)txPhysics, y6, 18, RAYWHITE);
-    if (UiToggle({txPhysics, (float)(y6 + 26), 100, 24}, opt.rocketsObeyPhysics)) {
+    if (UiToggle({togX[3], (float)(y6 + 26), togW, togH}, opt.friendlyFire)) {
+        optChanged = true; s.optSentFf = opt.friendlyFire;
+    }
+
+    if (UiToggle({togX[4], (float)(y6 + 26), togW, togH}, opt.rocketsObeyPhysics)) {
         optChanged = true; s.optSentPhys = opt.rocketsObeyPhysics;
     }
 
@@ -864,7 +910,11 @@ inline float DrawRosterPanel(ShellState& s, const std::vector<Player>& players,
         previewCount = std::min(std::max(opt.numPlayers, lastHumanSlot + 1), (int)players.size());
         rowsShown = previewCount > 0 ? previewCount : 1;   // >=1 so the "waiting" line has a row
     } else {
-        rowsShown = opt.numPlayers;   // the OPTIONS slider previews the roster
+        // The OPTIONS slider previews the roster - unless BOTS is off, which
+        // offline means a solo run (see startLocalWorld): no bots and no empty
+        // seats either, because there is nobody who could walk into one. The
+        // preview has to agree with the match START will actually build.
+        rowsShown = (opt.maxBots == 0) ? 1 : opt.numPlayers;
     }
 
     const float rowH = 24.0f, headerH = 30.0f;
@@ -1046,7 +1096,12 @@ inline LocalResult DrawLocalSetup(ShellState& s, const std::vector<Player>& play
                                   int screenWidth, int screenHeight, bool uiEnabled) {
     LocalResult out;
     UiTextCentered("LOCAL MATCH", screenWidth, 110, 48, RAYWHITE);
-    UiTextCentered("OFFLINE - YOU AND THE BOTS", screenWidth, 170, 18, GRAY);
+    // ...and the bots, unless BOTS is off - which offline is a solo run against
+    // the asteroid field, with the roster panel below showing the one name to
+    // match.
+    UiTextCentered(opt.maxBots == 0 ? "OFFLINE - YOU AND THE ASTEROIDS"
+                                    : "OFFLINE - YOU AND THE BOTS",
+                   screenWidth, 170, 18, GRAY);
 
     const float bottom = DrawRosterPanel(s, players, /*myIndex*/ 0, myName, opt,
                                          /*networked*/ false, "", MatchKind::Custom,
@@ -1145,16 +1200,20 @@ struct LobbyResult {
 // else.
 //
 // A CUSTOM room has no authored description - its rules are whatever its host
-// dialed - so until there is a generator that reads MatchOptions back into a
-// sentence, it says which arena it is being played in. That is also the line
-// that used to be a stray "MAP  LARGE" under the waiting message for non-hosts.
+// dialed - so generateRoomDescription (options.h) reads the bundle back into a
+// sentence instead. It used to say only which arena the room was played in,
+// which is now just what that generator returns for a room nobody has retuned.
+//
+// The generator is also the fallback for an official room whose preset this
+// build does not know: better to describe the rules we were sent than to say
+// nothing about a room somebody is standing in.
 inline std::string RoomDescription(const ShellState& s, const MatchOptions& opt) {
     if (s.inMatchKind == MatchKind::Official) {
         for (const auto& [key, preset] : matchOptionPresets)
             if (key == s.inMatchPreset && !preset.description.empty())
                 return preset.description;
     }
-    return opt.mapSize + " MAP";
+    return generateRoomDescription(opt);
 }
 
 inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,

@@ -653,7 +653,13 @@ int main(int argc, char** argv) {
     auto startLocalWorld = [&](float halfSize, int platforms, int asteroids) {
         gameSpace.configureMap(halfSize, platforms, asteroids);
         gameSpace.applyOptions(localOpt); // OPTIONS: elasticities, speed/rocket/jetpack/explosion scales, fuel rates, gameplay toggles
-        gameSpace.setPlayerCount(localOpt.numPlayers); // OPTIONS: 1 human + (N-1) bots
+        // OPTIONS: 1 human + (N-1) bots - or just the human, when BOTS is off.
+        // A solo run rather than a roster of empty slots, because offline there
+        // is nobody those slots could be waiting for (see the maxBots note
+        // below). It is the arena-clearing game the countdown screen and the
+        // match-end rule already know how to play. Sized BEFORE generate(),
+        // which spawns and spreads exactly this many bodies.
+        gameSpace.setPlayerCount(localOpt.maxBots == 0 ? 1 : localOpt.numPlayers);
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
@@ -661,12 +667,16 @@ int main(int argc, char** argv) {
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
         ps[0].name = myDisplayName();
-        // LOCAL deliberately ignores maxBots and fills every slot. An empty slot
+        // LOCAL ignores the maxBots NUMBER and fills every slot. An empty slot
         // exists so a human can walk into it later, and offline nobody ever can -
         // one here would just be a hole in the match. At the default it is the
         // same thing anyway (MAX_BOTS_DEFAULT is one short of the roster ceiling,
-        // so numPlayers - 1 bots is always within it); the two only diverge for a
-        // hand-edited profile.json.
+        // so numPlayers - 1 bots is always within it).
+        //
+        // ZERO is the exception, and it is a different question: that is the
+        // BOTS toggle switched off - a player asking for no bots, not a preset
+        // capping how many get papered in. It is honoured above, where the
+        // roster is sized.
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
@@ -1081,12 +1091,21 @@ int main(int argc, char** argv) {
                     // latch so a control we're actively dragging isn't stomped.
                     if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
                     if (!shell.sliderDiffActive)    onlineOpt.botDifficulty      = m.opt.botDifficulty;
-                    // No sliders for these two, so nothing to guard against: take
-                    // the server's value every tick. They still have to round-trip
-                    // - the host's next START sends the whole bundle back, and
-                    // dropping them here would silently reset the room's preset.
-                    onlineOpt.maxBots          = m.opt.maxBots;
+                    // minHumansToStart has no control at all, so there is nothing
+                    // to guard against: take the server's value every tick. It
+                    // still has to round-trip - the host's next START sends the
+                    // whole bundle back, and dropping it here would silently
+                    // reset the room's preset.
                     onlineOpt.minHumansToStart = m.opt.minHumansToStart;
+                    // maxBots DOES have a control now (the BOTS toggle), so it
+                    // gets the same echo guard as the four bools below - on the
+                    // number rather than on an on/off state, so a preset's own
+                    // cap keeps round-tripping instead of being flattened to
+                    // whatever this client happens to hold.
+                    if (m.opt.maxBots != shell.optSentBots) {
+                        onlineOpt.maxBots = m.opt.maxBots;
+                        shell.optSentBots = m.opt.maxBots;
+                    }
                     if (!shell.sliderWElastActive)  onlineOpt.wallElasticity     = m.opt.wallElasticity;
                     if (!shell.sliderPElastActive)  onlineOpt.platformElasticity = m.opt.platformElasticity;
                     if (!shell.sliderBoostActive)   onlineOpt.speedBoost         = m.opt.speedBoost;
