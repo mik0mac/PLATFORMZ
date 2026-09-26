@@ -568,6 +568,7 @@ int main(int argc, char** argv) {
     shell.customPrivate = profile::Get().lastCustomPrivate;
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
+    float gameOverHold  = 0.0f;            // seconds the GAME_OVER screen still ignores a key/click (armed on arrival, #162)
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
 
     //MARK: Perf overlay
@@ -1352,6 +1353,15 @@ int main(int argc, char** argv) {
         if (perfCount < 120) perfCount++;
         if (IsKeyPressed(KEY_F3)) perfOverlay = !perfOverlay;
 
+        // MARK: GAME-OVER INPUT HOLD
+        // Armed on the way IN, from the one place that already knows a screen
+        // changed - rather than at each site that sets GAME_OVER, of which there
+        // are two today (endLocalMatch and the networked death-FX countdown) and
+        // no guarantee of two tomorrow. Reads previousScreen BEFORE the music
+        // block below consumes it.
+        if (screen != previousScreen && screen == GameScreen::GAME_OVER)
+            gameOverHold = GAME_OVER_INPUT_HOLD;
+
         // MARK: MUSIC STREAM
         if (screen != previousScreen) {
             for (MusicCue& mc : musicCueTable) {
@@ -2062,7 +2072,13 @@ int main(int argc, char** argv) {
                 if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
-            if (startPressed()) returnToTitle();
+            // Read the input EVERY frame, and only act on it once the hold has
+            // run out. Testing the hold first would leave the press unread, and
+            // an unread press is one raylib may still be holding when the hold
+            // ends - which is exactly the accidental exit this is here to stop.
+            const bool leavePressed = startPressed();
+            if (gameOverHold > 0.0f) gameOverHold -= dt;
+            else if (leavePressed) returnToTitle();
             BeginDrawing();
             ClearBackground(BLACK);
             // Stars behind the scoreboard. On the eliminated path the frozen
@@ -2116,7 +2132,21 @@ int main(int argc, char** argv) {
                              noticeY, 20, {0, 255, 200, 255});   // platform color
                 noticeY += 30;
             }
-            DrawCentered("Press any key to return to title.", noticeY, 20, pressKeyColor);
+            // Hidden until the screen is actually listening. An invitation that
+            // is on screen while the input is being dropped teaches the player
+            // that the key did not work.
+            //
+            // And it names where the key GOES. returnToTitle() only reaches the
+            // title offline; in a room it goes back to that room, and with no
+            // room (a slot lost while the match wound down) to the browser. It
+            // said "title" in all three cases.
+            if (gameOverHold <= 0.0f) {
+                const char* leaveText =
+                    !networked        ? "Press any key to return to title."
+                  : myIndex >= 0      ? "Press any key to return to the match room."
+                                      : "Press any key to return to the match browser.";
+                DrawCentered(leaveText, noticeY, 20, pressKeyColor);
+            }
 
             EndDrawing();
             continue;
