@@ -445,6 +445,17 @@ static void ForgetConn(uint64_t connId);
 // gives those slots up anyway when nothing else is free: refusing a player
 // entry to protect a leaver who may never return is the worse trade, and the
 // leaver still gets a fresh slot if they come back.
+// See match.h. Idempotent, so the per-tick caller costs a compare when nothing
+// has changed.
+void Match::SizeLobbyRoster(int floorSlots) {
+    int want = pendingPlayers.load();
+    if (want < floorSlots) want = floorSlots;
+    if (want < 1) want = 1;
+    if (want > GAMESPACE_NUMBER_OF_PLAYERS) want = GAMESPACE_NUMBER_OF_PLAYERS;
+    if ((int)gameSpace.getPlayers().size() != want) gameSpace.setPlayerCount(want);
+    rosterSize.store(want);   // the directory's joinable test and its x/y read this
+}
+
 int Match::ClaimFreeSlot() {
     auto& players = gameSpace.getPlayers();
     SlotMask claimed = 0;
@@ -1048,12 +1059,15 @@ void Match::rebuildWelcomeStatic() {
 std::string Match::buildWelcome(int playerId) {
     std::string statik;
     { std::lock_guard<std::mutex> lk(welcomeStaticMutex); statik = welcomeStatic; }
-    // "m" and "k": which room this is and how it is run. See buildWelcomeBinary
-    // for why the client cannot work either out for itself.
+    // "m", "k", "n" and "p": which room this is, how it is run, what it is
+    // called and which preset it was seeded from. See buildWelcomeBinary for why
+    // the client cannot work any of them out for itself.
     return "{\"type\":\"welcome\",\"playerId\":" + std::to_string(playerId)
          + ",\"tick\":" + std::to_string(serverTick.load())
          + ",\"m\":" + js(matchCode)
          + ",\"k\":" + js(matchKindWire(matchKind))
+         + ",\"n\":" + js(matchName)
+         + ",\"p\":" + js(matchPreset)
          + "," + statik + "}";
 }
 
@@ -1066,14 +1080,18 @@ std::string Match::buildWelcomeBinary(int playerId) {
     nb::putU8(b, nb::WELCOME_BIN_VERSION);
     nb::putI32(b, playerId);
     nb::putU32(b, serverTick.load());
-    // Room identity. Neither is derivable client-side: a player may have arrived
-    // by quick match or by connecting with no room named, so the code they think
-    // they asked for is not authoritative - and nothing else on the wire says how
-    // a room they are already inside is governed, which is what decides whether
-    // they get a START button or a countdown. Inserted BEFORE the static world,
-    // so the layout moved and the tag had to move with it.
+    // Room identity. None of it is derivable client-side: a player may have
+    // arrived by quick match or by connecting with no room named, so the code
+    // they think they asked for is not authoritative - and nothing else on the
+    // wire says how a room they are already inside is governed, what it is
+    // called, or which preset it plays. The kind decides whether they get a
+    // START button or a countdown; the name and preset are what the lobby puts
+    // at the top of the screen instead of a generic heading. Inserted BEFORE the
+    // static world, so the layout moved and the tag had to move with it.
     nb::putStr(b, matchCode);
     nb::putU8(b, matchKind == MatchKind::Official ? 1 : 0);
+    nb::putStr(b, matchName);
+    nb::putStr(b, matchPreset);
     b += statik;   // f32 half, u16 platformCount, platforms
     return b;
 }
@@ -2368,7 +2386,9 @@ static std::string buildMatchList(uint64_t connId, int cursor) {
 static void PrimeLobby(Match& m) {
     std::lock_guard<std::mutex> lock(m.gameMutex);
     m.gameSpace.spawnPlayers();
-    m.rosterSize.store((int)m.gameSpace.getPlayers().size());
+    // Down to the size this room's preset asks for, before anything can list it
+    // or join it. Nobody is seated yet, so there is no floor to respect.
+    m.SizeLobbyRoster(/*floorSlots*/ 0);
     m.rebuildWelcomeStatic();
 }
 
@@ -3258,6 +3278,15 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             bool allowBotify = (ph == Phase::LOBBY || ph == Phase::COUNTDOWN || ph == Phase::GAMEOVER);
             std::lock_guard<std::mutex> gc(clientMutex);
             SlotMask claimed = gatherClaimedSlots();
+            // A waiting room is the size its rules say. Here rather than in the
+            // `options` handler because that runs on a network thread holding
+            // neither lock, and here rather than once at creation because the
+            // host's size slider is live - and because a room coming back from
+            // GAMEOVER respawns a full eight slots on its way to LOBBY.
+            // BEFORE refreshBotSlots, which fills whatever roster it is handed.
+            // LOBBY only: from COUNTDOWN on, the roster is what the match is
+            // being built around.
+            if (ph == Phase::LOBBY) SizeLobbyRoster(SlotsNeeded(claimed));
             refreshBotSlots(claimed, allowBotify);
             HandleMidMatchLeavers(claimed, allowBotify, TICK_DT);
         }
@@ -3400,7 +3429,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         }
 
         //MARK: Scoreboard credit
-        // One-shot on the PLAYING -> GAMEOVER edge. Detected here rather than at
+        // One-shot on the ENTRY-into-GAMEOVER edge. Detected here rather than at
         // either site that sets GAMEOVER, because those two hold different locks:
         // the host's endmatch handler runs on a session strand with no gameMutex,
         // while last-player-standing (just above) runs here holding it. Watching
@@ -3411,7 +3440,17 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         // every player's score, so the credit has to happen before the next one.
         {
             Phase nowPhase = gamePhase.load();
-            if (prevPhase == Phase::PLAYING && nowPhase == Phase::GAMEOVER) {
+            // "We were not in GAMEOVER and now we are", NOT "we were PLAYING".
+            // A match can reach GAMEOVER on the very first tick it is live - the
+            // countdown expires and the end condition is already true, because
+            // everyone who was in the room walked out during the count. prevPhase
+            // is then COUNTDOWN, not PLAYING, so the old test missed the edge
+            // entirely: the wind-down clock below was never stamped, so
+            // gameOverStamped stayed false, so the room never returned to its
+            // lobby and sat in GAMEOVER forever (and its scores were never
+            // credited). Asking about the phase we are ENTERING cannot miss a
+            // transition however few ticks PLAYING lasted.
+            if (prevPhase != Phase::GAMEOVER && nowPhase == Phase::GAMEOVER) {
                 // Same edge the credit uses, so the wind-down clock below has one
                 // origin however the match ended (host request or last player).
                 gameOverAt      = now;

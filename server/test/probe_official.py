@@ -46,6 +46,11 @@ check(len(h.created) == 1, f"created a public room: {h.created}")
 check(h.matchCode == (h.created[-1] if h.created else None),
       f"welcome names the room we are in: {h.matchCode!r}")
 check(h.matchKind == "custom", f"...and calls it custom: {h.matchKind!r}")
+# The NAME we typed comes back too, and the preset we asked to be seeded from.
+# The lobby heads its screen with the first and describes the room from the
+# second, and neither is inferable from a room you were placed in.
+check(h.matchName == "OPEN HOUSE", f"...and calls it by its name: {h.matchName!r}")
+check(h.matchPreset == "DEFAULT", f"...and names its preset: {h.matchPreset!r}")
 check(h.phase == "lobby", f"and it waits in the lobby (phase={h.phase})")
 h.send({"type": "start", **OPTS})
 # START -> COUNTDOWN -> PLAYING. Waited for rather than slept through: the
@@ -70,6 +75,11 @@ check(a.slot is not None, f"quick match put us in a room (slot={a.slot})")
 check(a.phase == "lobby", f"which is in its lobby (phase={a.phase})")
 check(a.matchKind == "official", f"welcome calls it official: {a.matchKind!r}")
 check(bool(a.matchCode), f"and names it: {a.matchCode!r}")
+# An official room's name is its preset's label, and the preset key is what the
+# client turns into the description under it. Both have to survive quick match,
+# which is the one path where the player chose neither.
+check(bool(a.matchName), f"...calls it something: {a.matchName!r}")
+check(bool(a.matchPreset), f"...and says which preset it plays: {a.matchPreset!r}")
 
 need = a.minHumans
 print(f"    (this room starts itself at {need} human(s))")

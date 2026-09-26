@@ -39,8 +39,16 @@ wait(1.2)
 home = take_any_room(first)
 check(first.slot is not None, f"first client seated in {home!r}")
 
+# THE ROOM'S OWN CAP, read off its roster rather than written here as 8. A room
+# is sized to its preset's numPlayers the moment it is created, so quick match
+# can land this probe in a six-slot room as easily as an eight-slot one - and
+# hard-coding the build's maximum made this assertion a test of which preset the
+# server happened to offer first.
+cap = first.nplayers
+check(1 <= cap <= 8, f"the room reports a roster size ({cap} slots)")
+
 crowd = [first]
-for i in range(1, 12):                  # more than the 8 slots, on purpose
+for i in range(1, 12):                  # more than any room's cap, on purpose
     c = C(f"P{i}", match=home)
     c.hello()
     crowd.append(c)
@@ -48,7 +56,7 @@ for i in range(1, 12):                  # more than the 8 slots, on purpose
 wait(1.5)
 
 seated = [c for c in crowd if c.slot is not None and c.matchCode == home]
-check(len(seated) == 8, f"exactly the room's 8 slots filled (got {len(seated)})")
+check(len(seated) == cap, f"exactly the room's {cap} slots filled (got {len(seated)})")
 
 # Everyone who did not get in must still be a live client. That is the whole
 # point: before E2 these connections were hung up on.

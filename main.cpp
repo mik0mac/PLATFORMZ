@@ -568,6 +568,7 @@ int main(int argc, char** argv) {
     shell.customPrivate = profile::Get().lastCustomPrivate;
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
+    float gameOverHold  = 0.0f;            // seconds the GAME_OVER screen still ignores a key/click (armed on arrival, #162)
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
 
     //MARK: Perf overlay
@@ -653,7 +654,13 @@ int main(int argc, char** argv) {
     auto startLocalWorld = [&](float halfSize, int platforms, int asteroids) {
         gameSpace.configureMap(halfSize, platforms, asteroids);
         gameSpace.applyOptions(localOpt); // OPTIONS: elasticities, speed/rocket/jetpack/explosion scales, fuel rates, gameplay toggles
-        gameSpace.setPlayerCount(localOpt.numPlayers); // OPTIONS: 1 human + (N-1) bots
+        // OPTIONS: 1 human + (N-1) bots - or just the human, when BOTS is off.
+        // A solo run rather than a roster of empty slots, because offline there
+        // is nobody those slots could be waiting for (see the maxBots note
+        // below). It is the arena-clearing game the countdown screen and the
+        // match-end rule already know how to play. Sized BEFORE generate(),
+        // which spawns and spreads exactly this many bodies.
+        gameSpace.setPlayerCount(localOpt.maxBots == 0 ? 1 : localOpt.numPlayers);
         gameSpace.generate(); // platforms, asteroids, and player slots
         // Local mode owns its sim: mark/color the wander-bot slots (index 1+).
         // (Networked mode takes isBot from the server over the wire instead.)
@@ -661,12 +668,16 @@ int main(int argc, char** argv) {
         // Slot 0 is the local human; carry the title-screen name onto it so the
         // scoreboard shows it (networked play gets this from the server instead).
         ps[0].name = myDisplayName();
-        // LOCAL deliberately ignores maxBots and fills every slot. An empty slot
+        // LOCAL ignores the maxBots NUMBER and fills every slot. An empty slot
         // exists so a human can walk into it later, and offline nobody ever can -
         // one here would just be a hole in the match. At the default it is the
         // same thing anyway (MAX_BOTS_DEFAULT is one short of the roster ceiling,
-        // so numPlayers - 1 bots is always within it); the two only diverge for a
-        // hand-edited profile.json.
+        // so numPlayers - 1 bots is always within it).
+        //
+        // ZERO is the exception, and it is a different question: that is the
+        // BOTS toggle switched off - a player asking for no bots, not a preset
+        // capping how many get papered in. It is honoured above, where the
+        // roster is sized.
         for (size_t i = 1; i < ps.size(); ++i) {
             ps[i].isBot = true;
             ps[i].color_outline = BOT_OUTLINE_COLOR;
@@ -873,8 +884,10 @@ int main(int argc, char** argv) {
             // on the way back out of a room after LEAVE.
             if (shell.joinPending) { shell.joinPending = false; shell.roomChanged = true; }
             shell.pendingMoveMsg.clear();   // answered
-            shell.inMatchCode = m.matchCode;
-            shell.inMatchKind = m.matchKind;
+            shell.inMatchCode   = m.matchCode;
+            shell.inMatchKind   = m.matchKind;
+            shell.inMatchName   = m.matchName;
+            shell.inMatchPreset = m.matchPreset;
             // Now that we know our real slot, assert our name: send our display
             // name (custom, or the correct "PLAYER {slot+1}" default). The server
             // slot may carry a leftover lobby bot name, and pre-welcome
@@ -893,7 +906,12 @@ int main(int argc, char** argv) {
             const bool wasSeated = myIndex >= 0;
             netAcked = true;
             myIndex  = -1;
-            if (wasSeated) { shell.inMatchCode.clear(); shell.roomLost = true; }
+            if (wasSeated) {
+                shell.inMatchCode.clear();
+                shell.inMatchName.clear();
+                shell.inMatchPreset.clear();
+                shell.roomLost = true;
+            }
             TraceLog(LOG_INFO, "Connected, holding no room");
             return true;
         }
@@ -1074,12 +1092,21 @@ int main(int argc, char** argv) {
                     // latch so a control we're actively dragging isn't stomped.
                     if (!shell.sliderPlayersActive) { onlineOpt.numPlayers = m.opt.numPlayers; shell.optNumPlayersF = (float)onlineOpt.numPlayers; }
                     if (!shell.sliderDiffActive)    onlineOpt.botDifficulty      = m.opt.botDifficulty;
-                    // No sliders for these two, so nothing to guard against: take
-                    // the server's value every tick. They still have to round-trip
-                    // - the host's next START sends the whole bundle back, and
-                    // dropping them here would silently reset the room's preset.
-                    onlineOpt.maxBots          = m.opt.maxBots;
+                    // minHumansToStart has no control at all, so there is nothing
+                    // to guard against: take the server's value every tick. It
+                    // still has to round-trip - the host's next START sends the
+                    // whole bundle back, and dropping it here would silently
+                    // reset the room's preset.
                     onlineOpt.minHumansToStart = m.opt.minHumansToStart;
+                    // maxBots DOES have a control now (the BOTS toggle), so it
+                    // gets the same echo guard as the four bools below - on the
+                    // number rather than on an on/off state, so a preset's own
+                    // cap keeps round-tripping instead of being flattened to
+                    // whatever this client happens to hold.
+                    if (m.opt.maxBots != shell.optSentBots) {
+                        onlineOpt.maxBots = m.opt.maxBots;
+                        shell.optSentBots = m.opt.maxBots;
+                    }
                     if (!shell.sliderWElastActive)  onlineOpt.wallElasticity     = m.opt.wallElasticity;
                     if (!shell.sliderPElastActive)  onlineOpt.platformElasticity = m.opt.platformElasticity;
                     if (!shell.sliderBoostActive)   onlineOpt.speedBoost         = m.opt.speedBoost;
@@ -1126,6 +1153,26 @@ int main(int argc, char** argv) {
         if (net.isOpen()) net.send(msg);
     };
 
+    // Go stand in the match browser, holding no room: clear whatever the last
+    // room left on the shell, ask for a fresh list, and switch screens. Written
+    // out four times before this existed (LEAVE, the lobby's lost-seat guard,
+    // returnToTitle with nothing to return to, and the countdown's own guard),
+    // which is three chances for one of them to forget a field.
+    auto openBrowser = [&]() {
+        shell.roomLost = false;      // acted on
+        shell.browseStatus.clear();
+        shell.matches.clear();
+        shell.listFollow = -1;   // no half-walked list to finish
+        shell.listMerging = false;
+        shell.listIncoming.clear();
+        shell.listNewRooms = 0;
+        shell.lastAutoListAt = GetTime();
+        shell.awaitingList = true;
+        shell.lastListAt = GetTime();
+        if (net.isOpen()) net.send(serializeList(0));
+        screen = GameScreen::BROWSE;
+    };
+
     // GAME_OVER/title -> TITLE. Local: wipe the world for a clean restart.
     // Networked: stay connected (back to the lobby) so START can restart; the
     // server owns the world and resyncs it. The NetClient dtor closes on exit.
@@ -1154,19 +1201,7 @@ int main(int argc, char** argv) {
         // belongs, so send them there to pick again.
         if (networked) shell.syncShadows(onlineOpt);
         const bool haveRoom = myIndex >= 0;
-        if (networked && !haveRoom) {
-            shell.roomLost = false;      // acted on
-            shell.browseStatus.clear();
-            shell.matches.clear();
-            shell.listFollow = -1;   // no half-walked list to finish
-            shell.listMerging = false;
-            shell.listIncoming.clear();
-            shell.listNewRooms = 0;
-            shell.lastAutoListAt = GetTime();
-            shell.awaitingList = true;
-            shell.lastListAt = GetTime();
-            if (net.isOpen()) net.send(serializeList(0));
-        }
+        if (networked && !haveRoom) openBrowser();
         screen = !networked      ? GameScreen::TITLE
                : haveRoom        ? GameScreen::LOBBY
                                  : GameScreen::BROWSE;
@@ -1317,6 +1352,15 @@ int main(int argc, char** argv) {
         perfIdx = (perfIdx + 1) % 120;
         if (perfCount < 120) perfCount++;
         if (IsKeyPressed(KEY_F3)) perfOverlay = !perfOverlay;
+
+        // MARK: GAME-OVER INPUT HOLD
+        // Armed on the way IN, from the one place that already knows a screen
+        // changed - rather than at each site that sets GAME_OVER, of which there
+        // are two today (endLocalMatch and the networked death-FX countdown) and
+        // no guarantee of two tomorrow. Reads previousScreen BEFORE the music
+        // block below consumes it.
+        if (screen != previousScreen && screen == GameScreen::GAME_OVER)
+            gameOverHold = GAME_OVER_INPUT_HOLD;
 
         // MARK: MUSIC STREAM
         if (screen != previousScreen) {
@@ -1704,38 +1748,28 @@ int main(int argc, char** argv) {
         // the server's per-slot flag, and never decides either for itself.
         if (screen == GameScreen::LOBBY) {
             ServerMessage::Phase p = pumpNet();
-            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
-            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             // This screen is "a room we are standing in", so the moment we are
             // not standing in one it has nothing to draw. Back to the browser to
             // pick again, rather than showing the roster of a room we left.
-            if (shell.roomLost || myIndex < 0) {
-                shell.roomLost = false;
-                shell.browseStatus.clear();
-                shell.matches.clear();
-                shell.listFollow = -1;   // no half-walked list to finish
-                shell.listMerging = false;
-                shell.listIncoming.clear();
-                shell.listNewRooms = 0;
-                shell.lastAutoListAt = GetTime();
-                shell.awaitingList = true;
-                shell.lastListAt = GetTime();
-                if (net.isOpen()) net.send(serializeList(0));
-                screen = GameScreen::BROWSE;
-                continue;
-            }
+            // BEFORE the follow below, because the same pump can hand us both a
+            // room's `countdown` and the `unseated` that says we are no longer in
+            // it - and in that order, losing the seat is the newer news.
+            if (shell.roomLost || myIndex < 0) { openBrowser(); continue; }
+            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             shell.roomChanged = false;   // already here; nothing to act on
 
             if (shell.showControls && IsKeyPressed(KEY_ESCAPE)) shell.showControls = false;
             if (shell.showOptions  && IsKeyPressed(KEY_ESCAPE)) shell.showOptions  = false;
-            if (shell.showScores   && IsKeyPressed(KEY_ESCAPE)) shell.showScores   = false;
             // Let the COPIED confirmation fade rather than sitting there forever.
             if (!shell.copyNotice.empty() && GetTime() - shell.copyNoticeAt > 4.0)
                 shell.copyNotice.clear();
             const bool controlsWasOpen = shell.showControls;
             const bool optionsWasOpen  = shell.showOptions;
-            const bool scoresWasOpen   = shell.showScores;
-            const bool uiEnabled = !shell.showControls && !shell.showOptions && !shell.showScores;
+            // No HIGH SCORES modal here any more: the button that opened it left
+            // with the lobby's four-button grid (#155/#157), so a lobby has two
+            // popups, not three.
+            const bool uiEnabled = !shell.showControls && !shell.showOptions;
 
             BeginDrawing();
                 ClearBackground(BLACK);
@@ -1744,6 +1778,10 @@ int main(int argc, char** argv) {
                 LobbyResult r = DrawLobby(shell, gameSpace.getPlayers(), myIndex,
                                           myDisplayName(), onlineOpt, screenWidth, screenHeight,
                                           ready, netCountdown, uiEnabled);
+                // The name field is on this screen too now (#157). Same rule as
+                // the title screen's: push every edit, so the latest typed name
+                // is the one the roster shows for everybody.
+                if (r.nameEdited && net.isOpen()) net.send(serializeName(shell.playerName));
                 switch (r.action) {
                     case LobbyAction::Start:
                         startGame();
@@ -1762,33 +1800,30 @@ int main(int argc, char** argv) {
                     }
                     case LobbyAction::Options:     shell.showOptions  = true; break;
                     case LobbyAction::Controls:    shell.showControls = true; break;
-                    case LobbyAction::Leaderboard:
-                        // Standing in a lobby means there IS a server, so this
-                        // one opens on the online board; the tab is still there
-                        // for a look at your offline best.
-                        shell.showScores = true;
-                        shell.scoresShowLocal = false;
-                        break;
                     case LobbyAction::Leave:
-                        // The server parks us: no room, and an `unseated` saying
-                        // so. joinPending stays false, so nothing can bounce us
-                        // into the room we just walked out of. We route to the
-                        // browser ourselves rather than waiting to be told, so
-                        // the screen changes on the click instead of a round trip
-                        // later - the roomLost guard above is the backstop for
-                        // every other way a slot can go.
+                        // The server parks us: no room, and an `unseated`
+                        // saying so. joinPending stays false, so nothing can
+                        // bounce us into the room we just walked out of, and the
+                        // roomLost guard above is the backstop for every other
+                        // way a slot can go.
                         if (net.isOpen()) net.send(serializeLeave());
-                        shell.browseStatus.clear();
-                        shell.matches.clear();
-                        shell.listFollow = -1;   // no half-walked list to finish
-                        shell.listMerging = false;
-                        shell.listIncoming.clear();
-                        shell.listNewRooms = 0;
-                        shell.lastAutoListAt = GetTime();
-                        shell.awaitingList = true;
-                        shell.lastListAt = GetTime();
-                        if (net.isOpen()) net.send(serializeList(0));
-                        screen = GameScreen::BROWSE;
+                        // Drop the seat HERE, not when the `unseated` answer
+                        // gets back. We already route ourselves to the browser
+                        // on the click, so between the click and that answer we
+                        // were a client that believed it still held a room -
+                        // and the state packets the room had already sent kept
+                        // arriving for those few frames. The browser follows a
+                        // `countdown` into the match (a room can start under
+                        // you), so one of those stale packets would throw us
+                        // onto the countdown screen for a room we had just
+                        // walked out of, where no further packet was ever
+                        // coming. Forgetting the room first is what makes the
+                        // seat guards below able to tell the two apart.
+                        myIndex = -1;
+                        shell.inMatchCode.clear();
+                        shell.inMatchName.clear();
+                        shell.inMatchPreset.clear();
+                        openBrowser();
                         break;
                     case LobbyAction::None: break;
                 }
@@ -1798,8 +1833,6 @@ int main(int argc, char** argv) {
                     && net.isOpen())
                     net.send(serializeOptions(onlineOpt));
                 if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
-                if (shell.showScores)
-                    DrawLeaderboardModal(shell, screenWidth, scoresWasOpen, net.isOpen());
             EndDrawing();
             continue;
         }
@@ -1813,11 +1846,19 @@ int main(int argc, char** argv) {
         // turns the screen's reported intent into wire messages.
         if (screen == GameScreen::BROWSE) {
             ServerMessage::Phase p = pumpNet();
-            // The server can start a match under us - somebody else's room filling
-            // up, or the one we already sit in. Follow it rather than sitting in a
-            // browser while a match we belong to begins without us.
-            if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
-            if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            // The server can start a match under us - the room we already sit in
+            // while browsing. Follow it rather than sitting in a browser while a
+            // match we belong to begins without us.
+            //
+            // ONLY while we sit in one. State packets belong to a room, so the
+            // only ones that can reach a seatless client are the last few from a
+            // room it has just left - and following those means following a
+            // match we are not in, onto a screen that will never hear from the
+            // server again.
+            if (myIndex >= 0) {
+                if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
+                if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
+            }
             // Already where a lost room would send us, so there is nothing to
             // act on - the mirror of the LOBBY screen's roomChanged line.
             //
@@ -1957,6 +1998,21 @@ int main(int argc, char** argv) {
             float remaining;
             if (networked) {
                 ServerMessage::Phase p = pumpNet();
+                // The seat guard the other networked screens have, and the
+                // screen that most needs one: everything here is driven by the
+                // next state packet, and a client holding no room is never sent
+                // another one. Without this, landing here seatless - by leaving
+                // a room at the instant its countdown began - left the count
+                // frozen on its first number with no key, button or timeout
+                // that could get out of it.
+                //
+                // roomLost ONLY, deliberately - not `myIndex < 0` as the lobby
+                // tests. The UDP silence-reset clears myIndex for three seconds
+                // of quiet and lets the hello handshake put it back, which is an
+                // ordinary blip mid-count and must not cost anyone their place
+                // in the match. roomLost is the server saying we hold nothing,
+                // which no amount of packet loss can fake.
+                if (shell.roomLost) { openBrowser(); continue; }
                 if (p == ServerMessage::Phase::Playing) { enterNetworkedMatch(); continue; }
                 // Match ended/canceled before it began -> back to the lobby.
                 if (p == ServerMessage::Phase::Lobby || p == ServerMessage::Phase::GameOver) { returnToTitle(); continue; }
@@ -2016,7 +2072,13 @@ int main(int argc, char** argv) {
                 if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
-            if (startPressed()) returnToTitle();
+            // Read the input EVERY frame, and only act on it once the hold has
+            // run out. Testing the hold first would leave the press unread, and
+            // an unread press is one raylib may still be holding when the hold
+            // ends - which is exactly the accidental exit this is here to stop.
+            const bool leavePressed = startPressed();
+            if (gameOverHold > 0.0f) gameOverHold -= dt;
+            else if (leavePressed) returnToTitle();
             BeginDrawing();
             ClearBackground(BLACK);
             // Stars behind the scoreboard. On the eliminated path the frozen
@@ -2070,7 +2132,21 @@ int main(int argc, char** argv) {
                              noticeY, 20, {0, 255, 200, 255});   // platform color
                 noticeY += 30;
             }
-            DrawCentered("Press any key to return to title.", noticeY, 20, pressKeyColor);
+            // Hidden until the screen is actually listening. An invitation that
+            // is on screen while the input is being dropped teaches the player
+            // that the key did not work.
+            //
+            // And it names where the key GOES. returnToTitle() only reaches the
+            // title offline; in a room it goes back to that room, and with no
+            // room (a slot lost while the match wound down) to the browser. It
+            // said "title" in all three cases.
+            if (gameOverHold <= 0.0f) {
+                const char* leaveText =
+                    !networked        ? "Press any key to return to title."
+                  : myIndex >= 0      ? "Press any key to return to the match room."
+                                      : "Press any key to return to the match browser.";
+                DrawCentered(leaveText, noticeY, 20, pressKeyColor);
+            }
 
             EndDrawing();
             continue;

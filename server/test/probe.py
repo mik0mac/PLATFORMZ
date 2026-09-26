@@ -34,11 +34,12 @@ def set_target(host, port=None):
     global HOST, PORT
     HOST = host
     if port: PORT = int(port)
-# Tags per netbin.h. WELCOME is 0x0A since the welcome grew the room's code
-# and kind - values are never recycled there, so it went past the high-water
-# mark rather than taking 0x03. STATE is 0x0B since the options block grew the
-# maxbots + minhumans bytes; it skipped 0x0A because WELCOME holds it.
-STATE, WELCOME, CHUNK, FULL = 0x0B, 0x0A, 0x03, 0x06
+# Tags per netbin.h. WELCOME is 0x0C since the welcome grew the room's NAME and
+# PRESET on top of its code and kind - values are never recycled there, so each
+# bump goes past the high-water mark rather than taking a free low value (0x0A is
+# burned by the layout before the name). STATE is 0x0B since the options block
+# grew the maxbots + minhumans bytes.
+STATE, WELCOME, CHUNK, FULL = 0x0B, 0x0C, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
 # Wire order of mapSizeOrder (constants.h). Append only, same as there.
 MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]
@@ -66,6 +67,11 @@ class C:
         # Which room the server put us in, and how it is run - straight off the
         # welcome, not the code we asked for.
         self.matchCode, self.matchKind = "", ""
+        # What the room is CALLED and the preset it plays, also welcome-only.
+        # The client heads its lobby with the name and looks the preset's
+        # description up in its own copy of options.h, so neither is a sentence
+        # on the wire.
+        self.matchName, self.matchPreset = "", ""
         self.countdown = 0.0
         # The two rules with no OPTIONS slider, echoed in every state packet
         # like the rest of the bundle. Per-preset, so never assumed.
@@ -148,14 +154,20 @@ class C:
                 d = b"".join(self.parts[gen][i] for i in range(cnt))
                 self.parts.clear(); tag = d[0]
             if tag == WELCOME:
-                # u8 tag, i32 slot, u32 tick, u8 codeLen + code, u8 kind, then
-                # the static world.
+                # u8 tag, i32 slot, u32 tick, then the room identity block -
+                # u8 codeLen + code, u8 kind, u8 nameLen + name, u8 presetLen +
+                # preset - and then the static world.
                 self.slot = struct.unpack_from("<i", d, 1)[0]
                 try:
-                    clen = d[9]
-                    self.matchCode = d[10:10 + clen].decode("utf-8", "replace")
-                    self.matchKind = "official" if d[10 + clen] else "custom"
-                    self.half = struct.unpack_from("<f", d, 11 + clen)[0]
+                    def pstr(at):
+                        n = d[at]
+                        return d[at + 1:at + 1 + n].decode("utf-8", "replace"), at + 1 + n
+                    self.matchCode, at = pstr(9)
+                    self.matchKind = "official" if d[at] else "custom"
+                    at += 1
+                    self.matchName, at   = pstr(at)
+                    self.matchPreset, at = pstr(at)
+                    self.half = struct.unpack_from("<f", d, at)[0]
                 except (IndexError, struct.error):
                     pass
             elif tag == STATE:

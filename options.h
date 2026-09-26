@@ -423,7 +423,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.explosionRadiusScale = 3.0f;
         o.rocketSpeedScale     = 2.0f;
         o.coastMode            = false;      // friction on: release the key, slow down
-    }, "Friendly fire off and speed boosted.  No coast mode.")},
+    }, "No self-damage and speed boosted.  No coast mode.")},
 
     {"MAYHEM", MakePreset("MAYHEM", [](MatchOptions& o) {
         o.mapSize              = "SMALL";
@@ -450,7 +450,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.rocketSpeedScale      = 2.0f;
         o.friendlyFire          = false;
         o.wallsEnabled          = false;
-    }, "XL map, no walls.  Fuel is scarce. Friendly fire off.")}
+    }, "XL map, no walls.  Fuel is scarce. No self-damage.")}
 };
 
 // Where a preset sits on the typical-to-niche ramp above; matchOptionPresets
@@ -476,4 +476,90 @@ inline const MatchPreset& MatchPresetByName(const std::string& name) {
     for (const auto& [key, preset] : matchOptionPresets)
         if (key == "DEFAULT") return preset;
     return matchOptionPresets.front().second;   // no DEFAULT at all: still playable
+}
+
+// MARK: Room description
+// One line saying what kind of game a CUSTOM room is, read back out of its rules.
+//
+// It names the arena, and then says ONLY what the host CHANGED. Two reasons for
+// that rather than a full readout of all fifteen: a room playing the defaults
+// has nothing to report beyond where it is played, and the line this goes on
+// (the lobby heading - see RoomDescription in screens.h) is centred on a 1000px
+// screen and does not wrap. So the deviations are tested in the order below,
+// which is roughly how much each one changes the game, and the first
+// ROOM_DESC_MAX_CLAUSES of them are kept. A host who changes more than that is
+// not being lied to so much as summarised; OPTIONS is one click away and shows
+// every value.
+//
+// Written in the caps the rest of this line uses - `mapSize` is "MEDIUM", and a
+// sentence that starts in caps and continues in prose reads like two lines that
+// collided.
+
+// How many "and here is what is different about it" clauses follow the arena.
+const int ROOM_DESC_MAX_CLAUSES = 4;
+
+// How far a continuous rule has to sit from its default before it earns a word.
+// The sliders are continuous, so an exact compare would call a room BOOSTED
+// because a host grabbed the control and put it back a pixel off.
+const float ROOM_DESC_TOLERANCE = 0.25f;
+
+// Bots are worth mentioning from the middle of their scale up (BOT_DIFFICULTY is
+// the max, constants.h). Not a multiple of the default, which is low enough that
+// any nudge would double it.
+const float ROOM_DESC_TOUGH_BOTS = BOT_DIFFICULTY * 0.5f;
+
+inline bool RoomDescTuned(float v, float dflt) {
+    return v - dflt > ROOM_DESC_TOLERANCE || dflt - v > ROOM_DESC_TOLERANCE;
+}
+
+inline std::string generateRoomDescription(const MatchOptions& o) {
+    // The defaults, so "did the host change this?" is one compare rather than a
+    // second list of numbers here that could drift from the struct's.
+    const MatchOptions d{};
+
+    std::string out = o.mapSize + " map.";
+    int said = 0;
+    auto say = [&](const char* clause) {
+        if (said >= ROOM_DESC_MAX_CLAUSES) return;
+        out += " ";
+        out += clause;
+        ++said;
+    };
+
+    // The arena itself. Whether there is a boundary at all outranks anything
+    // dialed inside it - and with the walls off their bounce means nothing, so
+    // the two are one question, not two.
+    if (!o.wallsEnabled) say("No walls.");
+    // else if (RoomDescTuned(o.wallElasticity, d.wallElasticity))
+    //     say(o.wallElasticity > d.wallElasticity ? "BOUNCY WALLS." : "DEAD WALLS.");
+
+    // What happens when a rocket lands.
+    // "SELF-DAMAGE", matching the OPTIONS toggle - and matching what the rule
+    // does. It is read in exactly one place (collisions.cpp) and all it decides
+    // is whether your OWN blast hurts you; it never protected anybody else.
+    if (!o.friendlyFire) say("No self-damage.");
+    // if (RoomDescTuned(o.explosionRadiusScale, d.explosionRadiusScale))
+    //     say(o.explosionRadiusScale > d.explosionRadiusScale ? "HUGE BLASTS." : "SMALL BLASTS.");
+    // Ranges that start AT their default (speed, rocket speed, jetpack - all
+    // 1..2) can only ever have been raised, so these need no direction.
+    // if (RoomDescTuned(o.rocketSpeedScale, d.rocketSpeedScale)) say("FAST ROCKETS.");
+    if (!o.rocketsObeyPhysics) say("Rocket physics off.");
+
+    // How you move, and for how long.
+    if (RoomDescTuned(o.speedBoost, d.speedBoost)) say("Speed boosted!");
+    // if (RoomDescTuned(o.jetpackThrust, d.jetpackThrust)) say("STRONG JETPACK.");
+    if (o.fuelConsumption >= 50.0f && o.fuelRegenPct <= 50.0f)
+        say("Fuel is scarce.");
+    // else if (o.fuelConsumption < d.fuelConsumption || o.fuelRegenPct > d.fuelRegenPct)
+    //     say("FUEL IS PLENTIFUL.");
+    if (!o.coastMode) say("No coast.");
+    // if (o.platformElasticity > d.platformElasticity
+    //     && RoomDescTuned(o.platformElasticity, d.platformElasticity))
+    //     say("BOUNCY PLATFORMS.");
+
+    // Add no-bots to the end if applicable.
+    if (o.maxBots == 0) out += " No bots.";
+    // else if (o.botDifficulty >= ROOM_DESC_TOUGH_BOTS) say("TOUGH BOTS.");
+
+    return out;
 }

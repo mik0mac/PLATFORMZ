@@ -114,34 +114,78 @@ check(where(rows, lonely) == 0,
       f"a 1-player {last_preset} room leads the list: {names(rows)}")
 
 print("...and among rooms with a player, fewest free spots wins")
-# Two rooms, one player each: they tie on free spots, so the ramp breaks it and
-# the better-ranked preset leads.
+# FREE SPOTS, NOT HEAD COUNT, and the fixture has to be written in those terms.
+#
+# This section used to put one player in each room, call that a tie, and then add
+# a second body to the niche room and assert that 2 players beat 1. Both claims
+# were accidents of a bug: every LOBBY had eight slots whatever its preset said,
+# so equal head counts really did mean equal free spots. Rooms are sized to their
+# own numPlayers now, so a 1-player 6-slot room (5 free) is genuinely a better
+# offer than a 1-player 8-slot one (7 free) - it is closer to being a game, which
+# is the entire thing this key ranks. Ranking by bodies would put a 5/8 room above
+# a 3/4 room, which is the failure the key exists to avoid.
+#
+# So: fill the niche room until the two TIE on free spots (the ramp must then
+# decide), then add one more body (it must then lead). Driven off the listing
+# rather than off numbers written here, so re-tuning a preset's roster size can
+# never silently invert what this is asserting.
 c = C("SECOND HOST")
 c.hello()
 time.sleep(0.7)
 popular = host_room(c, "POPULAR", preset=want[0])
 check(bool(popular), f"a second custom room, preset {want[0]} ({popular})")
-rows = fresh_list(eye).get("m", [])
-check(where(rows, popular) == 0 and where(rows, lonely) == 1,
-      f"tied on occupancy, the ramp decides: {names(rows)[:2]}")
 
-# Now break the tie with a body. The niche room has two players to the other's
-# one, so it must climb over a preset that outranks it - which is the whole
-# claim: fullness first, ramp only as a tie-break.
+
+def free_spots(rows, code):
+    for r in rows:
+        if r.get("c") == code:
+            return r.get("max", 0) - r.get("p", 0)
+    return None
+
+
+rows = fresh_list(eye).get("m", [])
+fp, fl = free_spots(rows, popular), free_spots(rows, lonely)
+check(fp is not None and fl is not None,
+      f"both rooms are listed (popular={fp} free, {last_preset}={fl} free)")
+
+# Bodies into the niche room until it ties. Each one has to be a separate
+# connection: a room ranks on the people in it.
+joiners = []
+while fl is not None and fp is not None and fl > fp:
+    j = C(f"FILLER JOINER {len(joiners)}")
+    j.hello()
+    time.sleep(0.7)
+    if not join_room(j, lonely):
+        break
+    joiners.append(j)
+    rows = fresh_list(eye).get("m", [])
+    fl = free_spots(rows, lonely)
+
+check(fl == fp, f"the two rooms now tie on free spots ({fl} each, "
+                f"{len(joiners)} joiner(s) into {last_preset})")
+check(where(rows, popular) == 0 and where(rows, lonely) == 1,
+      f"tied on free spots, the ramp decides: {names(rows)[:2]}")
+
+# Break the tie. The niche room is now one seat closer to a game than the
+# better-ranked preset, so it must climb over it - fullness first, ramp only
+# ever a tie-break.
 d = C("JOINER")
 d.hello()
 time.sleep(0.7)
-check(join_room(d, lonely), f"a second player joins the {last_preset} room")
+check(join_room(d, lonely), f"one more player joins the {last_preset} room")
 rows = fresh_list(eye).get("m", [])
+check(free_spots(rows, lonely) < free_spots(rows, popular),
+      f"...leaving it fewer free spots ({free_spots(rows, lonely)} "
+      f"vs {free_spots(rows, popular)})")
 check(where(rows, lonely) == 0 and where(rows, popular) == 1,
-      f"2 players outrank 1 regardless of preset: {names(rows)[:2]}")
+      f"fewer free spots outranks a better preset: {names(rows)[:2]}")
 
 print("a match already in progress sorts BELOW a lobby still filling")
-# The phase band, and the one case where fullness must lose. The room that
-# starts has MORE players (2 vs 1) and therefore fewer free spots, so on
-# occupancy alone it would stay on top. Dropping into a match somebody else is
-# most of the way through is a worse offer than a lobby about to begin, so the
-# band outranks the count.
+# The phase band, and the one case where fullness must lose. The room that starts
+# is the one that just climbed to the top on free spots, so on occupancy alone it
+# would stay there. Dropping into a match somebody else is most of the way
+# through is a worse offer than a lobby about to begin, so the band outranks the
+# count.
 b.send({"type": "start", **OPTS})
 playing = False
 for _ in range(20):
@@ -150,10 +194,10 @@ for _ in range(20):
     if row and row[0].get("ph") == "playing":
         playing = True
         break
-check(playing, f"the 2-player room is now playing: {[ (r.get('n'), r.get('ph')) for r in rows ]}")
+check(playing, f"the fuller room is now playing: {[ (r.get('n'), r.get('ph')) for r in rows ]}")
 if playing:
     check(where(rows, popular) < where(rows, lonely),
-          f"the 1-player LOBBY outranks the 2-player MATCH: {[(r.get('n'), r.get('ph'), r.get('p')) for r in rows]}")
+          f"an emptier LOBBY outranks the fuller MATCH: {[(r.get('n'), r.get('ph'), r.get('p')) for r in rows]}")
 
 print("full and ending rooms sort last")
 # Not "hidden" - a row that vanishes reads as a bug, and the browser draws an

@@ -203,6 +203,12 @@ static_assert(GAMEOVER_SIM_SECONDS > GAME_OVER_TIMER,
               "the server must keep simulating for the whole client death-FX countdown");
 static_assert(GAMEOVER_SIM_SECONDS < GAMEOVER_LOBBY_SECONDS,
               "sim-idle must come BEFORE the world is freed, or that stage never runs");
+// A match ends with the player mid-fight, hand still on the keys and very
+// possibly mid-click, so the game-over screen arrives under an input they had
+// already committed to - and it takes ANY key or click to leave. Deaf for this
+// long on arrival, and its "press any key" line stays hidden until then, so the
+// invitation appears only once it is true (#162).
+constexpr float GAME_OVER_INPUT_HOLD = 2.0f; // seconds the game-over screen ignores key/click on arrival
 const float COUNTDOWN_SECONDS = 5.0f; // "GAME STARTING IN..." pre-match countdown; world is built but frozen until it hits zero. Shared by client (local timer) and server (networked deadline) so both agree.
 const float MID_MATCH_LEAVE_GRACE_SEC = 15.0f; // seconds a mid-match leaver's body stays open for a reconnect before being eliminated (see Player::leaveGraceSec)
 

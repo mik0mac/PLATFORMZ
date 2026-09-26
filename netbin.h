@@ -37,16 +37,18 @@ namespace nb {
 // decoded a stale server's packets at 4x scale instead of rejecting them.
 //
 // Values are never recycled, even once no live build uses them: 0x05 and 0x07
-// are burned by earlier state layouts, 0x06 by the retired "full" rejection
-// (see below), and a stale client in the wild still speaks them. Reusing one
-// would make a genuine mismatch decode as valid.
+// are burned by earlier state layouts, 0x0A by the welcome layout before the
+// room name and preset joined it, 0x06 by the retired "full" rejection (see
+// below), and a stale client in the wild still speaks them. Reusing one would
+// make a genuine mismatch decode as valid.
 static const uint8_t STATE_BIN_VERSION   = 0x0B; // per-tick state packet (bumped: maxBots + minHumansToStart u8s added to the options block; 0x0A is WELCOME's)
-// 0x0A, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09 are taken by
-// the tags below and by STATE. Bumped from 0x02 when the welcome grew the match
-// code and kind - a client that predates that reads the old layout and would
-// mis-slice the static world, so the tag change is what turns silent corruption
-// into an honest SERVER VERSION MISMATCH.
-static const uint8_t WELCOME_BIN_VERSION = 0x0A; // welcome (slot + room identity + static world)
+// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B
+// are taken by the tags below, by STATE, and by this packet's own past. Bumped
+// from 0x02 when the welcome grew the match code and kind, and again from 0x0A
+// when it grew the room's NAME and PRESET - a client that predates either reads
+// the old layout and would mis-slice the static world, so the tag change is what
+// turns silent corruption into an honest SERVER VERSION MISMATCH.
+static const uint8_t WELCOME_BIN_VERSION = 0x0C; // welcome (slot + room identity + static world)
 static const uint8_t CHUNK_VERSION       = 0x03; // fragment of an oversized message (see below)
 // 0x06 is BURNED. It was FULL_BIN_VERSION: "every player slot is claimed", sent
 // once and followed by the connection being dropped. E2 retired the whole idea -
