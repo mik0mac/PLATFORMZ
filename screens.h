@@ -631,7 +631,7 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     // to - and it is worth not letting a player spend it on nothing. The server
     // allows a small burst and then one list a second, and drops anything over
     // budget WITHOUT A REPLY, so a mashed button would sit on "LOOKING FOR
-    // MATCHES..." with no request left alive to answer it. Inert for a second
+    // ROOMS..." with no request left alive to answer it. Inert for a second
     // after each ask, drawn the same way an unjoinable row's button is: visible
     // and obviously not available, rather than missing.
     const Rectangle refreshBtn = {listX + listW - 130.0f, listY - 46.0f, 130.0f, 34.0f};
@@ -717,7 +717,9 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
         UiTextCentered("NOT CONNECTED", screenW, (int)(listY + listH / 2 - 10), 20, GRAY);
     } else if (s.matches.empty()) {
         // "Empty" and "still loading" look identical unless you say which it is.
-        UiTextCentered(s.awaitingList ? "LOOKING FOR MATCHES..." : "NO MATCHES YET",
+        // ROOMS, like the count above the list (#158) - the two lines sit in the
+        // same panel and were naming the same thing two different ways.
+        UiTextCentered(s.awaitingList ? "LOOKING FOR ROOMS..." : "NO ROOMS YET",
                        screenW, (int)(listY + listH / 2 - 20), 20, ui::OUTLINE);
         if (!s.awaitingList)
             UiTextCentered("CREATE ONE, OR TRY QUICK MATCH",
