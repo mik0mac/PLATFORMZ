@@ -391,7 +391,14 @@ inline void DrawLeaderboardModal(ShellState& s, int screenWidth, bool wasOpen,
 // the connection - that stayed in main().
 inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     Rectangle m = {110, 10, 780, 680}; // two 5-slider columns + toggle row + CLOSE
-    UiModalChrome(m, "OPTIONS");
+    // GAME SETUP, not OPTIONS (#163). The same modal is reached from three
+    // screens and was announced by two different names - OPTIONS from the local
+    // screen and a match room, MATCH RULES from the CUSTOM screen - so a player
+    // pressing one and then the other had no way to know they had arrived at the
+    // same place. The identifiers keep the old word (LobbyAction::Options,
+    // showOptions, MatchOptions, the `options` wire message): OPTIONS is what
+    // this bundle IS everywhere it is not being read aloud.
+    UiModalChrome(m, "GAME SETUP");
 
     const float colW = 330.0f, gutter = 40.0f;
     float lxL = m.x + 40, lxR = lxL + colW + gutter;
@@ -1112,7 +1119,7 @@ inline LocalResult DrawLocalSetup(ShellState& s, const std::vector<Player>& play
         out.action = LocalAction::Start;
 
     const float by = startY + 70.0f;
-    if (uiEnabled && UiButton({300, by, 180, 44}, "OPTIONS")) out.action = LocalAction::Options;
+    if (uiEnabled && UiButton({300, by, 180, 44}, "GAME SETUP")) out.action = LocalAction::Options;
     if (uiEnabled && UiButton({520, by, 180, 44}, "BACK"))    out.action = LocalAction::Back;
 
     DrawVolumeSlider(s, screenWidth, screenHeight, uiEnabled);
@@ -1150,7 +1157,7 @@ inline CustomAction DrawCustomSetup(ShellState& s, int screenWidth, int screenHe
                    screenWidth, 406, 16, GRAY);
     UiTextCentered("You host it either way.", screenWidth, 428, 15, GRAY);
 
-    if (uiEnabled && UiButton({350, 462, 300, 44}, "MATCH RULES", 18))
+    if (uiEnabled && UiButton({350, 462, 300, 44}, "GAME SETUP", 18))
         action = CustomAction::Options;
     if (uiEnabled && connected && UiButton({350, 522, 300, 52}, "CREATE", 20))
         action = CustomAction::Create;
@@ -1373,7 +1380,7 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
     };
     // OPTIONS reconfigures the whole match, so it is the host's alone - and in an
     // official room it belongs to nobody, because the preset is the point.
-    if (amHost && !official && button("OPTIONS")) out.action = LobbyAction::Options;
+    if (amHost && !official && button("GAME SETUP")) out.action = LobbyAction::Options;
     if (button("CONTROLS")) out.action = LobbyAction::Controls;
     if (button("LEAVE"))    out.action = LobbyAction::Leave;
 

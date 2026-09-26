@@ -93,7 +93,8 @@ only `main.cpp` and `collisions.cpp` as translation units.
   caught-exception web path instead of copying them. Tests: `test/run.sh`.
 - `options.h` — everything that defines **what a match is**: the arenas
   (`mapSizePresets` + the append-only `mapSizeOrder`), `MatchOptions` (17 rules,
-  the 15 with sliders being what the OPTIONS modal drives), **the compile-time default
+  the 15 with sliders being what the OPTIONS modal drives - titled **GAME SETUP**
+  on screen since #163, but OPTIONS everywhere in the code), **the compile-time default
   of every one of those rules**, their **legal ranges** (`OPT_RANGE_*` +
   `ClampOptions` — read by the OPTIONS sliders, by `profile::SanitizeOptions`,
   and asserted against every preset in `registry_test.cpp`, so a range and a
