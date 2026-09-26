@@ -1233,11 +1233,11 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
                                          : std::string("MATCH LOBBY");
     const int headFont = 34;
 
-    // Name and invite button as ONE centred group. They were two rows before -
-    // a heading, then a CODE line, then a COPY INVITE button beside it, then a
-    // line of advice under that - which is four rows of chrome for two facts.
-    // Folding the code into the button it was already sitting next to buys the
-    // vertical space the name field below needs.
+    // Name and invite button on ONE row. They were three before - a heading, then
+    // a CODE line, then a COPY INVITE button beside it, then a line of advice
+    // under that - which is four rows of chrome for two facts. Folding the code
+    // into the button it was already sitting next to buys the vertical space the
+    // name field below needs.
     const bool  hasCode     = !s.inMatchCode.empty();
     // A std::string, not TextFormat's rotating static buffer: this one is held
     // across a measure and a draw, and raylib recycles those buffers after four
@@ -1246,13 +1246,35 @@ inline LobbyResult DrawLobby(ShellState& s, const std::vector<Player>& players,
     const float inviteW = hasCode ? (float)MeasureText(inviteLabel.c_str(), 14) + 28.0f : 0.0f;
     const float headW       = (float)MeasureText(heading.c_str(), headFont);
     const float gap         = hasCode ? 24.0f : 0.0f;
-    const float groupX      = ((float)screenWidth - (headW + gap + inviteW)) / 2.0f;
 
-    DrawText(heading.c_str(), (int)groupX, 62, headFont, RAYWHITE);
+    // THE NAME IS CENTRED, and the button hangs off its right. The pair used to
+    // be centred as one GROUP, which is a different thing: it put the name left
+    // of centre by half the button's width, so the heading sat visibly off-axis
+    // from the description line, the NAME field and the roster panel directly
+    // under it - and it MOVED as the code appeared or the room was renamed,
+    // because the group's width did.
+    //
+    // The name only gives ground when the button would otherwise overrun the
+    // screen's content band, and then by exactly the overflow and no more. That
+    // band is 110..890, which is where the map row starts and where START ends
+    // (DrawMapSelector) - the widest thing on this screen, so a heading that
+    // stays inside it is a heading that lines up with everything else.
+    const float edge   = 110.0f;
+    float headX = ((float)screenWidth - headW) / 2.0f;
+    const float over  = (headX + headW + gap + inviteW) - ((float)screenWidth - edge);
+    // Clamped at the left edge, which a name past roughly 500px actually reaches:
+    // at MATCH_NAME_MAX_CHARS (24) of wide glyphs the pair wants ~830px and the
+    // band is 780. The name then stops dead centre-left and the button takes
+    // some of the right margin - which is empty on this row, so nothing is
+    // overlapped and nothing leaves the screen. Losing the gutter beats losing
+    // the start of the room's name.
+    if (over > 0.0f) headX = std::max(edge, headX - over);
+
+    DrawText(heading.c_str(), (int)headX, 62, headFont, RAYWHITE);
     if (hasCode) {
         // Sized like the COPY INVITE button it replaces (30 tall, font 14), wide
         // enough for the code it now carries, and vertically centred on the name.
-        const Rectangle inviteBtn = {groupX + headW + gap, 62.0f + (headFont - 30) / 2.0f,
+        const Rectangle inviteBtn = {headX + headW + gap, 62.0f + (headFont - 30) / 2.0f,
                                      inviteW, 30.0f};
         if (uiEnabled && UiButton(inviteBtn, inviteLabel.c_str(), 14))
             out.action = LobbyAction::CopyInvite;
