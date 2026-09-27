@@ -246,9 +246,22 @@ scrolled out of view would still take a click.
 
 ## Controls
 WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
-Left Shift for stronger (earth) gravity · M end match (player 1 only — the
-host, i.e. lowest connected human slot, in networked play) · Esc toggle
-cursor capture.
+Left Shift for stronger (earth) gravity · **P or Esc** pause · Esc no longer
+toggles cursor capture on its own.
+
+The **PAUSE screen** (#164, `main.cpp`, `MARK: PAUSE`) is where a match is ended
+now — M is retired. CLICK or P resumes (Esc opens it but deliberately does not
+close it: the screen names what does). **Q** means different things to different
+people: the host, or anyone in a local match, ends it; everyone else LEAVES the
+room, which ends nothing for anybody else.
+
+What pause MEANS depends on who owns the sim. LOCAL genuinely stops — no input,
+no bots, no movement, no collisions, not even asteroid spin. ONLINE stops nothing
+for anyone, this client included: the body stays in the arena, drifting and
+shootable, and the freed cursor is all that disarms the controls. So pausing
+online costs you the fight you were in, which is the only honest option when one
+player cannot be allowed to freeze eight others. The overlay dims the world
+rather than hiding it, for the same reason — the arena behind it is still live.
 
 ## Web build (Emscripten / WASM) — gotchas
 `make web RAYLIB_WEB_DIR=$HOME/raylib` builds the browser client; the shell is

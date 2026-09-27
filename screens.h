@@ -261,8 +261,8 @@ inline void DrawControlsModal(ShellState& s, bool wasOpen) {
         "Left click    fire rocket",
         "Space         jetpack (up)",
         "Left Shift    earth gravity enable",
-        "M             end match (host only)",
-        "Esc           toggle cursor capture",
+        "P or Esc      pause / scores",
+        "Q (paused)    end match, or leave",
         "+ / -         volume up/down",
     };
     int ly = (int)m.y + 60;

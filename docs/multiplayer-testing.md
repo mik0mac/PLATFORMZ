@@ -481,8 +481,13 @@ cookie in flight dies on restart. See
 ## Controls
 
 WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold Left
-Shift for stronger (earth) gravity · **M** end match (host only) · Esc toggle
-cursor capture · F3 perf overlay · `+`/`-` volume.
+Shift for stronger (earth) gravity · **P or Esc** pause · F3 perf overlay ·
+`+`/`-` volume.
+
+Ending a match is **Q on the pause screen** (#164), not M — for the host, or for
+anyone in a local match. Everyone else's Q leaves the room instead. Pausing is
+local to one client: online the world keeps running and the paused player stays
+in it, shootable.
 
 ---
 
