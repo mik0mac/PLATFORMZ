@@ -766,7 +766,7 @@ public:
 
 //MARK: Spark emitter (asteroid / player elimination bursts)
 // (A cone emitter for the jetpack exhaust plume was deprecated and archived in
-// docs/exhaust-plume-archive.md.)
+// docs/archive/exhaust-plume.md.)
 
 // Emit `count` sparks uniformly in all directions from `origin` - a one-time
 // spherical puff (e.g. an asteroid breaking apart, or a player elimination).

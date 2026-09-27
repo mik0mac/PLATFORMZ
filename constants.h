@@ -235,7 +235,7 @@ const bool EARTH_GRAVITY_PASS_THROUGH_PLATFORMS = true; // If true, players pass
 //MARK: Player Shape / Size
 // The player renders as a regular dodecahedron (DrawPlayer in shapes.h). Earlier
 // prototype silhouettes (DART, DELTA, LANDER, POD) are archived in
-// docs/player-shapes-archive.md.
+// docs/archive/player-shapes.md.
 
 // The player is a sphere (rendered as a dodecahedron, DrawPlayer in shapes.h)
 // centered on player.position; the camera sits at that center. PLAYER_SCALE
@@ -418,7 +418,7 @@ const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
 //MARK: Spark VFX Constants
 // Sparks are pure visual particles (no collision). Shared physics/draw, spawned
 // as one-time elimination bursts. (The jetpack exhaust plume that also used
-// sparks was deprecated - see docs/exhaust-plume-archive.md.)
+// sparks was deprecated - see docs/archive/exhaust-plume.md.)
 const float SPARK_GRAVITY = 6.0f;        // downward accel on sparks, units/s^2 (0 = none)
 const float SPARK_DRAG = 1.5f;           // velocity damping per second
 const float SPARK_STREAK_LENGTH = 0.6f;  // length of the drawn streak, units
