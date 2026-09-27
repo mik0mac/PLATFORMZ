@@ -111,7 +111,7 @@ driver).
 
 ```bash
 "$SCRATCH/uidriver" click 734 627            # screen POINTS
-"$SCRATCH/uidriver" key 46                   # M - end match
+"$SCRATCH/uidriver" key 35                   # P - pause (Q from there ends the match)
 "$SCRATCH/uidriver" chord 55 9 cmd           # Cmd+V (paste)
 "$SCRATCH/uidriver" scroll 700 380 -4        # wheel, 4 lines DOWN, at that point
 "$SCRATCH/uidriver" drag 1129 481 1129 300   # press, move, release - scrollbars

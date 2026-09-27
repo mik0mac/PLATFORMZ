@@ -569,6 +569,7 @@ int main(int argc, char** argv) {
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float gameOverHold  = 0.0f;            // seconds the GAME_OVER screen still ignores a key/click (armed on arrival, #162)
+    bool  paused        = false;           // PLAYING, cursor freed, scores shown. LOCAL freezes the sim; online it is this client's screen only (#164)
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
 
     //MARK: Perf overlay
@@ -695,6 +696,7 @@ int main(int argc, char** argv) {
         // zero (capturing the cursor then). Cursor stays free during the count.
         countdownRemaining = COUNTDOWN_SECONDS;
         screen = GameScreen::COUNTDOWN;
+        paused = false; // never start a match already paused (#164)
     };
 
     // START. Local: stand up a fresh run with the chosen map. Networked: ask the
@@ -772,6 +774,7 @@ int main(int argc, char** argv) {
     // our packets) and enter the match. myIndex persists.
     auto enterNetworkedMatch = [&]() {
         prevHealth = -1; netHurt = 0.0f;
+        paused = false; // never start a match already paused (#164)
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
         // Start the match with clean feeds: the game-over -> countdown ->
         // playing route never passes through returnToTitle, so clear here too
@@ -1229,6 +1232,29 @@ int main(int argc, char** argv) {
     // Centered placeholder text helper (screenWidth is in scope).
     auto DrawCentered = [&](const char* t, int y, int size, Color c) {
         DrawText(t, (screenWidth - MeasureText(t, size)) / 2, y, size, c);
+    };
+
+    // The match's score table. GAME_OVER draws it, and so does the PAUSE screen
+    // (#164 asks for the game-over layout) - ONE copy, because a per-player loop
+    // written out twice is precisely how #159 happened: the guard was added to
+    // one of them and the other went on exploding empty slots for weeks.
+    //
+    // Returns the y just past the last row, so the caller can stack whatever it
+    // puts underneath without knowing how many players there were.
+    auto drawScoreTable = [&](int y, Color c) -> int {
+        DrawCentered("SCORES:", y, 20, c);
+        std::vector<Player>& ps = gameSpace.getPlayers();
+        int row = 0;
+        for (int i = 0; i < (int)ps.size(); ++i) {
+            // Empty slots are in the roster but were never anybody - no body, no
+            // score, no row. isConnected is how a vacant slot reaches the client
+            // (the server's `active` flag); locally every slot is real.
+            if (networked && !ps[i].isConnected) continue;
+            DrawCentered(TextFormat("%s: %d", ps[i].name.c_str(), ps[i].score),
+                         y + 40 + row * 20, 20, c);
+            ++row;
+        }
+        return y + 40 + row * 20 + 10;
     };
 
     // "Press any key to start/continue": any key other than Escape (which is
@@ -2111,22 +2137,13 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Scoreboard - every connected player by name (drawn once). Empty
-            // slots in the fixed player vector are skipped via isConnected.
-            DrawCentered("SCORES:", 400, 20, scoreColor);
-            int scoreRow = 0;
-            for (int i = 0; i < (int)players.size(); ++i) {
-                if (networked && !players[i].isConnected) continue;
-                DrawCentered(TextFormat("%s: %d", players[i].name.c_str(), players[i].score),
-                                440 + scoreRow * 20, 20, scoreColor);
-                ++scoreRow;
-            }
+            // Scoreboard - every player who is actually somebody, drawn once.
             // Local only: where that run landed on this machine's board. A
             // high-score table nobody is shown at the moment they set a score is
             // a table nobody knows exists - and this is the one moment it is
             // interesting. Networked play has no equivalent line because the
             // server owns that ranking and does not send a placement back.
-            int noticeY = 440 + scoreRow * 20 + 10;
+            int noticeY = drawScoreTable(400, scoreColor);
             if (!networked && localRunRank > 0) {
                 DrawCentered(TextFormat("LOCAL HIGH SCORE  #%d", localRunRank),
                              noticeY, 20, {0, 255, 200, 255});   // platform color
@@ -2150,6 +2167,75 @@ int main(int argc, char** argv) {
 
             EndDrawing();
             continue;
+        }
+
+        //MARK: PAUSE (#164)
+        // P or Esc opens it; CLICK or P resumes. Esc does NOT resume - the screen
+        // says what does, and an undocumented second way out would make that a
+        // lie. Esc opens it because Esc is what a player reaches for to stop, and
+        // what it used to do on its own - free the cursor with no scoreboard, no
+        // instructions and no way to end the match - was a pause screen missing
+        // everything except the pause.
+        //
+        // What PAUSE means depends on who owns the sim, and that asymmetry is the
+        // whole design. LOCAL: the world genuinely stops, because we host it.
+        // ONLINE: nothing stops for anybody, this client included - the body
+        // stays in the arena, drifting and shootable. The cursor being free is
+        // what disarms the controls (both input paths already blank their input
+        // when it is), so pausing online costs you the fight you were in. That is
+        // the honest behaviour for a server-authoritative game; the alternative
+        // is a button that freezes eight other people.
+        //
+        // Before the UPDATE, so the frame you press it on is already paused
+        // rather than one sim step late.
+        const bool pauseGesture  = IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE);
+        const bool resumeGesture = IsKeyPressed(KEY_P) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        if (!paused && pauseGesture) {
+            paused = true;
+            EnableCursor();          // the screen is a menu; also what disarms the controls
+        } else if (paused && resumeGesture) {
+            paused = false;
+            DisableCursor();
+            consumeLookFrames = 2;   // swallow the cursor-recentre jump (see the declaration)
+            consumeFirstFire  = true; // the click that RESUMED must not also fire a rocket
+        }
+
+        // Who may end the match. Local play has no one else in it; online it is
+        // the room's host, the same server-owned flag START and GAME SETUP use.
+        // Everyone else gets LEAVE instead, which is the honest verb: a guest
+        // walking out does not end anybody else's game.
+        auto amMatchHost = [&]() -> bool {
+            if (!networked) return true;
+            std::vector<Player>& ps = gameSpace.getPlayers();
+            for (int i = 0; i < (int)ps.size(); ++i)
+                if (ps[i].isHost) return myIndex == i;
+            return false;   // no host flag yet - offer nobody the end-match key
+        };
+
+        if (paused && IsKeyPressed(KEY_Q)) {
+            // Resume FIRST in every branch: whatever Q does next, the player
+            // should watch it happen rather than read about it through a dimmed
+            // overlay. Ending a networked match takes a GAME_OVER_TIMER wind-down
+            // before the screen flips, and sitting paused through it would look
+            // like the key had not worked.
+            paused = false;
+            if (!networked) {
+                endLocalMatch();                 // straight to GAME_OVER, no death-FX delay
+            } else if (amMatchHost()) {
+                DisableCursor(); consumeLookFrames = 2; consumeFirstFire = true;
+                if (net.isOpen()) net.send(serializeEndMatch()); // request; the server flips the phase for everyone
+            } else {
+                // Out of the room, not out of the match for anybody else. Drop
+                // the seat here rather than waiting for the server's `unseated`,
+                // for the same reason LEAVE in the lobby does (see there).
+                if (net.isOpen()) net.send(serializeLeave());
+                myIndex = -1;
+                shell.inMatchCode.clear();
+                shell.inMatchName.clear();
+                shell.inMatchPreset.clear();
+                returnToTitle();   // holding no room, this lands in the browser
+                continue;
+            }
         }
 
         // 2. UPDATE
@@ -2239,7 +2325,23 @@ int main(int argc, char** argv) {
 
             // Player elimination bursts. Players are never erased (alive=false is
             // synced and persists), so a per-player flag stops the burst re-firing.
+            //
+            // An EMPTY slot has nothing to detonate (#159). A roster can hold
+            // slots no bot filled - the preset's maxBots, or BOTS switched off -
+            // and those arrive permanently !isAlive, so with deathBurstSpawned
+            // freshly cleared by enterNetworkedMatch every one of them fired a
+            // burst on the first frame of every match: seven orange explosions
+            // around the spawn point of an eight-slot room with one human in it.
+            //
+            // The local sim already refused them by isVacant (gamespace.h,
+            // updateActiveObjects); this is the same loop written a second time
+            // for the networked mirror, and the guard was only ever added to the
+            // first copy. isVacant does not cross the wire - the server folds it
+            // into the `active` flag, which lands here as isConnected - so that
+            // is the flag to ask. It stays TRUE for a mid-match leaver's open
+            // body, which is a real body and does still burst when it dies.
             for (Player& player : gameSpace.getPlayers()) {
+                if (!player.isConnected) continue;
                 if (!player.isAlive && !player.deathBurstSpawned) {
                     gameSpace.spawnEliminationBurst(player.position, player.color_outline);
                     player.deathBurstSpawned = true;
@@ -2323,27 +2425,36 @@ int main(int argc, char** argv) {
                 if (consumeFirstFire) { in.fire = false; consumeFirstFire = false; }
             }
             float gravity = in.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY; // constants stay here
-            ApplyPlayerInput(player, in, dt, gravity, gameSpace);
-
-            // Drive every isBot slot through the behaviour tree (same input path
-            // as the human above). Bots may hold the earth-gravity key to descend,
-            // so drive() derives gravity per-bot from its input.
-            botController.drive(gameSpace, dt);
-
             std::vector<Player>& players = gameSpace.getPlayers();
-            gameSpace.updatePositions(dt);
-            RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
-            gameSpace.updateActiveObjects();                // erase destroyed/finished
+            // PAUSED means PAUSED here, because here we own the sim (#164): no
+            // input, no bots, no movement, no collisions, no reaping. The draw
+            // below still runs, so the frozen world stays on screen under the
+            // overlay. Online this branch does not exist - the server keeps
+            // ticking and the world keeps moving behind the same overlay.
+            if (!paused) {
+                ApplyPlayerInput(player, in, dt, gravity, gameSpace);
 
-            // Reticles follow the player's FINAL (post-collision) position;
-            // smoothed for non-local players, snapped for the local one.
-            for (int i = 0; i < (int)players.size(); ++i)
-                players[i].updateReticle(dt, i != 0); // index 0 is the local player
+                // Drive every isBot slot through the behaviour tree (same input path
+                // as the human above). Bots may hold the earth-gravity key to descend,
+                // so drive() derives gravity per-bot from its input.
+                botController.drive(gameSpace, dt);
+
+                gameSpace.updatePositions(dt);
+                RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
+                gameSpace.updateActiveObjects();                // erase destroyed/finished
+
+                // Reticles follow the player's FINAL (post-collision) position;
+                // smoothed for non-local players, snapped for the local one.
+                for (int i = 0; i < (int)players.size(); ++i)
+                    players[i].updateReticle(dt, i != 0); // index 0 is the local player
+            }
 
             localPlayer = &gameSpace.getPlayers()[0];
         }
 
-        gameSpace.updateAsteroidSpin(dt); // advance tumble in both local and networked modes
+        // Advance asteroid tumble in both modes - except while a LOCAL match is
+        // paused, where it is the last thing still moving in a stopped world.
+        if (!(paused && !networked)) gameSpace.updateAsteroidSpin(dt);
 
         // MARK: AUDIO EVENT DRAIN
         // Turn this frame's networked/local audio events into queued sounds.
@@ -2394,13 +2505,9 @@ int main(int argc, char** argv) {
         gameSpace.getMessages().clear();
 
 
-        // MARK: ESCAPE KEY / CURSOR TOGGLE
-        if (IsKeyPressed(KEY_ESCAPE)) {
-            // toggle cursor capture so you can alt-tab / quit comfortably. Re-arm
-            // the first-look swallow on re-capture so the centering jump doesn't
-            // leak into the aim (same reason it's armed at match start).
-            if (IsCursorHidden()) EnableCursor(); else { DisableCursor(); consumeLookFrames = 2; }
-        }
+        // Escape used to toggle cursor capture here. It opens the PAUSE screen
+        // now (see the MARK: PAUSE block above), which frees the cursor as its
+        // first act - so alt-tabbing still works and now says so on screen.
 
         // MARK: DRAW
         // Networked mode before the server's welcome/first state arrives: there's
@@ -2618,6 +2725,28 @@ int main(int argc, char** argv) {
             DrawMessageQueue(messageQueue, screenWidth, screenHeight);
             messageQueue.update(dt);
 
+            //MARK: PAUSE OVERLAY (#164)
+            // Last thing before the frame ends, so it covers the world AND the
+            // HUD - a health bar you cannot act on is just noise behind a menu.
+            //
+            // Dimmed rather than blacked out: online the arena behind this is
+            // still live, and hiding it would be a lie about what is happening
+            // to the body you left in it. The dim is heavy enough that it reads
+            // as a screen rather than a HUD, and light enough that you can see
+            // you are still out there.
+            if (paused) {
+                DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.78f));
+                DrawCentered("PAUSED", 240, 80, RAYWHITE);
+                int y = drawScoreTable(400, WHITE);
+                // The two lines the issue specifies, and the second one differs
+                // by who you are: ending the match is the host's to do, and a
+                // guest pressing the same key walks out of the room instead.
+                // Saying END to somebody who can only LEAVE would promise them
+                // authority over everyone else's game.
+                DrawCentered("[CLICK] OR [P] TO RESUME.", y + 10, 20, {0, 255, 200, 255});
+                DrawCentered(amMatchHost() ? "[Q] TO END MATCH." : "[Q] TO LEAVE MATCH.",
+                             y + 40, 20, RED);
+            }
 
         EndDrawing();
 
@@ -2628,20 +2757,11 @@ int main(int argc, char** argv) {
 
         
         if (networked) {
-            // Manual end (M), networked: only the host - "player 1", the lowest
-            // connected human slot, same rule as the START/OPTIONS gating - may
-            // end the match, for everyone. This just REQUESTS the end; the
-            // actual phase flip comes back from the server like any other match
-            // end (isHostConn is the server-side backstop), so all clients run
-            // the same game-over sequence below.
-            if (IsCursorHidden() && IsKeyPressed(KEY_M) && net.isOpen()) {
-                auto& ps = gameSpace.getPlayers();
-                int hostSlot = -1;
-                for (int i = 0; i < (int)ps.size(); i++)
-                    if (ps[i].isHost) { hostSlot = i; break; }
-                if (myIndex >= 0 && myIndex == hostSlot)
-                    net.send(serializeEndMatch());
-            }
+            // Ending a networked match is the host's [Q] on the PAUSE screen
+            // (#164) - it was a bare M press mid-flight. Either way it only
+            // REQUESTS the end; the phase flip comes back from the server like
+            // any other match end (isHostConn is the server-side backstop), so
+            // every client runs the same game-over sequence below.
 
             // Networked: the SERVER decides when the match ends (last-player-
             // standing, or the host's end-match request above). Mirror the local
@@ -2661,15 +2781,10 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            // Manual end: M sends the match straight to the GAME_OVER screen
-            // (no death-FX delay - this is a deliberate quit, not a death).
-            // The networked equivalent (host-only request, branch above) goes
-            // through the server instead. Gated on cursor capture like all
-            // other game input. Chosen key is far from the WASD cluster so it
-            // can't be fat-fingered mid-flight.
-            if (IsCursorHidden() && IsKeyPressed(KEY_M)) {
-                endLocalMatch();
-            }
+            // Manual end is [Q] on the PAUSE screen now (#164), which goes
+            // straight to GAME_OVER with no death-FX delay - a deliberate quit
+            // is not a death. It used to be a bare M press mid-flight, which
+            // ended the match on a single keystroke with nothing to confirm it.
 
             int remaining_players = 0;
             int remaining_humans = 0;
