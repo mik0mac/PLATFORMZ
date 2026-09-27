@@ -2239,7 +2239,23 @@ int main(int argc, char** argv) {
 
             // Player elimination bursts. Players are never erased (alive=false is
             // synced and persists), so a per-player flag stops the burst re-firing.
+            //
+            // An EMPTY slot has nothing to detonate (#159). A roster can hold
+            // slots no bot filled - the preset's maxBots, or BOTS switched off -
+            // and those arrive permanently !isAlive, so with deathBurstSpawned
+            // freshly cleared by enterNetworkedMatch every one of them fired a
+            // burst on the first frame of every match: seven orange explosions
+            // around the spawn point of an eight-slot room with one human in it.
+            //
+            // The local sim already refused them by isVacant (gamespace.h,
+            // updateActiveObjects); this is the same loop written a second time
+            // for the networked mirror, and the guard was only ever added to the
+            // first copy. isVacant does not cross the wire - the server folds it
+            // into the `active` flag, which lands here as isConnected - so that
+            // is the flag to ask. It stays TRUE for a mid-match leaver's open
+            // body, which is a real body and does still burst when it dies.
             for (Player& player : gameSpace.getPlayers()) {
+                if (!player.isConnected) continue;
                 if (!player.isAlive && !player.deathBurstSpawned) {
                     gameSpace.spawnEliminationBurst(player.position, player.color_outline);
                     player.deathBurstSpawned = true;
