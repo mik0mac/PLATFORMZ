@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "c=$(jq -r '.tool_input.command // \"\"'); case \"$c\" in *\"git commit\"*) b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); case \"$b\" in main|master) printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Refusing to commit on %s. Branch first: git checkout -b <name>, then commit.\"}}' \"$b\";; esac;; esac; exit 0",
+            "timeout": 10,
+            "statusMessage": "Checking branch..."
+          }
+        ]
+      }
+    ]
+  }
+}
