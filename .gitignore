@@ -24,3 +24,4 @@ dist/
 # Server-side score table, written next to the gameserver binary at runtime.
 server/scores
 server/scores.tmp
+scores
