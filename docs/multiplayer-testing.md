@@ -533,5 +533,5 @@ a second client in a specific room without clicking through FIND A MATCH.
 - `docs/deploy-vultr.md` — running the server on a public VPS.
 - `docs/perf-measurements.md` — what the server actually costs, measured.
 - `docs/matchmaking-plan.md` — where multi-match hosting and the match browser are going.
-- `docs/multiplayer-testing-archive.md` — the pre-lobby version of this doc.
+- `docs/archive/multiplayer-testing.md` — the pre-lobby version of this doc.
 - `server/test_client.html` — poke the protocol from a browser console without a client.

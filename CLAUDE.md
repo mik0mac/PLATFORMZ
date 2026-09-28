@@ -156,13 +156,15 @@ math-only raylib shims, so server and client physics are the same code. Clients
 reach it over WebSocket (JSON) or UDP (binary, `netbin.h`); the same server speaks
 both at once on one port.
 
-Four docs, and it is worth reading the right one before changing anything here:
+Five docs, and it is worth reading the right one before changing anything here:
 
 - `docs/matchmaking.md` — **the protocol reference**: rooms, codes, every message
   in both directions, every rate limit.
 - `docs/multiplayer-testing.md` — running and testing it locally, plus the
   headless probes and load harness (`server/test/`, `server/loadtest.cpp`).
 - `docs/deploy-vultr.md` — the public box, its env vars, and what it keeps on disk.
+- `docs/redeploy.md` — the command list for pushing a code change live. Commands
+  only; `deploy-vultr.md` is where the reasoning lives.
 - `docs/matchmaking-plan.md` — the design record for all of it, including the
   decisions that were *not* taken and why.
 

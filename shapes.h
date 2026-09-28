@@ -207,7 +207,7 @@ inline void DrawShadedPolyhedron(Vector3 center, float radius, const Vector3 ver
 }
 
 // Regular dodecahedron body, upright. (The jetpack exhaust plume was deprecated
-// and archived in docs/exhaust-plume-archive.md.)
+// and archived in docs/archive/exhaust-plume.md.)
 inline void DrawPlayerDodeca(const Player& player, DrawPass pass) {
     Color outline, fill;
     PlayerFlashColors(player, outline, fill);
@@ -222,7 +222,7 @@ inline void DrawPlayerDodeca(const Player& player, DrawPass pass) {
 }
 
 // The player renders as a regular dodecahedron. Earlier prototype silhouettes
-// (DART, DELTA, LANDER, POD) are archived in docs/player-shapes-archive.md.
+// (DART, DELTA, LANDER, POD) are archived in docs/archive/player-shapes.md.
 inline void DrawPlayer(const Player& player, DrawPass pass) {
     DrawPlayerDodeca(player, pass);
 }

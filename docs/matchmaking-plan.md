@@ -186,7 +186,7 @@ as `Match` members.** Globals that survive: `nextConnId`, `g_udp` +
 
 **Files:** `server/server_main.cpp`, new `server/match.h`.
 **Done when:** `make -C server` clean; the native + browser LAN tests in
-`docs/multiplayer-testing-archive.md` pass with no observable difference;
+`docs/archive/multiplayer-testing.md` pass with no observable difference;
 `git diff` shows no logic change, only re-homing.
 
 ---
@@ -1577,7 +1577,7 @@ the same list.
 lobby/START flow, both transports and how they differ, the `PLATFORMZ_KEY` gate,
 the scoreboard, and the trap that a bare `./platformz` connects to the *live*
 server because `secrets.mk` bakes the host in. The pre-lobby version stays at
-`docs/multiplayer-testing-archive.md` for its Emscripten build record.
+`docs/archive/multiplayer-testing.md` for its Emscripten build record.
 
 **~~Still owed: a "two matches, four clients, one server" section~~ — DONE.** It
 is in `multiplayer-testing.md`, written as what to *look for* rather than what to
@@ -1838,7 +1838,7 @@ Each issue carries its own "done when", but the end-to-end proof is:
 
 1. `make -C server && make` — both build clean. CI green (`build.yml`).
 2. **Two matches, four clients, one server** (procedure per
-   `docs/multiplayer-testing-archive.md` until E4 replaces it):
+   `docs/archive/multiplayer-testing.md` until E4 replaces it):
    run `./gameserver` locally; launch two native clients
    (`./platformz ws://localhost:9000`) and two browser clients
    (`make web && python3 -m http.server 8080` → `?server=ws://localhost:9000`).
