@@ -28,6 +28,16 @@ const float BOT_FUEL_REGEN_SCARCITY_RATIO = 0.25f; // regen below this fraction 
 const float BOT_BOUNCE_CHANCE = 0.3f; // probability Bounce actually engages on an eligible decision window - keeps it an occasional technique rather than the automatic fallback whenever SeekHighGround fails.
 const float BOT_CONSERVE_FUEL_CHANCE = 0.6f; // probability the whole fuel-conserving branch (SeekHighGround/Bounce) wins a movement decision when eligible, so combat/low-fuel-retreat still get regular turns instead of being starved for as long as there's somewhere to climb to.
 
+// Open space (walls OFF): nothing stops a fall but the jetpack, and falling past
+// the out-of-bounds line is elimination (#168).
+const float BOT_BOUNDS_MARGIN_FRAC = 0.25f; // StayInBounds keeps the bot this fraction of halfSize inside the arena edge - far enough up that there are still platforms BELOW it to land on, since climbing back is what a scarce tank can't afford.
+const float BOT_BRAKE_FUEL_RESERVE = 1.25f; // StayInBounds starts braking once the fuel it would take to stop the fall is within this factor of the tank.
+const float BOT_DIVE_FUEL_FRACTION = 0.5f;  // earth-gravity dives are refused once the descent reaches this fraction of the speed the tank can take off a fall.
+const float BOT_SAFE_LANDING_SPEED = 20.0f; // StayInBounds lets a bot drop onto a platform below this speed without braking (landing is free; much faster risks passing through a thin one).
+const float BOT_HAVEN_CLIMB_COST = 4.0f;    // StayInBounds' landing pick: each metre a platform sits ABOVE the bot counts as this many metres of sideways travel (falling is free, climbing burns scarce fuel).
+const float BOT_OPEN_SPACE_FUEL_RESERVE = 40.0f; // below this, only StayInBounds may use the jetpack - the rest of the tree walks, coasts, or waits on a platform; a bot StayInBounds landed also stays parked until it has this much.
+const float BOT_JETPACK_RESUME_FUEL = 10.0f; // a bot that ran its tank dry keeps off the jetpack until it has regenerated this much (see BotController::drive).
+
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
 // keeps the logic in one place since MoveToTarget and MoveToSafety both need it.
@@ -626,6 +636,167 @@ public:
         // The inward departure direction is never fully wall-blocked, so ignore the
         // cornered return; this also gives correct floor/ceiling lift-off.
         steerAlongWalls(bb, dir);
+        return Status::Running;
+    }
+};
+
+// Net upward acceleration of a full jetpack burn against moon gravity - how hard
+// a bot can brake a fall. Reads the OPTIONS multipliers ApplyPlayerInput mirrors
+// onto the player, so it follows JETPACK THRUST / SPEED BOOST.
+inline float botJetpackBrake(const Player& bot) {
+    return fmaxf(bot.accelerationJetpack * bot.speedBoost * bot.jetpackThrust - MOON_GRAVITY, 1.0f);
+}
+// Downward speed (m/s) the bot's remaining fuel can take off a fall.
+inline float botFuelDeltaV(const Player& bot, float fuelConsumptionRate) {
+    if (fuelConsumptionRate <= 0.0f) return std::numeric_limits<float>::max();
+    return bot.fuel / fuelConsumptionRate * botJetpackBrake(bot);
+}
+
+// Standing on (or bouncing in place on) platform p: inside its footprint and
+// within a small hop of its top. THE VOID's platforms are springy, so a bot
+// settling onto one is rarely at rest on any given frame.
+inline bool botOnPlatform(const Player& bot, const Platform& p) {
+    float top = p.position.y + 0.5f * p.size.y + bot.radius;
+    return fabsf(bot.position.x - p.position.x) < 0.5f * p.size.x &&
+           fabsf(bot.position.z - p.position.z) < 0.5f * p.size.z &&
+           bot.position.y > top - bot.radius && bot.position.y < top + 2.0f * BOT_VERTICAL_THRESHOLD;
+}
+
+//MARK: Stay In Bounds
+// Open space only (walls OFF): nothing stops a fall but the jetpack, and there
+// is no floor - past the out-of-bounds line a bot is eliminated (#168). At
+// scarce regen a tank refilling in mid-air cannot even out-thrust gravity, so
+// the one safe place to wait for fuel is standing on a platform.
+//
+// Engages while falling when either (a) a full burn started now would not stop
+// the fall above the arena's lower margin (BOT_BOUNDS_MARGIN_FRAC), or (b) in
+// the lower half, the fall is already close to all the tank can take off it;
+// when (c) the bot is out past the side margin and still heading out; or when
+// (d) it is standing on a platform in the lower half on a low tank. It then
+// makes for a platform it can reach - one below if there is one, since falling
+// is free and climbing is not - arriving rather than flying past, braking with
+// the jetpack only as late as a full burn allows (never earth gravity). It lets
+// go once the bot has landed or is rising back inside AND has refilled to
+// BOT_OPEN_SPACE_FUEL_RESERVE; until then a landed bot stays parked.
+//
+// A hard override: BotController runs it OUTSIDE the movement latch, so a fall
+// never waits out someone else's decision window.
+template <typename TargetT>
+class StayInBounds : public Node<TargetT> {
+    int stateId;
+public:
+    StayInBounds(int id) : stateId(id) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& s = bb.decisions[stateId]; // activeBranch: -1 idle / 1 engaged
+        if (bb.wallsEnabled) { s.activeBranch = -1; return Status::Failure; }
+
+        const Player& bot = bb.bot;
+        float half   = bb.walls.halfSize;
+        float edge   = half * (1.0f - BOT_BOUNDS_MARGIN_FRAC);
+        float vy     = bot.velocity.y;
+        bool  falling = vy < -1.0f; // a bot resting on a platform reads ~0, not exactly 0
+        float stopY  = falling ? bot.position.y - vy * vy / (2.0f * botJetpackBrake(bot)) : bot.position.y; // where a full burn from now would stop the fall
+        // (b) only in the lower half: higher up there is still room to regenerate
+        // on the way down, and braking there would just be a bot hovering.
+        bool fallingOut = falling && (stopY < -edge ||
+                          (bot.position.y < 0.0f && -vy * BOT_BRAKE_FUEL_RESERVE > botFuelDeltaV(bot, bb.fuelConsumptionRate)));
+        Vector3 flatPos{bot.position.x, 0.0f, bot.position.z};
+        Vector3 flatVel{bot.velocity.x, 0.0f, bot.velocity.z};
+        bool driftingOut = (fabsf(bot.position.x) > edge || fabsf(bot.position.z) > edge) &&
+                           Vector3DotProduct(flatPos, flatVel) > 0.0f;
+
+        if (s.activeBranch < 0) {
+            // (d) in the lower half, standing on a platform on a low tank: stay
+            // put. Stepping off it there is a fall the tank cannot catch.
+            bool parkLow = false;
+            if (bot.position.y < 0.0f && bot.fuel < BOT_OPEN_SPACE_FUEL_RESERVE && fabsf(vy) < BOT_SAFE_LANDING_SPEED)
+                for (const Platform& p : bb.allPlatforms)
+                    if (botOnPlatform(bot, p)) { parkLow = true; break; }
+            if (!fallingOut && !driftingOut && !parkLow) return Status::Failure;
+            s.activeBranch = 1;
+        }
+
+        // The haven: a platform anywhere inside the arena, the cheapest to reach
+        // - height ABOVE the bot counts BOT_HAVEN_CLIMB_COST times over. One the
+        // bot cannot actually reach is only taken when nothing else is left:
+        // above, that is stopping the fall and then rising that far on what is
+        // in the tank; below, it is getting there across the gap before gravity
+        // has taken it past the platform's height, with the tank buying some
+        // hover time on the way. None at all -> the middle of the arena, at the
+        // bot's own height.
+        float inside   = half - BOT_WALL_AVOID_BUFFER;
+        float fuelDv   = botFuelDeltaV(bot, bb.fuelConsumptionRate);
+        float walk     = fmaxf(bot.speedWalk * bot.speedBoost, 1.0f);
+        float down     = fmaxf(0.0f, -vy);
+        // Hovering takes a MOON_GRAVITY-sized share of the jetpack's thrust, and
+        // regen refunds some of that; a tank that out-regens the hover buys
+        // unlimited time.
+        float hoverBurn = bb.fuelConsumptionRate * MOON_GRAVITY / (botJetpackBrake(bot) + MOON_GRAVITY) - bb.fuelRegenRate;
+        float hoverTime = hoverBurn > 0.0f ? bot.fuel / hoverBurn : std::numeric_limits<float>::max();
+        const Platform* haven = nullptr;
+        float bestCost = std::numeric_limits<float>::max();
+        for (const Platform& p : bb.allPlatforms) {
+            float top = p.position.y + 0.5f * p.size.y + bot.radius;
+            if (top < -inside || fabsf(p.position.x) > inside || fabsf(p.position.z) > inside) continue;
+            float across = hypotf(p.position.x - bot.position.x, p.position.z - bot.position.z);
+            float climb  = fmaxf(0.0f, top - bot.position.y);
+            float cost   = across + BOT_HAVEN_CLIMB_COST * climb;
+            bool  reachable;
+            if (climb > 0.0f) {
+                reachable = down + sqrtf(2.0f * MOON_GRAVITY * climb) <= fuelDv;
+            } else {
+                float t = fmaxf(0.0f, across / walk - hoverTime); // unpowered part of the trip
+                reachable = down * t + 0.5f * MOON_GRAVITY * t * t <= bot.position.y - top;
+            }
+            if (!reachable) cost += 1e6f; // last resort only
+            if (cost < bestCost) { bestCost = cost; haven = &p; }
+        }
+        Vector3 goal = haven ? Vector3{haven->position.x, haven->position.y + 0.5f * haven->size.y + bot.radius, haven->position.z}
+                             : Vector3{0.0f, bot.position.y, 0.0f};
+        Vector3 toGoal{goal.x - bot.position.x, 0.0f, goal.z - bot.position.z};
+        float hDist = Vector3Length(toGoal);
+
+        // Let go once it is safe - rising back inside, or landed on the haven -
+        // AND has enough in the tank to be worth moving again. Landed short of
+        // that, stay parked (the rest of the tree would walk it off the edge on
+        // an empty tank): centred, no jetpack, waiting on regen. A bounce off a
+        // springy platform is "rising" too, which is why the fuel test covers
+        // both.
+        float clear = edge - BOT_WALL_CLEAR_MARGIN;
+        bool overHaven = haven && fabsf(bot.position.x - haven->position.x) < 0.5f * haven->size.x &&
+                                  fabsf(bot.position.z - haven->position.z) < 0.5f * haven->size.z &&
+                                  bot.position.y > goal.y - bot.radius;
+        bool landed = haven && botOnPlatform(bot, *haven) && fabsf(vy) < BOT_SAFE_LANDING_SPEED;
+        bool rising = vy >= 0.0f && bot.position.y > -clear &&
+                      fabsf(bot.position.x) < clear && fabsf(bot.position.z) < clear;
+        if ((rising || landed) && bot.fuel >= BOT_OPEN_SPACE_FUEL_RESERVE) { s.activeBranch = -1; return Status::Failure; }
+
+        // Arrive, don't fly past: aim for the horizontal speed that can still
+        // stop in the distance left (v = sqrt(2*a*d)) and steer the velocity
+        // toward it. moveAxis only picks a direction, so this is what makes a
+        // bot slow down over a platform it would otherwise overshoot.
+        float accel = bot.accelerationWalk * bot.speedBoost;
+        Vector3 wantVel = hDist > 1e-3f
+            ? Vector3Scale(toGoal, fminf(bot.speedWalk * bot.speedBoost, sqrtf(2.0f * accel * hDist)) / hDist)
+            : Vector3{0.0f, 0.0f, 0.0f};
+        Vector3 steer = Vector3Subtract(wantVel, flatVel);
+        if (Vector3Length(steer) > 1.0f) {
+            steer = Vector3Normalize(steer);
+            bb.out.moveAxis.y = Vector3DotProduct(steer, bot.ForwardFlat());
+            bb.out.moveAxis.x = Vector3DotProduct(steer, bot.Right());
+        } else {
+            bb.out.moveAxis = {0.0f, 0.0f};
+        }
+        // Climb while below the goal. Above it, coast down: over the platform,
+        // hitting it is the brake (it costs nothing) unless the fall is fast
+        // enough to risk passing through; short of it, brake only once a full
+        // burn is what it takes to arrive rather than overshoot - fuel spent on
+        // stopping, not on hovering.
+        if (landed)                      bb.out.jetpack = false;
+        else if (bot.position.y < goal.y) bb.out.jetpack = vy < BOT_VERTICAL_THRESHOLD;
+        else if (overHaven)              bb.out.jetpack = -vy > BOT_SAFE_LANDING_SPEED && stopY < goal.y + BOT_VERTICAL_THRESHOLD;
+        else                             bb.out.jetpack = stopY < goal.y + BOT_VERTICAL_THRESHOLD;
+        bb.out.earthGravity = false;
         return Status::Running;
     }
 };

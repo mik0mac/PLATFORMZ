@@ -238,8 +238,8 @@ scrolled out of view would still take a click.
 - **Player is authoritative; the camera derives from it**, never the reverse.
 - **Units:** 1 unit = 1 meter. Gravity constants live in `constants.h` (match
   RULES and their defaults live in `options.h` — see above)
-  (`MOON_GRAVITY = 3.25`, `EARTH_GRAVITY = 19.61` — tuned up from the real
-  1.62/9.81 for game feel); hold Left Shift for earth gravity. Gravity is
+  (`MOON_GRAVITY` = 6.48, `EARTH_GRAVITY` = 39.24 — the real 1.62/9.81 times
+  `GRAVITY_SCALE` 4, for game feel); hold Left Shift for earth gravity. Gravity is
   applied once, in `Player::updateVelocity`.
 - Files are sectioned with `//MARK:` comments.
 - raylib/raymath helpers are preferred for color/vector math (e.g.
