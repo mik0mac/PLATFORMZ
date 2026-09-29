@@ -92,6 +92,12 @@ const float GRAVITY_SCALE = 4.0f;
 const float MOON_GRAVITY = 1.62f * GRAVITY_SCALE; // moon gravity, m/s^2 (assuming 1 unit = 1 meter)
 const float EARTH_GRAVITY = 9.81f * GRAVITY_SCALE; // earth gravity, m/s^2 * 2
 const bool ORIGIN_GRAVITY = false; // if true {0, 0, 0} is a gravity attractor.
+// Longest step the LOCAL sim takes in one frame (#169). A hitch - the first frame
+// of a match, a backgrounded browser tab - would otherwise hand the physics a dt
+// of a second or more, long enough to fall straight through a platform in one
+// step. A longer frame just runs the world in slow motion for that frame. The
+// server ticks at a fixed 1/60 s and never needs this.
+const float LOCAL_SIM_MAX_DT = 0.05f;
 
 //MARK: GameSpace Constants
 // These are only class defaults - each match overrides them with a mapSizePreset (options.h), applied in main.cpp's startGame.

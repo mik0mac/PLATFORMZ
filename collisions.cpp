@@ -551,8 +551,27 @@ void CheckPlayerPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
                 // overlapping, which previously flipped velocity.y back and
                 // forth and killed the bounce.
                 bool earthGravityPassThrough = EARTH_GRAVITY_PASS_THROUGH_PLATFORMS && player.earthGravityEnabled;
-                if (player.velocity.y < 0.0f && (player.position.y + player.radius) > (platform.position.y + (platform.size.y / 2.0f))
+                float top = platform.position.y + platform.size.y / 2.0f;
+                if (player.velocity.y < 0.0f && (player.position.y + player.radius) > top
                                                 && !earthGravityPassThrough) {
+                    // Lift the body back out onto the surface (#169). Stopping
+                    // the fall without undoing this frame's step let a standing
+                    // player sink one gravity step every frame - about 8 cm/s -
+                    // until, some 45 s in, they slipped out the bottom. Only for
+                    // a body that was above the surface last frame: one that
+                    // came up from underneath and stalled inside keeps the old
+                    // response rather than being popped up through the slab.
+                    // The height is where the sphere just touches the slab, so
+                    // a body resting over the edge sits on the corner instead
+                    // of being lifted a full radius into the air beside it.
+                    float lastY = player.prevYValid ? player.prevY : player.position.y;
+                    if (lastY >= top) {
+                        Vector3 half = Vector3Scale(platform.size, 0.5f);
+                        float dx = fmaxf(fabsf(player.position.x - platform.position.x) - half.x, 0.0f);
+                        float dz = fmaxf(fabsf(player.position.z - platform.position.z) - half.z, 0.0f);
+                        float over = player.radius * player.radius - dx * dx - dz * dz;
+                        if (over > 0.0f) player.position.y = fmaxf(player.position.y, top + sqrtf(over));
+                    }
                     if (platform.isBouncy) {
                         // player bounces off the platform.
                         player.velocity.y = -player.velocity.y * platform.elasticityPlayer; // bounce up
