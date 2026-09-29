@@ -32,7 +32,8 @@ struct BotController {
                    LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
                    LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD,
                    LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_BOUNCE_CHANCE,
-                   LATCH_CONSERVE_CHANCE, LATCH_COUNT };
+                   LATCH_CONSERVE_CHANCE, LATCH_STAY_IN_BOUNDS,
+                   LATCH_CLIMB, LATCH_CLIMB_BASE, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -50,6 +51,8 @@ struct BotController {
     Idle<Player>           idle;
     SeekHighGround<Player>   seekHighGround;
     Bounce<Player>          bounce;
+    StayInBounds<Player>    stayInBounds{ LATCH_STAY_IN_BOUNDS };
+    ClimbHigher<Player>     climbHigher{ LATCH_CLIMB, LATCH_CLIMB_BASE };
 
     // --- Composed tree (declaration order matters: composites reference the
     // addresses of nodes declared above; members initialise top-to-bottom). ---
@@ -127,12 +130,21 @@ struct BotController {
     // branch would otherwise run - duplicate reference is safe, it's a stateless
     // per-tick check (same pattern as moveToSafety/attack above).
     LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &avoidAsteroid, &maybeDefend, &maybeConserveFuel, &lowFuelResponse, &attack } };
-    Parallel<Player>               botTree{ { &movement, &fireAtTarget } };
+    // stayInBounds (open space only) sits ahead of movement in a plain Selector,
+    // not inside the latch: a fall out of the arena can't wait up to a whole
+    // decision window for movement to re-decide. climbHigher goes ahead of even
+    // that: it only takes a bot that is standing on a platform, and a climb in
+    // progress dives on purpose (the pump), which stayInBounds would read as a
+    // fall to stop. When a climb fails it lets go, and stayInBounds catches.
+    Selector<Player>               body{ { &climbHigher, &stayInBounds, &movement } };
+    Parallel<Player>               botTree{ { &body, &fireAtTarget } };
 
     // --- Per-slot state, indexed BY PLAYER INDEX (slot 0's entry is simply
     // unused wherever slot 0 is a human). ---
     std::vector<std::vector<BotDecision>> decisions; // per slot -> one BotDecision per LatchedSelector (LATCH_COUNT slots)
     std::vector<BotProfile>               profiles;  // per slot -> personality (aggression/accuracy)
+    std::vector<float>                    fireHold;  // per slot -> seconds before this bot may fire (BOT_FIRST_FIRE_DELAY at match start)
+    std::vector<bool>                     tankDry;   // per slot -> ran the tank dry; off the jetpack until BOT_JETPACK_RESUME_FUEL
 
     // Size the per-slot state to the player count and seed each slot's
     // personality deterministically from its player id, so the same map replays
@@ -142,6 +154,8 @@ struct BotController {
         int n = (int)players.size();
         decisions.assign(n, std::vector<BotDecision>(LATCH_COUNT));
         profiles.assign(n, BotProfile{});
+        fireHold.assign(n, BOT_FIRST_FIRE_DELAY);
+        tankDry.assign(n, false);
         // Personality spread widens with bot count: a lone bot ~= difficulty,
         // a crowd fans out around it. n-1 potential bots (slot 0 reserved for the
         // human in local mode) matches the previous local-mode spread.
@@ -191,6 +205,32 @@ struct BotController {
                                          botTree, dt, decisions[i], profiles[i],
                                          rocketSpeed, explosionRadius,
                                          wallsEnabled, fuelConsumptionRate, fuelRegenRate);
+            Player& bot = players[i];
+            // #160: no shots until BOT_FIRST_FIRE_DELAY into the match. The tree
+            // still aims, so the first shot after the hold is a considered one.
+            if (fireHold[i] > 0.0f) { fireHold[i] -= dt; botIn.fire = false; }
+            // A held jetpack on an empty tank neither thrusts (updateVelocity
+            // wants canJetpack()) nor regenerates (updateFuel burns any fuel at
+            // all while it is held) - so a bot that kept asking for thrust on
+            // empty stayed empty for good. Let go once it runs dry, the way a
+            // player does, until there is enough back to be worth a burn.
+            if (!bot.canJetpack()) tankDry[i] = true;
+            else if (bot.fuel >= BOT_JETPACK_RESUME_FUEL) tankDry[i] = false;
+            if (tankDry[i]) botIn.jetpack = false;
+            // Open space: the last of the tank belongs to stayInBounds - it is
+            // what stops the fall every other branch's jetpack use ends in. A
+            // climbHigher climb is exempt: it budgets its own fuel, and ends on
+            // a platform.
+            bool rescuing = decisions[i][LATCH_STAY_IN_BOUNDS].activeBranch == 1;
+            bool climbing = decisions[i][LATCH_CLIMB].activeBranch >= 0;
+            if (!wallsEnabled && !rescuing && !climbing && bot.fuel < BOT_OPEN_SPACE_FUEL_RESERVE) botIn.jetpack = false;
+            // Open space (#168): an earth-gravity dive builds a fall the jetpack
+            // may not be able to take back, and there is no floor to stop it.
+            // Refuse the dive once the descent nears what the tank can arrest.
+            // (A climb's pump dive is over its own platform, so it is exempt.)
+            if (!wallsEnabled && botIn.earthGravity && !climbing &&
+                -bot.velocity.y > BOT_DIVE_FUEL_FRACTION * botFuelDeltaV(bot, fuelConsumptionRate))
+                botIn.earthGravity = false;
             float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;
             ApplyPlayerInput(players[i], botIn, dt, gravity, gs);
         }

@@ -28,6 +28,29 @@ const float BOT_FUEL_REGEN_SCARCITY_RATIO = 0.25f; // regen below this fraction 
 const float BOT_BOUNCE_CHANCE = 0.3f; // probability Bounce actually engages on an eligible decision window - keeps it an occasional technique rather than the automatic fallback whenever SeekHighGround fails.
 const float BOT_CONSERVE_FUEL_CHANCE = 0.6f; // probability the whole fuel-conserving branch (SeekHighGround/Bounce) wins a movement decision when eligible, so combat/low-fuel-retreat still get regular turns instead of being starved for as long as there's somewhere to climb to.
 
+// Open space (walls OFF): nothing stops a fall but the jetpack, and falling past
+// the out-of-bounds line is elimination (#168).
+const float BOT_BOUNDS_MARGIN_FRAC = 0.25f; // StayInBounds keeps the bot this fraction of halfSize inside the arena edge - far enough up that there are still platforms BELOW it to land on, since climbing back is what a scarce tank can't afford.
+const float BOT_BRAKE_FUEL_RESERVE = 1.25f; // StayInBounds starts braking once the fuel it would take to stop the fall is within this factor of the tank.
+const float BOT_DIVE_FUEL_FRACTION = 0.5f;  // earth-gravity dives are refused once the descent reaches this fraction of the speed the tank can take off a fall.
+const float BOT_VELOCITY_DEADBAND = 1.0f;   // steerVelocity stops pushing once the velocity is within this many m/s of what it wants (no jitter around the target).
+const float BOT_SAFE_LANDING_SPEED = 20.0f; // StayInBounds lets a bot drop onto a platform below this speed without braking (landing is free; much faster risks passing through a thin one).
+const float BOT_HAVEN_CLIMB_COST = 4.0f;    // StayInBounds' landing pick: each metre a platform sits ABOVE the bot counts as this many metres of sideways travel (falling is free, climbing burns scarce fuel).
+const float BOT_OPEN_SPACE_FUEL_RESERVE = 40.0f; // below this, only StayInBounds may use the jetpack - the rest of the tree walks, coasts, or waits on a platform; a bot StayInBounds landed also stays parked until it has this much.
+const float BOT_JETPACK_RESUME_FUEL = 10.0f; // a bot that ran its tank dry keeps off the jetpack until it has regenerated this much (see BotController::drive).
+
+// Climbing to higher ground when fuel is scarce (ClimbHigher).
+const float BOT_HIGH_GROUND_LINE_FRAC = 0.0f; // a platform whose top is below this fraction of halfSize (0 = the arena's middle) is low ground a bot should climb out of.
+const float BOT_CLIMB_MIN_GAIN = 10.0f;      // a climb target must be at least this much higher than the platform the bot is on.
+const float BOT_CLIMB_MAX_GAIN_FRAC = 0.4f;  // ...and at most this fraction of halfSize higher.
+const float BOT_CLIMB_MAX_REACH = 80.0f;     // ...and at most this far away horizontally.
+const float BOT_CLIMB_DIST_WEIGHT = 0.5f;    // target pick: score = height gained - this * horizontal distance.
+const float BOT_CLIMB_FUEL_MARGIN = 10.0f;   // a jetpack hop is only tried with this much fuel left over after it.
+const float BOT_CLIMB_TIMEOUT = 30.0f;       // give up on a climb that has not launched after this many seconds - or, once launched, has not landed after this many more.
+const float BOT_CLIMB_RETRY_SECONDS = 3.0f;  // after a failed climb, wait this long before trying again.
+const float BOT_PUMP_MIN_GAIN = 1.5f;        // pump-bouncing is only used when each bounce multiplies the height by at least this much (e^2 * EARTH/MOON gravity).
+const float BOT_PUMP_KICK_SPEED = 4.0f;      // a bot at rest starts a pump with a jetpack kick to this upward speed (~5 fuel).
+
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
 // keeps the logic in one place since MoveToTarget and MoveToSafety both need it.
@@ -227,6 +250,80 @@ public:
     virtual ~Node() = default;
     virtual Status tick(Blackboard<TargetT>& bb) = 0;
 };
+//MARK: Horizontal drive
+// Every movement node ends in out.moveAxis, and what moveAxis DOES depends on the
+// match's COAST MODE (Player::updateVelocity):
+//  - friction (coast OFF): horizontal velocity eases toward moveAxis * cruise
+//    speed, and a zero moveAxis eases it to a stop. A direction is a complete
+//    instruction, and "write nothing" means "stand still".
+//  - coast (ON - the default): moveAxis only adds acceleration and nothing ever
+//    takes speed away. Zero input keeps the bot drifting at whatever it has, and
+//    a new heading is added ON TOP of the old velocity rather than replacing it.
+// The nodes predate coast mode, so they state intent through these helpers:
+// each one is the old friction code verbatim when coast is off, and the coast
+// equivalent - steering the VELOCITY, not just the input - when it is on.
+
+// World-space direction -> local moveAxis (its vertical part is ignored).
+template <typename TargetT>
+inline void setMoveDir(Blackboard<TargetT>& bb, Vector3 dir) {
+    bb.out.moveAxis.y = Vector3DotProduct(dir, bb.bot.ForwardFlat());
+    bb.out.moveAxis.x = Vector3DotProduct(dir, bb.bot.Right());
+}
+
+// Thrust along (wantVel - velocity), horizontally, so the velocity converges on
+// wantVel. Correct in both modes; in coast it is the only way to turn or stop.
+template <typename TargetT>
+inline void steerVelocity(Blackboard<TargetT>& bb, Vector3 wantVel) {
+    Vector3 err{wantVel.x - bb.bot.velocity.x, 0.0f, wantVel.z - bb.bot.velocity.z};
+    if (Vector3Length(err) > BOT_VELOCITY_DEADBAND) setMoveDir(bb, Vector3Normalize(err));
+    else bb.out.moveAxis = {0.0f, 0.0f};
+}
+
+// Stand still horizontally. Friction: no input, and friction stops the bot.
+// Coast: brake against the drift - no input would carry it on forever.
+template <typename TargetT>
+inline void holdPosition(Blackboard<TargetT>& bb) {
+    if (bb.bot.coastMode) steerVelocity(bb, Vector3{0.0f, 0.0f, 0.0f});
+    else bb.out.moveAxis = {0.0f, 0.0f};
+}
+
+// Travel along `dir` (world space, need not be normalized or flat). Friction:
+// moveAxis = dir, as the nodes always did. Coast: steer the velocity to dir's
+// horizontal part at cruise speed, which also bleeds off the sideways drift a
+// previous heading left behind (and a mostly-vertical dir asks for little
+// horizontal speed, instead of a full-speed sideways push).
+template <typename TargetT>
+inline void driveToward(Blackboard<TargetT>& bb, Vector3 dir) {
+    if (!bb.bot.coastMode) { setMoveDir(bb, dir); return; }
+    float len = Vector3Length(dir);
+    if (len < 1e-6f) { holdPosition(bb); return; }
+    float cruise = bb.bot.speedWalk * bb.bot.speedBoost;
+    steerVelocity(bb, Vector3{dir.x / len * cruise, 0.0f, dir.z / len * cruise});
+}
+
+// Come to a stop `standoff` short of `point` (horizontally): the speed that can
+// still stop in the distance left, v = sqrt(2*a*d), capped at cruise. Used by
+// every node in coast mode, and by StayInBounds in both modes (it cannot
+// afford friction's overshoot above a platform).
+template <typename TargetT>
+inline void arriveAt(Blackboard<TargetT>& bb, Vector3 point, float standoff = 0.0f) {
+    const Player& bot = bb.bot;
+    Vector3 to{point.x - bot.position.x, 0.0f, point.z - bot.position.z};
+    float d = Vector3Length(to);
+    if (d < 1e-3f) { steerVelocity(bb, Vector3{0.0f, 0.0f, 0.0f}); return; }
+    float accel = bot.accelerationWalk * bot.speedBoost;
+    float speed = fminf(bot.speedWalk * bot.speedBoost, sqrtf(2.0f * accel * fmaxf(0.0f, d - standoff)));
+    steerVelocity(bb, Vector3Scale(to, speed / d));
+}
+
+// Go to `point` and stop there. Friction: head straight for it and let friction
+// do the stopping, as before. Coast: arriveAt, since nothing else will stop it.
+template <typename TargetT>
+inline void approach(Blackboard<TargetT>& bb, Vector3 point, float standoff = 0.0f) {
+    if (bb.bot.coastMode) arriveAt(bb, point, standoff);
+    else setMoveDir(bb, Vector3Normalize(Vector3Subtract(point, bb.bot.position)));
+}
+
 // MARK: Find Line of Sight
 template <typename TargetT>
 class FindLineOfSight : public Node<TargetT> {
@@ -238,7 +335,7 @@ public:
         Vector3 blockerPerp;
         const Platform* blocker = platformBlockingSegment(bb.bot.position, bb.target.position,
                                                           bb.allPlatforms, bb.bot.radius, &blockerPerp, bb.explosionRadius);
-        if (!blocker) return Status::Success; // clear line of sight — hold and snipe
+        if (!blocker) { holdPosition(bb); return Status::Success; } // clear line of sight — hold and snipe
 
         Vector3 los = Vector3Normalize(Vector3Subtract(bb.target.position, bb.bot.position));
 
@@ -255,10 +352,7 @@ public:
             strafe = Vector3Normalize(strafe);
         }
 
-        Vector3 fwd = bb.bot.ForwardFlat();
-        Vector3 right = bb.bot.Right();
-        bb.out.moveAxis.y = Vector3DotProduct(strafe, fwd);
-        bb.out.moveAxis.x = Vector3DotProduct(strafe, right);
+        driveToward(bb, strafe);
         // strafe.y != 0 when going over/under is the shorter way off the ray;
         // applyVerticalIntent realizes that via jetpack/earthGravity.
         applyVerticalIntent(bb.bot.position.y, bb.bot.position.y + strafe.y, bb.out);
@@ -276,8 +370,10 @@ public:
 
         // Already behind cover? (a platform covers the bot<->target segment) — hold
         // position; the top Parallel keeps firing back from cover.
-        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius, nullptr, bb.explosionRadius))
+        if (platformBlockingSegment(bb.bot.position, bb.target.position, bb.allPlatforms, bb.bot.radius, nullptr, bb.explosionRadius)) {
+            holdPosition(bb);
             return Status::Success;
+        }
 
         // Otherwise pick the closest platform and move to its far side from the target.
         const Platform* closest = nullptr;
@@ -294,11 +390,7 @@ public:
         targetToPlat = Vector3Normalize(targetToPlat);
         Vector3 coveredPos = Vector3Add(closest->position, Vector3Scale(targetToPlat, bb.explosionRadius));
 
-        Vector3 dir = Vector3Normalize(Vector3Subtract(coveredPos, bb.bot.position));
-        Vector3 fwd = bb.bot.ForwardFlat();
-        Vector3 right = bb.bot.Right();
-        bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
-        bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+        approach(bb, coveredPos);
         applyVerticalIntent(bb.bot.position.y, coveredPos.y, bb.out);
         return Status::Running;
     }
@@ -319,13 +411,18 @@ public:
         // Aggressive bots close right in (smaller stop distance); timid bots
         // hold their distance. aggression 0 -> 1.5x baseline, 1 -> 0.5x.
         float stopDist = BOT_ATTACK_DISTANCE * (1.5f - bb.profile.aggression);
-        if (dist < stopDist) return Status::Success; // close enough, stop closing in
-        // Determine the Bot's next move.
-        Vector3 dir = Vector3Normalize(toTarget);
-        Vector3 fwd = bb.bot.ForwardFlat();
-        Vector3 right = bb.bot.Right();
-        bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
-        bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+        // Close enough: stop closing in. In coast mode that takes braking, or
+        // the bot would sail on into the target's face (or past it).
+        if (dist < stopDist) { holdPosition(bb); return Status::Success; }
+        // Friction mode runs in at full speed and friction's braking carries the
+        // bot about v^2/2a further in once it crosses stopDist. Coast mode aims
+        // for that same resting point - crossing stopDist still at speed, then
+        // holdPosition brakes it - rather than creeping up on the stopDist
+        // line and never quite crossing it, which left coasting bots sniping
+        // from noticeably further out.
+        float cruise = bb.bot.speedWalk * bb.bot.speedBoost;
+        float brakeDist = cruise * cruise / (2.0f * bb.bot.accelerationWalk * bb.bot.speedBoost);
+        approach(bb, bb.target.position, fmaxf(0.0f, stopDist - brakeDist));
         applyVerticalIntent(bb.bot.position.y, bb.target.position.y, bb.out);
         return Status::Running;
     }
@@ -384,13 +481,9 @@ public:
         // might need to add something to counteract the bot's momentum if it is also moving horizontally.
 
         // considered successful if the bot is at the target point (within its radius).  Third arg is the threshold for equality.
-        if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) return Status::Success; // on platform, done
+        if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) { holdPosition(bb); return Status::Success; } // on platform, done
 
-        Vector3 dir = Vector3Normalize(Vector3Subtract(landingPosition, bb.bot.position));
-        Vector3 fwd = bb.bot.ForwardFlat();
-        Vector3 right = bb.bot.Right();
-        bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
-        bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+        approach(bb, landingPosition);
         applyVerticalIntent(bb.bot.position.y, landingPosition.y, bb.out);
         return Status::Running;
     }
@@ -401,7 +494,7 @@ template <typename TargetT>
 class Idle : public Node<TargetT> {
 public:
     Status tick(Blackboard<TargetT>& bb) override {
-        bb.out.moveAxis = {0, 0};
+        holdPosition(bb); // coast mode: brake, or "idle" is a drift off the platform
         bb.out.jetpack = false;
         bb.out.earthGravity = false;
         return Status::Success; // idle is a valid resting state, not an ongoing action
@@ -451,8 +544,9 @@ inline bool steerAlongWalls(Blackboard<TargetT>& bb, Vector3 dir) {
     if ((dir.z < 0.0f && p.z < -bound) || (dir.z > 0.0f && p.z > bound)) dir.z = 0.0f;
     if (Vector3LengthSqr(dir) <= 1e-6f) return false;            // cornered on every escape axis
     dir = Vector3Normalize(dir);
-    bb.out.moveAxis.y = Vector3DotProduct(dir, bb.bot.ForwardFlat());
-    bb.out.moveAxis.x = Vector3DotProduct(dir, bb.bot.Right());
+    // In coast mode this also brakes the velocity along an axis zeroed above -
+    // zeroing the INPUT alone would let the bot keep sliding into the wall.
+    driveToward(bb, dir);
     // Scale the vertical target by halfSize so a normalized dir.y clears the
     // BOT_VERTICAL_THRESHOLD deadzone (|dir.y| > ~0.125 => thrust), reusing
     // applyVerticalIntent rather than re-implementing the jetpack/gravity choice.
@@ -608,16 +702,27 @@ public:
         float triggerBound = bb.walls.halfSize - BOT_WALL_AVOID_BUFFER;
         float releaseBound = triggerBound - BOT_WALL_CLEAR_MARGIN; // deeper inside => hysteresis
 
+        // Coast mode: nothing slows a bot heading for a wall, so judge by where
+        // it would come to a stop (v^2/2a further on), not where it is now - a
+        // coasting bot covers the buffer in a fraction of a second. Friction
+        // mode keeps judging by position, as before.
+        Vector3 probe = pos;
+        if (bb.bot.coastMode) {
+            Vector3 hv{bb.bot.velocity.x, 0.0f, bb.bot.velocity.z};
+            float accel = bb.bot.accelerationWalk * bb.bot.speedBoost;
+            probe = Vector3Add(pos, Vector3Scale(hv, Vector3Length(hv) / (2.0f * accel)));
+        }
+
         if (s.activeBranch < 0) {                       // idle: engage only when near a wall
-            if (Vector3LengthSqr(inwardNormal(pos, triggerBound)) <= 0.0f) return Status::Failure;
+            if (Vector3LengthSqr(inwardNormal(probe, triggerBound)) <= 0.0f) return Status::Failure;
             s.activeBranch = 1;
             s.interval = RandomFloat(-1.0f, 1.0f);      // latched lateral wander bias for this departure
-        } else if (Vector3LengthSqr(inwardNormal(pos, releaseBound)) <= 0.0f) {
+        } else if (Vector3LengthSqr(inwardNormal(probe, releaseBound)) <= 0.0f) {
             s.activeBranch = -1;                         // cleared the wall by the margin: hand back to attack
             return Status::Failure;
         }
 
-        Vector3 n = Vector3Normalize(inwardNormal(pos, releaseBound));
+        Vector3 n = Vector3Normalize(inwardNormal(probe, releaseBound));
         Vector3 tan = Vector3CrossProduct(n, {0.0f, 1.0f, 0.0f});
         if (Vector3LengthSqr(tan) < 1e-4f) tan = Vector3CrossProduct(n, {1.0f, 0.0f, 0.0f}); // n ~ up (floor/ceiling)
         tan = Vector3Normalize(tan);
@@ -626,6 +731,152 @@ public:
         // The inward departure direction is never fully wall-blocked, so ignore the
         // cornered return; this also gives correct floor/ceiling lift-off.
         steerAlongWalls(bb, dir);
+        return Status::Running;
+    }
+};
+
+// Net upward acceleration of a full jetpack burn against moon gravity - how hard
+// a bot can brake a fall. Reads the OPTIONS multipliers ApplyPlayerInput mirrors
+// onto the player, so it follows JETPACK THRUST / SPEED BOOST.
+inline float botJetpackBrake(const Player& bot) {
+    return fmaxf(bot.accelerationJetpack * bot.speedBoost * bot.jetpackThrust - MOON_GRAVITY, 1.0f);
+}
+// Downward speed (m/s) the bot's remaining fuel can take off a fall.
+inline float botFuelDeltaV(const Player& bot, float fuelConsumptionRate) {
+    if (fuelConsumptionRate <= 0.0f) return std::numeric_limits<float>::max();
+    return bot.fuel / fuelConsumptionRate * botJetpackBrake(bot);
+}
+
+// Standing on (or bouncing in place on) platform p: inside its footprint and
+// within a small hop of its top. THE VOID's platforms are springy, so a bot
+// settling onto one is rarely at rest on any given frame.
+inline bool botOnPlatform(const Player& bot, const Platform& p) {
+    float top = p.position.y + 0.5f * p.size.y + bot.radius;
+    return fabsf(bot.position.x - p.position.x) < 0.5f * p.size.x &&
+           fabsf(bot.position.z - p.position.z) < 0.5f * p.size.z &&
+           bot.position.y > top - bot.radius && bot.position.y < top + 2.0f * BOT_VERTICAL_THRESHOLD;
+}
+
+//MARK: Stay In Bounds
+// Open space only (walls OFF): nothing stops a fall but the jetpack, and there
+// is no floor - past the out-of-bounds line a bot is eliminated (#168). At
+// scarce regen a tank refilling in mid-air cannot even out-thrust gravity, so
+// the one safe place to wait for fuel is standing on a platform.
+//
+// Engages while falling when either (a) a full burn started now would not stop
+// the fall above the arena's lower margin (BOT_BOUNDS_MARGIN_FRAC), or (b) in
+// the lower half, the fall is already close to all the tank can take off it;
+// when (c) the bot is out past the side margin and still heading out; or when
+// (d) it is standing on a platform in the lower half on a low tank. It then
+// makes for a platform it can reach - one below if there is one, since falling
+// is free and climbing is not - arriving rather than flying past, braking with
+// the jetpack only as late as a full burn allows (never earth gravity). It lets
+// go once the bot has landed or is rising back inside AND has refilled to
+// BOT_OPEN_SPACE_FUEL_RESERVE; until then a landed bot stays parked.
+//
+// A hard override: BotController runs it OUTSIDE the movement latch, so a fall
+// never waits out someone else's decision window.
+template <typename TargetT>
+class StayInBounds : public Node<TargetT> {
+    int stateId;
+public:
+    StayInBounds(int id) : stateId(id) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& s = bb.decisions[stateId]; // activeBranch: -1 idle / 1 engaged
+        if (bb.wallsEnabled) { s.activeBranch = -1; return Status::Failure; }
+
+        const Player& bot = bb.bot;
+        float half   = bb.walls.halfSize;
+        float edge   = half * (1.0f - BOT_BOUNDS_MARGIN_FRAC);
+        float vy     = bot.velocity.y;
+        bool  falling = vy < -1.0f; // a bot resting on a platform reads ~0, not exactly 0
+        float stopY  = falling ? bot.position.y - vy * vy / (2.0f * botJetpackBrake(bot)) : bot.position.y; // where a full burn from now would stop the fall
+        // (b) only in the lower half: higher up there is still room to regenerate
+        // on the way down, and braking there would just be a bot hovering.
+        bool fallingOut = falling && (stopY < -edge ||
+                          (bot.position.y < 0.0f && -vy * BOT_BRAKE_FUEL_RESERVE > botFuelDeltaV(bot, bb.fuelConsumptionRate)));
+        Vector3 flatPos{bot.position.x, 0.0f, bot.position.z};
+        Vector3 flatVel{bot.velocity.x, 0.0f, bot.velocity.z};
+        bool driftingOut = (fabsf(bot.position.x) > edge || fabsf(bot.position.z) > edge) &&
+                           Vector3DotProduct(flatPos, flatVel) > 0.0f;
+
+        if (s.activeBranch < 0) {
+            // (d) in the lower half, standing on a platform on a low tank: stay
+            // put. Stepping off it there is a fall the tank cannot catch.
+            bool parkLow = false;
+            if (bot.position.y < 0.0f && bot.fuel < BOT_OPEN_SPACE_FUEL_RESERVE && fabsf(vy) < BOT_SAFE_LANDING_SPEED)
+                for (const Platform& p : bb.allPlatforms)
+                    if (botOnPlatform(bot, p)) { parkLow = true; break; }
+            if (!fallingOut && !driftingOut && !parkLow) return Status::Failure;
+            s.activeBranch = 1;
+        }
+
+        // The haven: a platform anywhere inside the arena, the cheapest to reach
+        // - height ABOVE the bot counts BOT_HAVEN_CLIMB_COST times over. One the
+        // bot cannot actually reach is only taken when nothing else is left:
+        // above, that is stopping the fall and then rising that far on what is
+        // in the tank; below, it is getting there across the gap before gravity
+        // has taken it past the platform's height, with the tank buying some
+        // hover time on the way. None at all -> the middle of the arena, at the
+        // bot's own height.
+        float inside   = half - BOT_WALL_AVOID_BUFFER;
+        float fuelDv   = botFuelDeltaV(bot, bb.fuelConsumptionRate);
+        float walk     = fmaxf(bot.speedWalk * bot.speedBoost, 1.0f);
+        float down     = fmaxf(0.0f, -vy);
+        // Hovering takes a MOON_GRAVITY-sized share of the jetpack's thrust, and
+        // regen refunds some of that; a tank that out-regens the hover buys
+        // unlimited time.
+        float hoverBurn = bb.fuelConsumptionRate * MOON_GRAVITY / (botJetpackBrake(bot) + MOON_GRAVITY) - bb.fuelRegenRate;
+        float hoverTime = hoverBurn > 0.0f ? bot.fuel / hoverBurn : std::numeric_limits<float>::max();
+        const Platform* haven = nullptr;
+        float bestCost = std::numeric_limits<float>::max();
+        for (const Platform& p : bb.allPlatforms) {
+            float top = p.position.y + 0.5f * p.size.y + bot.radius;
+            if (top < -inside || fabsf(p.position.x) > inside || fabsf(p.position.z) > inside) continue;
+            float across = hypotf(p.position.x - bot.position.x, p.position.z - bot.position.z);
+            float climb  = fmaxf(0.0f, top - bot.position.y);
+            float cost   = across + BOT_HAVEN_CLIMB_COST * climb;
+            bool  reachable;
+            if (climb > 0.0f) {
+                reachable = down + sqrtf(2.0f * MOON_GRAVITY * climb) <= fuelDv;
+            } else {
+                float t = fmaxf(0.0f, across / walk - hoverTime); // unpowered part of the trip
+                reachable = down * t + 0.5f * MOON_GRAVITY * t * t <= bot.position.y - top;
+            }
+            if (!reachable) cost += 1e6f; // last resort only
+            if (cost < bestCost) { bestCost = cost; haven = &p; }
+        }
+        Vector3 goal = haven ? Vector3{haven->position.x, haven->position.y + 0.5f * haven->size.y + bot.radius, haven->position.z}
+                             : Vector3{0.0f, bot.position.y, 0.0f};
+
+        // Let go once it is safe - rising back inside, or landed on the haven -
+        // AND has enough in the tank to be worth moving again. Landed short of
+        // that, stay parked (the rest of the tree would walk it off the edge on
+        // an empty tank): centred, no jetpack, waiting on regen. A bounce off a
+        // springy platform is "rising" too, which is why the fuel test covers
+        // both.
+        float clear = edge - BOT_WALL_CLEAR_MARGIN;
+        bool overHaven = haven && fabsf(bot.position.x - haven->position.x) < 0.5f * haven->size.x &&
+                                  fabsf(bot.position.z - haven->position.z) < 0.5f * haven->size.z &&
+                                  bot.position.y > goal.y - bot.radius;
+        bool landed = haven && botOnPlatform(bot, *haven) && fabsf(vy) < BOT_SAFE_LANDING_SPEED;
+        bool rising = vy >= 0.0f && bot.position.y > -clear &&
+                      fabsf(bot.position.x) < clear && fabsf(bot.position.z) < clear;
+        if ((rising || landed) && bot.fuel >= BOT_OPEN_SPACE_FUEL_RESERVE) { s.activeBranch = -1; return Status::Failure; }
+
+        // Arrive, don't fly past - in BOTH modes: friction's overshoot is enough
+        // to miss a 16 m platform on the way down.
+        arriveAt(bb, goal);
+        // Climb while below the goal. Above it, coast down: over the platform,
+        // hitting it is the brake (it costs nothing) unless the fall is fast
+        // enough to risk passing through; short of it, brake only once a full
+        // burn is what it takes to arrive rather than overshoot - fuel spent on
+        // stopping, not on hovering.
+        if (landed)                      bb.out.jetpack = false;
+        else if (bot.position.y < goal.y) bb.out.jetpack = vy < BOT_VERTICAL_THRESHOLD;
+        else if (overHaven)              bb.out.jetpack = -vy > BOT_SAFE_LANDING_SPEED && stopY < goal.y + BOT_VERTICAL_THRESHOLD;
+        else                             bb.out.jetpack = stopY < goal.y + BOT_VERTICAL_THRESHOLD;
+        bb.out.earthGravity = false;
         return Status::Running;
     }
 };
@@ -676,6 +927,186 @@ public:
             bb.bot.ammo   < PLAYER_MAX_AMMO   - 80;
         if (fuelIsScarce(bb) && bb.bot.fuel < BOT_LOW_FUEL_THRESHOLD) needsBonus = true;
         return needsBonus ? Status::Success : Status::Failure;
+    }
+};
+
+//MARK: Climb Higher
+// The mandate to get off low ground while fuel is scarce. Standing on a platform
+// below BOT_HIGH_GROUND_LINE_FRAC, a bot picks a higher platform within reach and
+// works its way up to it, then does it again from there - instead of waiting
+// out the whole match on the first low platform it landed on.
+//
+// Two ways up:
+//  - PUMP (costs nothing): dive toward the platform under EARTH gravity and drop
+//    back to moon gravity a frame or two before contact (earth gravity passes
+//    through platforms - see collisions.cpp). The bounce returns e * the impact
+//    speed and the rise is under moon gravity, so each bounce multiplies the
+//    height by e^2 * EARTH/MOON: x4.9 at THE VOID's 0.9, a LOSS at the default
+//    0.33 - hence BOT_PUMP_MIN_GAIN. A bot at rest needs something to multiply,
+//    so it starts with a small jetpack kick; one landing with a bounce already
+//    in it needs none.
+//  - HOP: a jetpack burn, when the tank can pay for it with a margin to spare.
+// Neither available: in open space, park on the platform while the tank
+// refills (stepping off low down is a fall the tank cannot catch); with walls,
+// leave it to the rest of the tree.
+//
+// Once the bounce or burn will carry the bot high enough to cross to the
+// target in the air, it is LAUNCHED: it steers across and lands. Landing on the
+// target is success; falling past it, off the platform, or timing out is
+// failure, and StayInBounds (next in line) catches any fall.
+//
+// State: decisions[climbId]: activeBranch = target platform index (-1 idle),
+// timer = seconds into this climb, interval = launched (1) or not (0).
+// decisions[baseId]: activeBranch = the platform climbed FROM, interval = the
+// apex the climb needs, timer = retry cooldown while idle / hop-burn-in-progress
+// (> 0) while climbing.
+template <typename TargetT>
+class ClimbHigher : public Node<TargetT> {
+    int climbId, baseId;
+
+    static float topOf(const Platform& p, const Player& bot) { return p.position.y + 0.5f * p.size.y + bot.radius; }
+
+    // Seconds to travel d horizontally from rest and stop (arriveAt's profile).
+    static float travelTime(float d, float accel, float vmax) {
+        if (d <= vmax * vmax / accel) return 2.0f * sqrtf(d / accel);
+        return d / vmax + vmax / accel;
+    }
+    // Lowest apex from which a bot launched off baseTop stays above targetTop
+    // long enough to cross `across` metres.
+    static float neededApex(float baseTop, float targetTop, float across, const Player& bot) {
+        float need = 1.25f * travelTime(across, bot.accelerationWalk * bot.speedBoost,
+                                        bot.speedWalk * bot.speedBoost) + 0.3f;
+        float apex = targetTop + 2.0f;
+        for (int k = 0; k < 200; ++k, apex += 2.0f) {
+            float v = sqrtf(2.0f * MOON_GRAVITY * (apex - baseTop));
+            float t = v / MOON_GRAVITY + sqrtf(2.0f * (apex - targetTop) / MOON_GRAVITY);
+            if (t >= need) break;
+        }
+        return apex;
+    }
+    // Fuel a jetpack burn from rest takes to reach an apex `rise` metres up:
+    // burn at the net thrust A for t, then coast; rise = A t^2/2 * (1 + A/g).
+    static float hopFuel(float rise, const Player& bot, float consumption) {
+        float a = botJetpackBrake(bot);
+        return consumption * sqrtf(2.0f * fmaxf(rise, 0.0f) / (a * (1.0f + a / MOON_GRAVITY)));
+    }
+    static bool pumpable(const Platform& p) {
+        return p.isBouncy && p.elasticityPlayer * p.elasticityPlayer * EARTH_GRAVITY / MOON_GRAVITY >= BOT_PUMP_MIN_GAIN;
+    }
+    // Can a hop off `base` reach `apex` and leave `keep` in the tank? (The
+    // vertical jetpack speed is capped, so some rises are out of reach at any fuel.)
+    static bool hopAffordable(const Platform& base, float apex, const Player& bot, float consumption,
+                              float keep = BOT_CLIMB_FUEL_MARGIN) {
+        float rise = apex - topOf(base, bot);
+        float vCap = bot.speedJetpack * bot.speedBoost * bot.jetpackThrust;
+        if (2.0f * MOON_GRAVITY * rise > 0.8f * vCap * vCap) return false;
+        return bot.fuel >= hopFuel(rise, bot, consumption) + keep;
+    }
+    Status stop(BotDecision& c, BotDecision& b, float cooldown) {
+        c.activeBranch = -1; c.interval = 0.0f; c.timer = 0.0f;
+        b.timer = cooldown;
+        return Status::Failure;
+    }
+
+public:
+    ClimbHigher(int climb, int base) : climbId(climb), baseId(base) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& c = bb.decisions[climbId];
+        BotDecision& b = bb.decisions[baseId];
+        const Player& bot = bb.bot;
+        const std::vector<Platform>& plats = bb.allPlatforms;
+        float vy = bot.velocity.y;
+
+        if (c.activeBranch < 0) {
+            if (b.timer > 0.0f) { b.timer -= bb.dt; return Status::Failure; } // retry cooldown
+            if (!fuelIsScarce(bb) || plats.empty() || fabsf(vy) >= BOT_SAFE_LANDING_SPEED) return Status::Failure;
+            // Standing (or bouncing) on low ground?
+            int base = -1;
+            for (int i = 0; i < (int)plats.size(); ++i)
+                if (botOnPlatform(bot, plats[i])) { base = i; break; }
+            float half = bb.walls.halfSize;
+            if (base < 0 || plats[base].position.y >= BOT_HIGH_GROUND_LINE_FRAC * half) return Status::Failure;
+
+            // The best rung up: height gained, less a charge for distance.
+            const Platform& P = plats[base];
+            float baseTop = topOf(P, bot), inside = half - BOT_WALL_AVOID_BUFFER;
+            int target = -1; float bestScore = -std::numeric_limits<float>::max(), bestApex = 0.0f;
+            for (int i = 0; i < (int)plats.size(); ++i) {
+                const Platform& T = plats[i];
+                float gain = topOf(T, bot) - baseTop;
+                float across = hypotf(T.position.x - P.position.x, T.position.z - P.position.z);
+                if (gain < BOT_CLIMB_MIN_GAIN || gain > BOT_CLIMB_MAX_GAIN_FRAC * half || across > BOT_CLIMB_MAX_REACH) continue;
+                if (fabsf(T.position.x) > inside || fabsf(T.position.z) > inside || topOf(T, bot) > inside) continue;
+                float apex = neededApex(baseTop, topOf(T, bot), across, bot);
+                if (!pumpable(P) && !hopAffordable(P, apex, bot, bb.fuelConsumptionRate) && bb.wallsEnabled) continue;
+                float score = gain - BOT_CLIMB_DIST_WEIGHT * across;
+                if (score > bestScore) { bestScore = score; target = i; bestApex = apex; }
+            }
+            if (target < 0) return Status::Failure;
+            c.activeBranch = target; c.timer = 0.0f; c.interval = 0.0f;
+            b.activeBranch = base;   b.interval = bestApex; b.timer = 0.0f;
+        }
+
+        if (c.activeBranch >= (int)plats.size() || b.activeBranch < 0 || b.activeBranch >= (int)plats.size())
+            return stop(c, b, 0.0f);
+        const Platform& T = plats[c.activeBranch];
+        const Platform& P = plats[b.activeBranch];
+        float targetTop = topOf(T, bot), baseTop = topOf(P, bot), apexNeeded = b.interval;
+        c.timer += bb.dt;
+        bb.out.jetpack = false;
+        bb.out.earthGravity = false;
+
+        if (botOnPlatform(bot, T) && vy <= 0.0f) return stop(c, b, 0.0f);                 // made it - chain from here next tick
+        if (b.timer > 0.0f && vy <= 0.0f && botOnPlatform(bot, P)) b.timer = 0.0f;         // a hop that fizzled is back on P
+        if (c.timer > BOT_CLIMB_TIMEOUT) return stop(c, b, BOT_CLIMB_RETRY_SECONDS);
+
+        bool launched = c.interval > 0.0f;
+        if (!launched && vy > 0.0f && bot.position.y + vy * vy / (2.0f * MOON_GRAVITY) >= apexNeeded - 1.0f)
+            launched = true, c.interval = 1.0f, c.timer = 0.0f; // the flight gets its own timeout
+
+        if (launched) {
+            // Fell past it - only once coming back DOWN: a launch starts well
+            // below the target (it is the bounce off the platform underneath).
+            if (vy < 0.0f && bot.position.y < targetTop - 2.0f * bot.radius) return stop(c, b, BOT_CLIMB_RETRY_SECONDS);
+            arriveAt(bb, Vector3{T.position.x, targetTop, T.position.z});
+            return Status::Running;
+        }
+
+        // Still working up off the base platform: stay over it.
+        bool overBase = fabsf(bot.position.x - P.position.x) < 0.5f * P.size.x &&
+                        fabsf(bot.position.z - P.position.z) < 0.5f * P.size.z;
+        if (bot.position.y < baseTop - 2.0f * bot.radius) return stop(c, b, BOT_CLIMB_RETRY_SECONDS);     // fell off it
+        arriveAt(bb, Vector3{P.position.x, baseTop, P.position.z});
+
+        // Which way up, re-judged each tick (a pump never spends fuel, so the tank
+        // only grows while it runs): a hop that still leaves the usual reserve
+        // is fastest; otherwise a free pump; otherwise a hop the tank just
+        // covers. A hop, once burning, burns until the launch test above says it
+        // will carry (or the tank runs dry and the bot drops back onto P).
+        bool hopNow = b.timer > 0.0f ||
+                      hopAffordable(P, apexNeeded, bot, bb.fuelConsumptionRate, BOT_OPEN_SPACE_FUEL_RESERVE) ||
+                      (!pumpable(P) && hopAffordable(P, apexNeeded, bot, bb.fuelConsumptionRate));
+        if (hopNow) {
+            b.timer = 1.0f;
+            bb.out.jetpack = true;
+            return Status::Running;
+        }
+        if (pumpable(P)) {
+            float e = P.elasticityPlayer;
+            float above = bot.position.y - baseTop;
+            if (vy < 0.0f && overBase) {
+                // Descending: dive while a moon-gravity finish would not bounce
+                // high enough, and let go of earth gravity just before contact.
+                float moonApex = baseTop + e * e * (vy * vy + 2.0f * MOON_GRAVITY * fmaxf(above, 0.0f)) / (2.0f * MOON_GRAVITY);
+                float contactSoon = -vy * 2.0f * bb.dt + 0.25f;
+                bb.out.earthGravity = moonApex < apexNeeded && above > contactSoon;
+            } else if (vy >= 0.0f && above < 0.5f && vy < BOT_PUMP_KICK_SPEED && bot.fuel > 1.0f) {
+                bb.out.jetpack = true; // at rest: kick off the first bounce
+            }
+            return Status::Running;
+        }
+        if (bb.wallsEnabled) return stop(c, b, BOT_CLIMB_RETRY_SECONDS); // walls: nothing to wait for here
+        return Status::Running;        // open space: parked, waiting for the tank to afford the hop
     }
 };
 
@@ -744,13 +1175,9 @@ public:
             // might need to add something to counteract the bot's momentum if it is also moving horizontally.
 
             // considered successful if the bot is at the target point (within its radius).  Third arg is the threshold for equality.
-            if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) return Status::Success; // on platform, done
+            if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) { holdPosition(bb); return Status::Success; } // on platform, done
 
-            Vector3 dir = Vector3Normalize(Vector3Subtract(landingPosition, bb.bot.position));
-            Vector3 fwd = bb.bot.ForwardFlat();
-            Vector3 right = bb.bot.Right();
-            bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
-            bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+            approach(bb, landingPosition);
             applyVerticalIntent(bb.bot.position.y, landingPosition.y, bb.out);
             return Status::Running;
         }
@@ -791,13 +1218,9 @@ public:
             Vector3 landingPosition = coastPlatform->position;
             landingPosition.y += (bb.bot.radius * 2.0f);
 
-            if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) return Status::Success;
+            if (vec3ApproxEqual(bb.bot.position, landingPosition, bb.bot.radius)) { holdPosition(bb); return Status::Success; }
 
-            Vector3 dir = Vector3Normalize(Vector3Subtract(landingPosition, bb.bot.position));
-            Vector3 fwd = bb.bot.ForwardFlat();
-            Vector3 right = bb.bot.Right();
-            bb.out.moveAxis.y = Vector3DotProduct(dir, fwd);
-            bb.out.moveAxis.x = Vector3DotProduct(dir, right);
+            approach(bb, landingPosition);
             // No jetpack — coast only. Apply earth gravity if we need to descend faster.
             if (landingPosition.y < bb.bot.position.y - BOT_VERTICAL_THRESHOLD)
                 bb.out.earthGravity = true;
@@ -819,12 +1242,15 @@ public:
         if (!bb.wallsEnabled || bb.walls.elasticityPlayer < 0.2f) return Status::Failure;
 
         if (bb.bot.position.y > -(bb.walls.halfSize - BOT_WALL_AVOID_BUFFER)) {
-            // bot drops via earth grav to bounce off the bottom wall.
+            // bot drops via earth grav to bounce off the bottom wall - straight
+            // down: with friction that is what no input means; in coast mode it
+            // takes braking, or the drop becomes a slide into a side wall.
+            holdPosition(bb);
             bb.out.earthGravity = true;
             return Status::Running;
         } else {
             // Bot has dropped enough - done. Return Failure (not Success): this
-            // node writes no moveAxis/jetpack of its own, so under Selector/
+            // node writes no movement of its own here, so under Selector/
             // LatchedSelector semantics a Success here with zero movement output
             // would just get re-picked with nothing to show for it. Failure lets
             // the parent fall through to whatever's next (attack, etc).

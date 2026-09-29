@@ -347,6 +347,7 @@ const bool DISABLE_BOT_FIRE_PLAYER = false;     // If true, bots don't fire rock
 const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
 const float BOT_FIRERATE_MAX = PLAYER_FIRE_RATE; // max shots/sec for bots (lower = easier)
 const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bots (higher = harder)
+const float BOT_FIRST_FIRE_DELAY = 1.5f; // seconds into a match before a bot may fire at all (#160) - no volley on the first frame
 
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
