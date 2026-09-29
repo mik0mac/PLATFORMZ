@@ -32,7 +32,8 @@ struct BotController {
                    LATCH_KITE_CHANCE, LATCH_RETREAT_CD,
                    LATCH_FIRE_PLAYER_CD, LATCH_ATTACK_AST_CD,
                    LATCH_AVOID_WALL, LATCH_DEFEND_CHANCE, LATCH_BOUNCE_CHANCE,
-                   LATCH_CONSERVE_CHANCE, LATCH_STAY_IN_BOUNDS, LATCH_COUNT };
+                   LATCH_CONSERVE_CHANCE, LATCH_STAY_IN_BOUNDS,
+                   LATCH_CLIMB, LATCH_CLIMB_BASE, LATCH_COUNT };
 
     // --- Leaf nodes ---
     IsLowFuel<Player>      isLowFuel;
@@ -51,6 +52,7 @@ struct BotController {
     SeekHighGround<Player>   seekHighGround;
     Bounce<Player>          bounce;
     StayInBounds<Player>    stayInBounds{ LATCH_STAY_IN_BOUNDS };
+    ClimbHigher<Player>     climbHigher{ LATCH_CLIMB, LATCH_CLIMB_BASE };
 
     // --- Composed tree (declaration order matters: composites reference the
     // addresses of nodes declared above; members initialise top-to-bottom). ---
@@ -130,8 +132,11 @@ struct BotController {
     LatchedSelector<Player>        movement{ LATCH_MOVEMENT, { &avoidAsteroid, &maybeDefend, &maybeConserveFuel, &lowFuelResponse, &attack } };
     // stayInBounds (open space only) sits ahead of movement in a plain Selector,
     // not inside the latch: a fall out of the arena can't wait up to a whole
-    // decision window for movement to re-decide.
-    Selector<Player>               body{ { &stayInBounds, &movement } };
+    // decision window for movement to re-decide. climbHigher goes ahead of even
+    // that: it only takes a bot that is standing on a platform, and a climb in
+    // progress dives on purpose (the pump), which stayInBounds would read as a
+    // fall to stop. When a climb fails it lets go, and stayInBounds catches.
+    Selector<Player>               body{ { &climbHigher, &stayInBounds, &movement } };
     Parallel<Player>               botTree{ { &body, &fireAtTarget } };
 
     // --- Per-slot state, indexed BY PLAYER INDEX (slot 0's entry is simply
@@ -213,13 +218,17 @@ struct BotController {
             else if (bot.fuel >= BOT_JETPACK_RESUME_FUEL) tankDry[i] = false;
             if (tankDry[i]) botIn.jetpack = false;
             // Open space: the last of the tank belongs to stayInBounds - it is
-            // what stops the fall every other branch's jetpack use ends in.
+            // what stops the fall every other branch's jetpack use ends in. A
+            // climbHigher climb is exempt: it budgets its own fuel, and ends on
+            // a platform.
             bool rescuing = decisions[i][LATCH_STAY_IN_BOUNDS].activeBranch == 1;
-            if (!wallsEnabled && !rescuing && bot.fuel < BOT_OPEN_SPACE_FUEL_RESERVE) botIn.jetpack = false;
+            bool climbing = decisions[i][LATCH_CLIMB].activeBranch >= 0;
+            if (!wallsEnabled && !rescuing && !climbing && bot.fuel < BOT_OPEN_SPACE_FUEL_RESERVE) botIn.jetpack = false;
             // Open space (#168): an earth-gravity dive builds a fall the jetpack
             // may not be able to take back, and there is no floor to stop it.
             // Refuse the dive once the descent nears what the tank can arrest.
-            if (!wallsEnabled && botIn.earthGravity &&
+            // (A climb's pump dive is over its own platform, so it is exempt.)
+            if (!wallsEnabled && botIn.earthGravity && !climbing &&
                 -bot.velocity.y > BOT_DIVE_FUEL_FRACTION * botFuelDeltaV(bot, fuelConsumptionRate))
                 botIn.earthGravity = false;
             float gravity = botIn.earthGravity ? EARTH_GRAVITY : MOON_GRAVITY;

@@ -39,6 +39,18 @@ const float BOT_HAVEN_CLIMB_COST = 4.0f;    // StayInBounds' landing pick: each 
 const float BOT_OPEN_SPACE_FUEL_RESERVE = 40.0f; // below this, only StayInBounds may use the jetpack - the rest of the tree walks, coasts, or waits on a platform; a bot StayInBounds landed also stays parked until it has this much.
 const float BOT_JETPACK_RESUME_FUEL = 10.0f; // a bot that ran its tank dry keeps off the jetpack until it has regenerated this much (see BotController::drive).
 
+// Climbing to higher ground when fuel is scarce (ClimbHigher).
+const float BOT_HIGH_GROUND_LINE_FRAC = 0.0f; // a platform whose top is below this fraction of halfSize (0 = the arena's middle) is low ground a bot should climb out of.
+const float BOT_CLIMB_MIN_GAIN = 10.0f;      // a climb target must be at least this much higher than the platform the bot is on.
+const float BOT_CLIMB_MAX_GAIN_FRAC = 0.4f;  // ...and at most this fraction of halfSize higher.
+const float BOT_CLIMB_MAX_REACH = 80.0f;     // ...and at most this far away horizontally.
+const float BOT_CLIMB_DIST_WEIGHT = 0.5f;    // target pick: score = height gained - this * horizontal distance.
+const float BOT_CLIMB_FUEL_MARGIN = 10.0f;   // a jetpack hop is only tried with this much fuel left over after it.
+const float BOT_CLIMB_TIMEOUT = 30.0f;       // give up on a climb that has not launched after this many seconds - or, once launched, has not landed after this many more.
+const float BOT_CLIMB_RETRY_SECONDS = 3.0f;  // after a failed climb, wait this long before trying again.
+const float BOT_PUMP_MIN_GAIN = 1.5f;        // pump-bouncing is only used when each bounce multiplies the height by at least this much (e^2 * EARTH/MOON gravity).
+const float BOT_PUMP_KICK_SPEED = 4.0f;      // a bot at rest starts a pump with a jetpack kick to this upward speed (~5 fuel).
+
 // Sets out.jetpack / out.earthGravity based on vertical delta to a world-space
 // target position. Called by any movement node that needs vertical intent —
 // keeps the logic in one place since MoveToTarget and MoveToSafety both need it.
@@ -915,6 +927,186 @@ public:
             bb.bot.ammo   < PLAYER_MAX_AMMO   - 80;
         if (fuelIsScarce(bb) && bb.bot.fuel < BOT_LOW_FUEL_THRESHOLD) needsBonus = true;
         return needsBonus ? Status::Success : Status::Failure;
+    }
+};
+
+//MARK: Climb Higher
+// The mandate to get off low ground while fuel is scarce. Standing on a platform
+// below BOT_HIGH_GROUND_LINE_FRAC, a bot picks a higher platform within reach and
+// works its way up to it, then does it again from there - instead of waiting
+// out the whole match on the first low platform it landed on.
+//
+// Two ways up:
+//  - PUMP (costs nothing): dive toward the platform under EARTH gravity and drop
+//    back to moon gravity a frame or two before contact (earth gravity passes
+//    through platforms - see collisions.cpp). The bounce returns e * the impact
+//    speed and the rise is under moon gravity, so each bounce multiplies the
+//    height by e^2 * EARTH/MOON: x4.9 at THE VOID's 0.9, a LOSS at the default
+//    0.33 - hence BOT_PUMP_MIN_GAIN. A bot at rest needs something to multiply,
+//    so it starts with a small jetpack kick; one landing with a bounce already
+//    in it needs none.
+//  - HOP: a jetpack burn, when the tank can pay for it with a margin to spare.
+// Neither available: in open space, park on the platform while the tank
+// refills (stepping off low down is a fall the tank cannot catch); with walls,
+// leave it to the rest of the tree.
+//
+// Once the bounce or burn will carry the bot high enough to cross to the
+// target in the air, it is LAUNCHED: it steers across and lands. Landing on the
+// target is success; falling past it, off the platform, or timing out is
+// failure, and StayInBounds (next in line) catches any fall.
+//
+// State: decisions[climbId]: activeBranch = target platform index (-1 idle),
+// timer = seconds into this climb, interval = launched (1) or not (0).
+// decisions[baseId]: activeBranch = the platform climbed FROM, interval = the
+// apex the climb needs, timer = retry cooldown while idle / hop-burn-in-progress
+// (> 0) while climbing.
+template <typename TargetT>
+class ClimbHigher : public Node<TargetT> {
+    int climbId, baseId;
+
+    static float topOf(const Platform& p, const Player& bot) { return p.position.y + 0.5f * p.size.y + bot.radius; }
+
+    // Seconds to travel d horizontally from rest and stop (arriveAt's profile).
+    static float travelTime(float d, float accel, float vmax) {
+        if (d <= vmax * vmax / accel) return 2.0f * sqrtf(d / accel);
+        return d / vmax + vmax / accel;
+    }
+    // Lowest apex from which a bot launched off baseTop stays above targetTop
+    // long enough to cross `across` metres.
+    static float neededApex(float baseTop, float targetTop, float across, const Player& bot) {
+        float need = 1.25f * travelTime(across, bot.accelerationWalk * bot.speedBoost,
+                                        bot.speedWalk * bot.speedBoost) + 0.3f;
+        float apex = targetTop + 2.0f;
+        for (int k = 0; k < 200; ++k, apex += 2.0f) {
+            float v = sqrtf(2.0f * MOON_GRAVITY * (apex - baseTop));
+            float t = v / MOON_GRAVITY + sqrtf(2.0f * (apex - targetTop) / MOON_GRAVITY);
+            if (t >= need) break;
+        }
+        return apex;
+    }
+    // Fuel a jetpack burn from rest takes to reach an apex `rise` metres up:
+    // burn at the net thrust A for t, then coast; rise = A t^2/2 * (1 + A/g).
+    static float hopFuel(float rise, const Player& bot, float consumption) {
+        float a = botJetpackBrake(bot);
+        return consumption * sqrtf(2.0f * fmaxf(rise, 0.0f) / (a * (1.0f + a / MOON_GRAVITY)));
+    }
+    static bool pumpable(const Platform& p) {
+        return p.isBouncy && p.elasticityPlayer * p.elasticityPlayer * EARTH_GRAVITY / MOON_GRAVITY >= BOT_PUMP_MIN_GAIN;
+    }
+    // Can a hop off `base` reach `apex` and leave `keep` in the tank? (The
+    // vertical jetpack speed is capped, so some rises are out of reach at any fuel.)
+    static bool hopAffordable(const Platform& base, float apex, const Player& bot, float consumption,
+                              float keep = BOT_CLIMB_FUEL_MARGIN) {
+        float rise = apex - topOf(base, bot);
+        float vCap = bot.speedJetpack * bot.speedBoost * bot.jetpackThrust;
+        if (2.0f * MOON_GRAVITY * rise > 0.8f * vCap * vCap) return false;
+        return bot.fuel >= hopFuel(rise, bot, consumption) + keep;
+    }
+    Status stop(BotDecision& c, BotDecision& b, float cooldown) {
+        c.activeBranch = -1; c.interval = 0.0f; c.timer = 0.0f;
+        b.timer = cooldown;
+        return Status::Failure;
+    }
+
+public:
+    ClimbHigher(int climb, int base) : climbId(climb), baseId(base) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& c = bb.decisions[climbId];
+        BotDecision& b = bb.decisions[baseId];
+        const Player& bot = bb.bot;
+        const std::vector<Platform>& plats = bb.allPlatforms;
+        float vy = bot.velocity.y;
+
+        if (c.activeBranch < 0) {
+            if (b.timer > 0.0f) { b.timer -= bb.dt; return Status::Failure; } // retry cooldown
+            if (!fuelIsScarce(bb) || plats.empty() || fabsf(vy) >= BOT_SAFE_LANDING_SPEED) return Status::Failure;
+            // Standing (or bouncing) on low ground?
+            int base = -1;
+            for (int i = 0; i < (int)plats.size(); ++i)
+                if (botOnPlatform(bot, plats[i])) { base = i; break; }
+            float half = bb.walls.halfSize;
+            if (base < 0 || plats[base].position.y >= BOT_HIGH_GROUND_LINE_FRAC * half) return Status::Failure;
+
+            // The best rung up: height gained, less a charge for distance.
+            const Platform& P = plats[base];
+            float baseTop = topOf(P, bot), inside = half - BOT_WALL_AVOID_BUFFER;
+            int target = -1; float bestScore = -std::numeric_limits<float>::max(), bestApex = 0.0f;
+            for (int i = 0; i < (int)plats.size(); ++i) {
+                const Platform& T = plats[i];
+                float gain = topOf(T, bot) - baseTop;
+                float across = hypotf(T.position.x - P.position.x, T.position.z - P.position.z);
+                if (gain < BOT_CLIMB_MIN_GAIN || gain > BOT_CLIMB_MAX_GAIN_FRAC * half || across > BOT_CLIMB_MAX_REACH) continue;
+                if (fabsf(T.position.x) > inside || fabsf(T.position.z) > inside || topOf(T, bot) > inside) continue;
+                float apex = neededApex(baseTop, topOf(T, bot), across, bot);
+                if (!pumpable(P) && !hopAffordable(P, apex, bot, bb.fuelConsumptionRate) && bb.wallsEnabled) continue;
+                float score = gain - BOT_CLIMB_DIST_WEIGHT * across;
+                if (score > bestScore) { bestScore = score; target = i; bestApex = apex; }
+            }
+            if (target < 0) return Status::Failure;
+            c.activeBranch = target; c.timer = 0.0f; c.interval = 0.0f;
+            b.activeBranch = base;   b.interval = bestApex; b.timer = 0.0f;
+        }
+
+        if (c.activeBranch >= (int)plats.size() || b.activeBranch < 0 || b.activeBranch >= (int)plats.size())
+            return stop(c, b, 0.0f);
+        const Platform& T = plats[c.activeBranch];
+        const Platform& P = plats[b.activeBranch];
+        float targetTop = topOf(T, bot), baseTop = topOf(P, bot), apexNeeded = b.interval;
+        c.timer += bb.dt;
+        bb.out.jetpack = false;
+        bb.out.earthGravity = false;
+
+        if (botOnPlatform(bot, T) && vy <= 0.0f) return stop(c, b, 0.0f);                 // made it - chain from here next tick
+        if (b.timer > 0.0f && vy <= 0.0f && botOnPlatform(bot, P)) b.timer = 0.0f;         // a hop that fizzled is back on P
+        if (c.timer > BOT_CLIMB_TIMEOUT) return stop(c, b, BOT_CLIMB_RETRY_SECONDS);
+
+        bool launched = c.interval > 0.0f;
+        if (!launched && vy > 0.0f && bot.position.y + vy * vy / (2.0f * MOON_GRAVITY) >= apexNeeded - 1.0f)
+            launched = true, c.interval = 1.0f, c.timer = 0.0f; // the flight gets its own timeout
+
+        if (launched) {
+            // Fell past it - only once coming back DOWN: a launch starts well
+            // below the target (it is the bounce off the platform underneath).
+            if (vy < 0.0f && bot.position.y < targetTop - 2.0f * bot.radius) return stop(c, b, BOT_CLIMB_RETRY_SECONDS);
+            arriveAt(bb, Vector3{T.position.x, targetTop, T.position.z});
+            return Status::Running;
+        }
+
+        // Still working up off the base platform: stay over it.
+        bool overBase = fabsf(bot.position.x - P.position.x) < 0.5f * P.size.x &&
+                        fabsf(bot.position.z - P.position.z) < 0.5f * P.size.z;
+        if (bot.position.y < baseTop - 2.0f * bot.radius) return stop(c, b, BOT_CLIMB_RETRY_SECONDS);     // fell off it
+        arriveAt(bb, Vector3{P.position.x, baseTop, P.position.z});
+
+        // Which way up, re-judged each tick (a pump never spends fuel, so the tank
+        // only grows while it runs): a hop that still leaves the usual reserve
+        // is fastest; otherwise a free pump; otherwise a hop the tank just
+        // covers. A hop, once burning, burns until the launch test above says it
+        // will carry (or the tank runs dry and the bot drops back onto P).
+        bool hopNow = b.timer > 0.0f ||
+                      hopAffordable(P, apexNeeded, bot, bb.fuelConsumptionRate, BOT_OPEN_SPACE_FUEL_RESERVE) ||
+                      (!pumpable(P) && hopAffordable(P, apexNeeded, bot, bb.fuelConsumptionRate));
+        if (hopNow) {
+            b.timer = 1.0f;
+            bb.out.jetpack = true;
+            return Status::Running;
+        }
+        if (pumpable(P)) {
+            float e = P.elasticityPlayer;
+            float above = bot.position.y - baseTop;
+            if (vy < 0.0f && overBase) {
+                // Descending: dive while a moon-gravity finish would not bounce
+                // high enough, and let go of earth gravity just before contact.
+                float moonApex = baseTop + e * e * (vy * vy + 2.0f * MOON_GRAVITY * fmaxf(above, 0.0f)) / (2.0f * MOON_GRAVITY);
+                float contactSoon = -vy * 2.0f * bb.dt + 0.25f;
+                bb.out.earthGravity = moonApex < apexNeeded && above > contactSoon;
+            } else if (vy >= 0.0f && above < 0.5f && vy < BOT_PUMP_KICK_SPEED && bot.fuel > 1.0f) {
+                bb.out.jetpack = true; // at rest: kick off the first bounce
+            }
+            return Status::Running;
+        }
+        if (bb.wallsEnabled) return stop(c, b, BOT_CLIMB_RETRY_SECONDS); // walls: nothing to wait for here
+        return Status::Running;        // open space: parked, waiting for the tank to afford the hop
     }
 };
 
