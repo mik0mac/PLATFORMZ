@@ -2432,21 +2432,24 @@ int main(int argc, char** argv) {
             // overlay. Online this branch does not exist - the server keeps
             // ticking and the world keeps moving behind the same overlay.
             if (!paused) {
-                ApplyPlayerInput(player, in, dt, gravity, gameSpace);
+                // Physics takes a capped step (#169): an uncapped hitch frame can
+                // drop a standing player straight through their platform.
+                const float simDt = std::min(dt, LOCAL_SIM_MAX_DT);
+                ApplyPlayerInput(player, in, simDt, gravity, gameSpace);
 
                 // Drive every isBot slot through the behaviour tree (same input path
                 // as the human above). Bots may hold the earth-gravity key to descend,
                 // so drive() derives gravity per-bot from its input.
-                botController.drive(gameSpace, dt);
+                botController.drive(gameSpace, simDt);
 
-                gameSpace.updatePositions(dt);
+                gameSpace.updatePositions(simDt);
                 RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
                 gameSpace.updateActiveObjects();                // erase destroyed/finished
 
                 // Reticles follow the player's FINAL (post-collision) position;
                 // smoothed for non-local players, snapped for the local one.
                 for (int i = 0; i < (int)players.size(); ++i)
-                    players[i].updateReticle(dt, i != 0); // index 0 is the local player
+                    players[i].updateReticle(simDt, i != 0); // index 0 is the local player
             }
 
             localPlayer = &gameSpace.getPlayers()[0];
