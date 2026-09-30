@@ -569,6 +569,14 @@ int main(int argc, char** argv) {
     GameScreen screen = GameScreen::TITLE;
     float gameOverTimer = GAME_OVER_TIMER; // seconds since the last player died, to delay the GAME_OVER screen so the player sees the death FX
     float gameOverHold  = 0.0f;            // seconds the GAME_OVER screen still ignores a key/click (armed on arrival, #162)
+    // What the GAME_OVER screen shows: the result frozen when the match ended
+    // (#170). Filled by captureGameOver() - see "Game-over snapshot" below.
+    struct GameOverRow { std::string name; int score; };
+    struct GameOverSnapshot {
+        bool taken = false;
+        std::vector<GameOverRow> rows;
+        enum class Outcome { NONE, SURVIVED, ELIMINATED } outcome = Outcome::NONE;
+    } gameOverShot;
     bool  paused        = false;           // PLAYING, cursor freed, scores shown. LOCAL freezes the sim; online it is this client's screen only (#164)
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
 
@@ -691,6 +699,7 @@ int main(int argc, char** argv) {
         // slot's id, so the same map replays the same bots).
         botController.init(ps, localOpt.botDifficulty);
         gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this run
+        gameOverShot.taken = false;      // and no result yet (#170)
         // World is built but stays frozen: enter the pre-match countdown instead of
         // PLAYING. The COUNTDOWN block below ticks the timer and flips to PLAYING at
         // zero (capturing the cursor then). Cursor stays free during the count.
@@ -717,6 +726,44 @@ int main(int argc, char** argv) {
         startLocalWorld(m.halfSize, m.numPlatforms, m.numAsteroids);
     };
 
+    //MARK: Game-over snapshot (#170)
+    // The result as it stood when the match ENDED, which is what the GAME_OVER
+    // screen shows. It used to read the live roster, and the live roster keeps
+    // moving after the match does: a player leaves or renames, and - the big one
+    // - GAMEOVER_LOBBY_SECONDS later the server rebuilds every slot for the next
+    // lobby, so a player still reading the result watched every score go to 0,
+    // every name to "PLAYER n" and their own "eliminated" turn into "survived".
+    //
+    // Taken where the match ends (endLocalMatch, and the first GameOver phase
+    // from the server - the same edge the server credits its board on), with
+    // the screen's entry edge as a backstop for any ending that misses both.
+    // `taken` is cleared at the start of every match. The snapshot itself is
+    // declared beside gameOverTimer, because the match-start code above clears it.
+
+    // One row per player who is actually somebody. Shared with the PAUSE screen's
+    // live table so the two cannot disagree about who gets a row (#159).
+    auto currentScoreRows = [&]() {
+        std::vector<GameOverRow> rows;
+        for (const Player& p : gameSpace.getPlayers()) {
+            // Empty slots are in the roster but were never anybody - no body, no
+            // score, no row. isConnected is how a vacant slot reaches the client
+            // (the server's `active` flag); locally every slot is real.
+            if (networked && !p.isConnected) continue;
+            rows.push_back({p.name, p.score});
+        }
+        return rows;
+    };
+    auto captureGameOver = [&]() {
+        gameOverShot.taken = true;
+        gameOverShot.rows  = currentScoreRows();
+        const std::vector<Player>& ps = gameSpace.getPlayers();
+        const int localIndex = networked ? myIndex : 0;
+        gameOverShot.outcome =
+            (localIndex < 0 || localIndex >= (int)ps.size()) ? GameOverSnapshot::Outcome::NONE
+          : ps[localIndex].isAlive                         ? GameOverSnapshot::Outcome::SURVIVED
+                                                           : GameOverSnapshot::Outcome::ELIMINATED;
+    };
+
     //MARK: End of a LOCAL match
     // Credit the run to the local board and enter GAME_OVER. Every local exit from
     // PLAYING goes through here - the manual M, the solo clear/death, and
@@ -734,6 +781,7 @@ int main(int argc, char** argv) {
     auto endLocalMatch = [&]() {
         EnableCursor();                    // free the cursor for the game-over menu
         screen = GameScreen::GAME_OVER;
+        captureGameOver();                 // the result as it stands now (#170)
         localRunRank = 0;
         // BENCH is a perf harness with map numbers picked off the command line,
         // well outside any preset - scores from it are not comparable to anything
@@ -776,6 +824,7 @@ int main(int argc, char** argv) {
         prevHealth = -1; netHurt = 0.0f;
         paused = false; // never start a match already paused (#164)
         netMatchOver = false; gameOverTimer = GAME_OVER_TIMER; // fresh game-over countdown for this match
+        gameOverShot.taken = false;                            // and no result yet (#170)
         // Start the match with clean feeds: the game-over -> countdown ->
         // playing route never passes through returnToTitle, so clear here too
         // (covers leftovers from the tail end of the previous match).
@@ -1241,16 +1290,14 @@ int main(int argc, char** argv) {
     //
     // Returns the y just past the last row, so the caller can stack whatever it
     // puts underneath without knowing how many players there were.
-    auto drawScoreTable = [&](int y, Color c) -> int {
+    //
+    // It draws ROWS, not the roster: PAUSE passes the live ones, GAME_OVER the
+    // snapshot taken when the match ended (#170).
+    auto drawScoreTable = [&](const std::vector<GameOverRow>& rows, int y, Color c) -> int {
         DrawCentered("SCORES:", y, 20, c);
-        std::vector<Player>& ps = gameSpace.getPlayers();
         int row = 0;
-        for (int i = 0; i < (int)ps.size(); ++i) {
-            // Empty slots are in the roster but were never anybody - no body, no
-            // score, no row. isConnected is how a vacant slot reaches the client
-            // (the server's `active` flag); locally every slot is real.
-            if (networked && !ps[i].isConnected) continue;
-            DrawCentered(TextFormat("%s: %d", ps[i].name.c_str(), ps[i].score),
+        for (const GameOverRow& r : rows) {
+            DrawCentered(TextFormat("%s: %d", r.name.c_str(), r.score),
                          y + 40 + row * 20, 20, c);
             ++row;
         }
@@ -1385,8 +1432,10 @@ int main(int argc, char** argv) {
         // are two today (endLocalMatch and the networked death-FX countdown) and
         // no guarantee of two tomorrow. Reads previousScreen BEFORE the music
         // block below consumes it.
-        if (screen != previousScreen && screen == GameScreen::GAME_OVER)
+        if (screen != previousScreen && screen == GameScreen::GAME_OVER) {
             gameOverHold = GAME_OVER_INPUT_HOLD;
+            if (!gameOverShot.taken) captureGameOver(); // an ending that missed both capture sites (#170)
+        }
 
         // MARK: MUSIC STREAM
         if (screen != previousScreen) {
@@ -2114,11 +2163,11 @@ int main(int argc, char** argv) {
 
             Color scoreColor = WHITE;
             Color pressKeyColor = RED;
-            std::vector<Player>& players = gameSpace.getPlayers();
-            int localIndex = networked ? myIndex : 0;
-            // Outcome banner for the local player.
-            if (localIndex >= 0 && localIndex < (int)players.size()) {
-                if (players[localIndex].isAlive) {
+            // Outcome banner for the local player - from the snapshot, so a
+            // lobby reset reviving every slot cannot turn "eliminated" into
+            // "survived" while the player is reading it (#170).
+            if (gameOverShot.outcome != GameOverSnapshot::Outcome::NONE) {
+                if (gameOverShot.outcome == GameOverSnapshot::Outcome::SURVIVED) {
                     DrawCentered("GAME OVER", 240, 80, BLUE);
                     DrawCentered("You survived!", 360, 20, BLUE);
                     scoreColor = GRAY;
@@ -2143,7 +2192,7 @@ int main(int argc, char** argv) {
             // a table nobody knows exists - and this is the one moment it is
             // interesting. Networked play has no equivalent line because the
             // server owns that ranking and does not send a placement back.
-            int noticeY = drawScoreTable(400, scoreColor);
+            int noticeY = drawScoreTable(gameOverShot.rows, 400, scoreColor);
             if (!networked && localRunRank > 0) {
                 DrawCentered(TextFormat("LOCAL HIGH SCORE  #%d", localRunRank),
                              noticeY, 20, {0, 255, 200, 255});   // platform color
@@ -2740,7 +2789,7 @@ int main(int argc, char** argv) {
             if (paused) {
                 DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.78f));
                 DrawCentered("PAUSED", 240, 80, RAYWHITE);
-                int y = drawScoreTable(400, WHITE);
+                int y = drawScoreTable(currentScoreRows(), 400, WHITE);
                 // The two lines the issue specifies, and the second one differs
                 // by who you are: ending the match is the host's to do, and a
                 // guest pressing the same key walks out of the room instead.
@@ -2773,7 +2822,12 @@ int main(int argc, char** argv) {
             if (netPhase == ServerMessage::Phase::Playing) {
                 // match (re)started or still live - cancel any pending countdown
                 netMatchOver = false; gameOverTimer = GAME_OVER_TIMER;
+                gameOverShot.taken = false;
             } else if (netPhase == ServerMessage::Phase::GameOver) {
+                // The first GameOver packet carries the final roster - the same
+                // edge the server credits its board on. Snapshot it now rather
+                // than GAME_OVER_TIMER later when the screen appears (#170).
+                if (!netMatchOver) captureGameOver();
                 netMatchOver = true; // latch: survives packet-less (Unknown) frames
             }
             if (netMatchOver) {
