@@ -1,3 +1,6 @@
+# macOS + Homebrew. The cross-platform build (Windows, Linux) is CMakeLists.txt;
+# this file stays authoritative for the handout chain (app/sign/notarize/
+# dist-pack) and for `make web`, neither of which CMake does.
 CXX := g++
 
 # Local secrets (optional, gitignored). Create secrets.mk to bake private
@@ -45,6 +48,7 @@ LDFLAGS  := -L/opt/homebrew/lib $(RAYLIB_LINK) \
             -framework Security -framework CoreFoundation -lz
 
 TARGET := platformz
+# Also listed in CMakeLists.txt (PLATFORMZ_CLIENT_SOURCES) - add a new .cpp to both.
 SRCS := main.cpp collisions.cpp
 HDRS := $(wildcard *.h)
 

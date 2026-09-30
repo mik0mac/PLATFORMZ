@@ -30,7 +30,22 @@ Toolchain is **macOS + Homebrew raylib**:
 
 - `SRCS := main.cpp collisions.cpp`; all `*.h` are dependencies (wildcard).
 - Editing a header or an existing `.cpp` needs **no** Makefile change.
-- Adding a **new** `.cpp` requires adding it to `SRCS` in the `Makefile`.
+- Adding a **new** `.cpp` requires adding it to `SRCS` in the `Makefile` **and**
+  to `CMakeLists.txt` (client: `PLATFORMZ_CLIENT_SOURCES`; server: the
+  `gameserver` target, beside `SRCS` in `server/Makefile`).
+
+**CMake (F1, #92)** is the cross-platform build, alongside the Makefiles rather
+than replacing them: `cmake --preset dev && cmake --build --preset dev` builds the
+client and server into `build/cmake-dev/` (presets `client` and `server` build one
+each). raylib, nlohmann/json and — on Windows — mbedTLS come from Homebrew when
+installed and are fetched at pinned, hash-checked versions otherwise. It reads
+`secrets.mk` like `make` does, so its client bakes in the same host and key.
+What it deliberately does **not** do: the handout chain (`make app` … `dist-pack`
+stays Makefile-only), and the web build — it **refuses Emscripten**, because the
+web build must never see `secrets.mk`. The deploy box and the test scripts still
+build with `make`. The Windows client does not compile yet: `net_client.h` uses
+POSIX sockets, which is F2 (#93). It also writes `compile_commands.json`, which
+clangd can use to stop the false positives below.
 
 ## IMPORTANT: IDE diagnostics are false positives
 The clang/clangd language server isn't configured with `-I/opt/homebrew/include`,

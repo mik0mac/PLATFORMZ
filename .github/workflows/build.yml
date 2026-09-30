@@ -6,12 +6,13 @@ name: Build
 #   test-server   the unit tests and the live protocol probes (minutes)
 #   race-server   the same probes under ThreadSanitizer (slower still)
 #   build-web     the browser client, under emsdk (minutes, mostly cached)
+#   cmake-server  the server again, through CMakeLists.txt instead of the Makefile
+#   cmake-windows the Windows half of CMakeLists.txt (F1) - see that job
 #
-# The NATIVE client is still not built here, and cannot be: its Makefile is
-# macOS-only (Apple frameworks, /opt/homebrew). A macOS runner would use the same
-# compiler and OS as the machine that writes the code, so it would add little
+# The macOS native client is still not built here. A macOS runner would use the
+# same compiler and OS as the machine that writes the code, so it would add little
 # beyond a clean-checkout check while going red whenever Homebrew bumps raylib.
-# The web client is the opposite case - see build-web.
+# Windows and the web are the opposite case: builds nobody runs by hand.
 
 on:
   push:
@@ -217,3 +218,44 @@ jobs:
       # web/ artifacts match it - and those are what ship. See the script.
       - name: Committed bundle is newer than the protocol
         run: ./scripts/check-web-bundle-fresh.sh
+
+  # The server through CMake. The Makefile stays what the box and the test
+  # scripts build; this proves the second build of the same sources still agrees
+  # with it - same source list, same shim-before-root include order.
+  cmake-server:
+    name: CMake server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libboost-dev nlohmann-json3-dev
+
+      - name: Configure and build (gameserver + loadtest)
+        run: |
+          cmake --preset server
+          cmake --build --preset server -j 4
+
+  # The Windows half of CMakeLists.txt, which no one can run by hand here. It
+  # builds every DEPENDENCY of the Windows client - raylib, mbedTLS and
+  # IXWebSocket on it - but not the client itself: net_client.h still includes
+  # POSIX socket headers, and porting those to Winsock is F2 (#93). When F2
+  # lands, drop the --target list and this job builds platformz.exe.
+  cmake-windows:
+    name: CMake Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true   # IXWebSocket
+
+      - name: Configure (client)
+        run: cmake --preset client
+
+      - name: Build the client's dependencies
+        run: cmake --build --preset client --target raylib ixwebsocket -- /m
