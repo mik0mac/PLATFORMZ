@@ -137,6 +137,7 @@ dist:
 RAYLIB_STATIC  := $(HOME)/raylib-macos13/build-mac/raylib/libraylib.a
 APP_NAME       := PLATFORMZ
 APP_ID         := space.platformz.game
+# Also project(VERSION) in CMakeLists.txt, which stamps the Windows exe - keep in step.
 APP_VERSION    ?= 0.1.0
 APP_BUILD      ?= $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 APP_MIN_OS     := 13.0

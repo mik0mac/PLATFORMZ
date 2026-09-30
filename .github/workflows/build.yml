@@ -259,11 +259,17 @@ jobs:
       - name: Build the client
         run: cmake --build --preset client -- /m
 
-      # What a player would unzip: the exe and its assets beside it.
-      - name: Upload the build
+      # The handout zip, through the same script a release uses - so its checks
+      # (version resource, no DLL a player lacks, signature verified before
+      # zipping) run on every push, not just on release day. No certificate
+      # yet (#94), so this produces the UNSIGNED zip.
+      - name: Package
+        shell: pwsh
+        run: ./packaging/windows/pack.ps1
+
+      - name: Upload the zip
         uses: actions/upload-artifact@v4
         with:
           name: platformz-windows
-          path: |
-            build/cmake-client/Release/platformz.exe
-            build/cmake-client/Release/assets/
+          path: dist/PLATFORMZ-*windows-x64.zip
+          if-no-files-found: error

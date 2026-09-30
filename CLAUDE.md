@@ -16,7 +16,17 @@ Handout build (see `docs/deploy-vultr.md` for the full walkthrough):
 - `make dist-pack` — the whole chain → `dist/PLATFORMZ-mac-arm64.zip`, the
   warning-free handout. Recipients double-click; no Gatekeeper prompt, no `xattr`.
 
-Two things the handout build needs that a dev build doesn't, both **one-time and
+Windows handout (F3, #94): `cmake --preset client && cmake --build --preset
+client`, then `pwsh packaging/windows/pack.ps1` → `dist/PLATFORMZ-windows-x64.zip`.
+**There is no certificate yet**, so today it always produces
+`PLATFORMZ-UNSIGNED-windows-x64.zip` (SmartScreen warns). Signing plugs in through
+one variable, `PLATFORMZ_SIGNTOOL_ARGS` (see the script's header). Like `dist-pack`,
+it verifies before it zips: a version resource, no DLL outside Windows itself (the
+C++ runtime is linked statically, `/MT`), and — once signing is on — a valid,
+timestamped signature, or no correctly-named zip. CI's `CMake Windows` job runs it
+on every push. No Windows machine is in the loop, so that job is the only build.
+
+Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):
 - raylib built from source at `~/raylib-macos13` with
   `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`. Homebrew's bottle is `minos 15.0`, which

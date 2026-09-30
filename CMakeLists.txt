@@ -21,7 +21,9 @@
 # is added, it goes in SRCS in the Makefile AND in PLATFORMZ_CLIENT_SOURCES here.
 
 cmake_minimum_required(VERSION 3.21)
-project(PLATFORMZ LANGUAGES C CXX)
+# The version players see (Windows exe properties, the zip name). Keep in step
+# with APP_VERSION in the Makefile, which stamps the macOS Info.plist.
+project(PLATFORMZ VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +34,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)   # the Makefiles build -O2; so does Release, give or take
 endif()
+# Windows: the C++ runtime linked INTO the exe (/MT), for every target including
+# the fetched raylib and mbedTLS - which is why it is set here, before any of them
+# is declared. The default (/MD) needs vcruntime140.dll from Microsoft's VC++
+# Redistributable, which a player may simply not have: the game would refuse to
+# start with a missing-DLL error. Same idea as the Mac handout linking raylib
+# statically so the player needs no Homebrew. packaging/windows/pack.ps1 checks it.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # The web build is `make web` and only `make web`. The Makefile deliberately
 # keeps EXTRA_CXXFLAGS (secrets.mk's join key) out of the wasm bundle, because
@@ -148,6 +157,14 @@ if(PLATFORMZ_BUILD_CLIENT)
   # Keep in step with SRCS in the Makefile.
   set(PLATFORMZ_CLIENT_SOURCES main.cpp collisions.cpp net_native.cpp)
   add_executable(platformz ${PLATFORMZ_CLIENT_SOURCES})
+  if(WIN32)
+    # Version resource: what Explorer shows under Properties > Details, and
+    # the product name SmartScreen shows alongside the (for now absent)
+    # publisher. Stamped from project(VERSION) above.
+    configure_file(packaging/windows/platformz.rc.in
+                   "${CMAKE_CURRENT_BINARY_DIR}/platformz.rc" @ONLY)
+    target_sources(platformz PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/platformz.rc")
+  endif()
   target_link_libraries(platformz PRIVATE raylib nlohmann_json::nlohmann_json ixwebsocket)
   target_compile_options(platformz PRIVATE ${PLATFORMZ_EXTRA_CXXFLAGS})
   if(PLATFORMZ_DEFAULT_SERVER_HOST)
