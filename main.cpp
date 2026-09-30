@@ -327,7 +327,8 @@ int main(int argc, char** argv) {
     // Contents/MacOS/ as nested *code*, so data can't live there. Hop up when
     // that layout is present. The loose dev build (./platformz beside assets/)
     // has no ../Resources and is unaffected; on web GetApplicationDirectory()
-    // is "/" so this is likewise false.
+    // is "/" so this is likewise false. On Windows the .exe sits beside assets\
+    // (CMakeLists.txt copies it there) and the anchor above is all it needs.
     if (DirectoryExists("../Resources/assets")) ChangeDirectory("../Resources");
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's

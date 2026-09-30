@@ -1,7 +1,7 @@
 # CMakeLists.txt - the cross-platform build (F1, #92).
 #
 # Three targets from one tree:
-#   platformz    the native client   - macOS, Windows (compiles once F2 ports net_client.h)
+#   platformz    the native client   - macOS, Windows
 #   gameserver   the headless server - Linux (the box), macOS (dev)
 #   loadtest     the server's load generator / WS smoke test (a client, see server/Makefile)
 #
@@ -146,7 +146,7 @@ if(PLATFORMZ_BUILD_CLIENT)
   endif()
 
   # Keep in step with SRCS in the Makefile.
-  set(PLATFORMZ_CLIENT_SOURCES main.cpp collisions.cpp)
+  set(PLATFORMZ_CLIENT_SOURCES main.cpp collisions.cpp net_native.cpp)
   add_executable(platformz ${PLATFORMZ_CLIENT_SOURCES})
   target_link_libraries(platformz PRIVATE raylib nlohmann_json::nlohmann_json ixwebsocket)
   target_compile_options(platformz PRIVATE ${PLATFORMZ_EXTRA_CXXFLAGS})
@@ -157,6 +157,18 @@ if(PLATFORMZ_BUILD_CLIENT)
   if(PLATFORMZ_DEFAULT_SERVER_PORT)
     target_compile_definitions(platformz PRIVATE
       PLATFORMZ_DEFAULT_SERVER_PORT="${PLATFORMZ_DEFAULT_SERVER_PORT}")
+  endif()
+  if(WIN32)
+    # A game, not a console tool: without this Windows opens a black console
+    # window behind the game for the whole session. Debug keeps the console,
+    # because that is where raylib's log and the PERF lines go. main() stays the
+    # entry point (no WinMain) under both.
+    if(MSVC)
+      target_link_options(platformz PRIVATE
+        $<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup>)
+    else()
+      target_link_options(platformz PRIVATE $<$<NOT:$<CONFIG:Debug>>:-mwindows>)
+    endif()
   endif()
   if(APPLE)
     # What the Makefile's LDFLAGS name. Homebrew's raylib is a dylib that brings

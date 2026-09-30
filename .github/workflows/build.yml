@@ -239,11 +239,10 @@ jobs:
           cmake --preset server
           cmake --build --preset server -j 4
 
-  # The Windows half of CMakeLists.txt, which no one can run by hand here. It
-  # builds every DEPENDENCY of the Windows client - raylib, mbedTLS and
-  # IXWebSocket on it - but not the client itself: net_client.h still includes
-  # POSIX socket headers, and porting those to Winsock is F2 (#93). When F2
-  # lands, drop the --target list and this job builds platformz.exe.
+  # The Windows client, which no one can build by hand here: raylib, mbedTLS
+  # and IXWebSocket fetched and built, then platformz.exe itself (F2, #93). A
+  # compile check, not a play test - it proves the Winsock UDP transport and the
+  # net_native.cpp split (no <windows.h> beside raylib.h) still build.
   cmake-windows:
     name: CMake Windows
     runs-on: windows-latest
@@ -257,5 +256,14 @@ jobs:
       - name: Configure (client)
         run: cmake --preset client
 
-      - name: Build the client's dependencies
-        run: cmake --build --preset client --target raylib ixwebsocket -- /m
+      - name: Build the client
+        run: cmake --build --preset client -- /m
+
+      # What a player would unzip: the exe and its assets beside it.
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: platformz-windows
+          path: |
+            build/cmake-client/Release/platformz.exe
+            build/cmake-client/Release/assets/

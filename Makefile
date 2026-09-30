@@ -49,7 +49,7 @@ LDFLAGS  := -L/opt/homebrew/lib $(RAYLIB_LINK) \
 
 TARGET := platformz
 # Also listed in CMakeLists.txt (PLATFORMZ_CLIENT_SOURCES) - add a new .cpp to both.
-SRCS := main.cpp collisions.cpp
+SRCS := main.cpp collisions.cpp net_native.cpp
 HDRS := $(wildcard *.h)
 
 all: $(TARGET)

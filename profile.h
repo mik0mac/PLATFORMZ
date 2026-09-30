@@ -67,6 +67,8 @@
 #elif defined(_WIN32)
 #include <cstdlib>     // getenv
 #include <direct.h>    // _mkdir
+#include <filesystem>  // rename that replaces (see WriteRawTo)
+#include <system_error>
 #else
 #include <cstdlib>     // getenv
 #include <sys/stat.h>  // mkdir
@@ -269,14 +271,27 @@ inline bool WriteRawTo(const char* leaf, const char* webKey, const std::string& 
     // Write-then-rename, so a crash or a full disk mid-write leaves the previous
     // profile intact instead of a half-written file that parses as garbage and
     // silently resets the player's name and id. rename() is atomic within a
-    // filesystem, and the temp file is a sibling so it always is one.
+    // filesystem (on Windows, MoveFileEx within a volume), and the temp file is a
+    // sibling so it always is one.
     const std::string tmp = path + ".tmp";
     std::FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
     const size_t wrote = std::fwrite(json.data(), 1, json.size(), f);
     const bool   ok    = (wrote == json.size()) && (std::fclose(f) == 0);
     if (!ok) { std::remove(tmp.c_str()); return false; }
+#if defined(_WIN32)
+    // NOT std::rename: the Windows CRT's refuses to replace an existing file, so
+    // every save after the first would fail and the profile would freeze at its
+    // first version. std::filesystem::rename replaces on every platform (MSVC
+    // does it with MoveFileEx + MOVEFILE_REPLACE_EXISTING) - and it needs no
+    // <windows.h>, which this header must never pull in: it is compiled beside
+    // raylib.h, and the two define the same names (see net_native.cpp).
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) { std::remove(tmp.c_str()); return false; }
+#else
     if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return false; }
+#endif
 #if !defined(_WIN32)
     // 0600 explicitly rather than whatever the umask allowed. The directory is
     // already 0700, so this is belt-and-braces today - but D3 lands a signed
