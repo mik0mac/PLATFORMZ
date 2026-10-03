@@ -26,6 +26,17 @@ C++ runtime is linked statically, `/MT`), and — once signing is on — a valid
 timestamped signature, or no correctly-named zip. CI's `CMake Windows` job runs it
 on every push. No Windows machine is in the loop, so that job is the only build.
 
+Steam edition (F4, #95): `cmake --preset steam && cmake --build --preset steam`
+→ `build/cmake-steam/`. It needs the Steamworks SDK unzipped **beside** the
+checkout as `../steamworks_sdk` — **never inside it**: the repo is public and
+Valve's terms forbid republishing the SDK, so CI never builds this edition. Two
+builds from one tree: `platform.h` holds do-nothing stand-ins for every other
+build, and only the Steam edition compiles `platform_steam.cpp` and ships
+`libsteam_api`. Until PLATFORMZ has its own App ID, development runs use Valve's
+Spacewar test app (480, written to `steam_appid.txt` beside the binary — a
+development-only file that must never ship in a depot). Steam invites carry
+`--match CODE`, the same text as the command-line flag.
+
 Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):
 - raylib built from source at `~/raylib-macos13` with

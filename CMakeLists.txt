@@ -58,8 +58,10 @@ option(PLATFORMZ_BUILD_LOADTEST "Build server/loadtest (needs nlohmann/json)" OF
 # The Steam build (F4, #95). OFF is the website/handout build, which contains no
 # Steam code and ships no Valve library - two builds from one tree, see platform.h.
 option(PLATFORMZ_STEAM "Build the Steam edition (needs the Steamworks SDK)" OFF)
-set(STEAMWORKS_SDK_DIR "$ENV{HOME}/steamworks_sdk/sdk" CACHE PATH
-    "The unzipped Steamworks SDK's sdk/ folder (holds public/ and redistributable_bin/)")
+# Default: a steamworks_sdk folder BESIDE the checkout - outside the repo, where
+# it has to be. Either the sdk/ folder itself or the zip's top folder above it.
+set(STEAMWORKS_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../steamworks_sdk" CACHE PATH
+    "The unzipped Steamworks SDK (the folder holding public/ and redistributable_bin/, or the one above it)")
 # 480 is Valve's public test app, Spacewar: lets the Steam features run before
 # PLATFORMZ has an App ID of its own. Replace it once the store entry exists.
 set(PLATFORMZ_STEAM_APPID "480" CACHE STRING "Steam App ID for development runs (steam_appid.txt)")
@@ -209,14 +211,17 @@ if(PLATFORMZ_BUILD_CLIENT)
   # partner.steamgames.com and unzipped outside the tree; this points at it. CI
   # never turns this on, so CI builds only the edition with no Steam in it.
   if(PLATFORMZ_STEAM)
+    if(NOT EXISTS "${STEAMWORKS_SDK_DIR}/public/steam/steam_api.h"
+       AND EXISTS "${STEAMWORKS_SDK_DIR}/sdk/public/steam/steam_api.h")
+      set(STEAMWORKS_SDK_DIR "${STEAMWORKS_SDK_DIR}/sdk")   # pointed at the zip's top folder
+    endif()
     if(NOT EXISTS "${STEAMWORKS_SDK_DIR}/public/steam/steam_api.h")
       message(FATAL_ERROR
         "PLATFORMZ_STEAM is ON but no Steamworks SDK at STEAMWORKS_SDK_DIR=${STEAMWORKS_SDK_DIR}. "
-        "Download it from partner.steamgames.com, unzip it, and pass -DSTEAMWORKS_SDK_DIR=<...>/sdk")
+        "Download it from partner.steamgames.com, unzip it beside this checkout as "
+        "steamworks_sdk/, or pass -DSTEAMWORKS_SDK_DIR=<path>")
     endif()
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform_steam.cpp")
-      message(FATAL_ERROR "PLATFORMZ_STEAM is ON but platform_steam.cpp does not exist yet (F4 step 2)")
-    endif()
+    message(STATUS "Steam edition: SDK at ${STEAMWORKS_SDK_DIR}, dev App ID ${PLATFORMZ_STEAM_APPID}")
     set(_sdk_bin "${STEAMWORKS_SDK_DIR}/redistributable_bin")
     if(WIN32)
       set(_steam_lib "${_sdk_bin}/win64/steam_api64.lib")
