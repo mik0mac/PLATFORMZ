@@ -55,6 +55,14 @@ endif()
 option(PLATFORMZ_BUILD_CLIENT "Build the native client (needs raylib)" ON)
 option(PLATFORMZ_BUILD_SERVER "Build the headless gameserver (needs Boost headers)" ON)
 option(PLATFORMZ_BUILD_LOADTEST "Build server/loadtest (needs nlohmann/json)" OFF)
+# The Steam build (F4, #95). OFF is the website/handout build, which contains no
+# Steam code and ships no Valve library - two builds from one tree, see platform.h.
+option(PLATFORMZ_STEAM "Build the Steam edition (needs the Steamworks SDK)" OFF)
+set(STEAMWORKS_SDK_DIR "$ENV{HOME}/steamworks_sdk/sdk" CACHE PATH
+    "The unzipped Steamworks SDK's sdk/ folder (holds public/ and redistributable_bin/)")
+# 480 is Valve's public test app, Spacewar: lets the Steam features run before
+# PLATFORMZ has an App ID of its own. Replace it once the store entry exists.
+set(PLATFORMZ_STEAM_APPID "480" CACHE STRING "Steam App ID for development runs (steam_appid.txt)")
 
 include(FetchContent)
 
@@ -193,6 +201,54 @@ if(PLATFORMZ_BUILD_CLIENT)
     target_link_libraries(platformz PRIVATE
       "-framework OpenGL" "-framework Cocoa" "-framework IOKit" "-framework CoreVideo"
       "-framework CoreAudio" "-framework AudioToolbox")
+  endif()
+
+  #MARK: Steam edition
+  # The Steamworks SDK is NOT in this repo and must never be: the repo is public
+  # and Valve's SDK terms do not allow republishing it. It is downloaded from
+  # partner.steamgames.com and unzipped outside the tree; this points at it. CI
+  # never turns this on, so CI builds only the edition with no Steam in it.
+  if(PLATFORMZ_STEAM)
+    if(NOT EXISTS "${STEAMWORKS_SDK_DIR}/public/steam/steam_api.h")
+      message(FATAL_ERROR
+        "PLATFORMZ_STEAM is ON but no Steamworks SDK at STEAMWORKS_SDK_DIR=${STEAMWORKS_SDK_DIR}. "
+        "Download it from partner.steamgames.com, unzip it, and pass -DSTEAMWORKS_SDK_DIR=<...>/sdk")
+    endif()
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform_steam.cpp")
+      message(FATAL_ERROR "PLATFORMZ_STEAM is ON but platform_steam.cpp does not exist yet (F4 step 2)")
+    endif()
+    set(_sdk_bin "${STEAMWORKS_SDK_DIR}/redistributable_bin")
+    if(WIN32)
+      set(_steam_lib "${_sdk_bin}/win64/steam_api64.lib")
+      set(_steam_rt  "${_sdk_bin}/win64/steam_api64.dll")
+    elseif(APPLE)
+      set(_steam_lib "${_sdk_bin}/osx/libsteam_api.dylib")
+      set(_steam_rt  "${_steam_lib}")
+    else()
+      set(_steam_lib "${_sdk_bin}/linux64/libsteam_api.so")
+      set(_steam_rt  "${_steam_lib}")
+    endif()
+    target_sources(platformz PRIVATE platform_steam.cpp)
+    target_compile_definitions(platformz PRIVATE PLATFORMZ_STEAM=1)
+    target_include_directories(platformz PRIVATE "${STEAMWORKS_SDK_DIR}/public")
+    target_link_libraries(platformz PRIVATE "${_steam_lib}")
+    # The library ships BESIDE the binary, and the binary looks for it there.
+    if(APPLE)
+      set_target_properties(platformz PROPERTIES BUILD_RPATH "@executable_path")
+    elseif(UNIX)
+      set_target_properties(platformz PROPERTIES BUILD_RPATH "$ORIGIN")
+    endif()
+    # steam_appid.txt is development only: it tells the Steam library which game
+    # this is when it is NOT launched by Steam. A build Steam installs never has
+    # it - Steam supplies the App ID itself - so it must not go into a shipped
+    # depot. Written here and copied, because a build step cannot redirect output
+    # portably.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/steam_appid.txt" "${PLATFORMZ_STEAM_APPID}\n")
+    add_custom_command(TARGET platformz POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_steam_rt}" "$<TARGET_FILE_DIR:platformz>"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_CURRENT_BINARY_DIR}/steam_appid.txt" "$<TARGET_FILE_DIR:platformz>"
+      VERBATIM)
   endif()
 
   # Assets load by RELATIVE path from the binary's own directory (main.cpp

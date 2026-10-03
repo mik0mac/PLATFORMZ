@@ -17,6 +17,10 @@
 # one-line description a CUSTOM room generates from its rules. Cosmetic, so
 # nothing else in either suite would ever fail if it silently stopped reporting
 # a rule.
+#
+# And platform_test.cpp: the invite string a Steam friend's "Join game" carries
+# (platform.h). It comes from another player's machine, so most of it is what
+# the parser must refuse.
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -46,6 +50,10 @@ run_native local_scores_test.cpp local_scores_test
 echo
 echo "=== options_test (native) ==="
 run_native options_test.cpp options_test
+
+echo
+echo "=== platform_test (native) ==="
+run_native platform_test.cpp platform_test
 
 echo
 echo "=== web_profile_test (localStorage) ==="
