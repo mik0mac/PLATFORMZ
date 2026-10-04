@@ -254,6 +254,44 @@ if(PLATFORMZ_BUILD_CLIENT)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "${CMAKE_CURRENT_BINARY_DIR}/steam_appid.txt" "$<TARGET_FILE_DIR:platformz>"
       VERBATIM)
+
+    # macOS: a throwaway .app for testing through Steam, because Steam only adds
+    # its overlay to a game IT launches, and on a Mac "Add a Non-Steam Game"
+    # only offers .app bundles - the bare binary is greyed out in its picker.
+    #   cmake --build --preset steam --target steam-test-app
+    # then add build/cmake-steam/PLATFORMZ Steam Test.app to the Steam library
+    # once; later builds of this target refresh it in place. Same layout as
+    # `make app` (assets in Contents/Resources, which main.cpp hops to), with
+    # the Steam library beside the binary and steam_appid.txt in both folders -
+    # the game moves into Resources before it starts Steam. NOT a handout: it
+    # carries steam_appid.txt and is unsigned.
+    if(APPLE)
+      set(_test_app "${CMAKE_CURRENT_BINARY_DIR}/PLATFORMZ Steam Test.app")
+      set(APP_NAME "PLATFORMZ Steam Test")
+      set(APP_ID "space.platformz.steamtest")
+      set(APP_EXE "platformz")
+      set(APP_VERSION "${PROJECT_VERSION}")
+      set(APP_BUILD "1")
+      set(APP_MIN_OS "13.0")
+      configure_file(packaging/Info.plist.in
+                     "${CMAKE_CURRENT_BINARY_DIR}/steam-test-Info.plist" @ONLY)
+      add_custom_target(steam-test-app
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_test_app}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${_test_app}/Contents/MacOS" "${_test_app}/Contents/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:platformz>" "${_steam_rt}"
+                "${CMAKE_CURRENT_BINARY_DIR}/steam_appid.txt" "${_test_app}/Contents/MacOS/"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_CURRENT_BINARY_DIR}/steam_appid.txt" "${_test_app}/Contents/Resources/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${_test_app}/Contents/Resources/assets"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_CURRENT_BINARY_DIR}/steam-test-Info.plist" "${_test_app}/Contents/Info.plist"
+        COMMAND find "${_test_app}" -name .DS_Store -delete
+        COMMAND ${CMAKE_COMMAND} -E echo "==> ${_test_app} (add it to Steam once: Games > Add a Non-Steam Game)"
+        DEPENDS platformz
+        VERBATIM)
+    endif()
   endif()
 
   # Assets load by RELATIVE path from the binary's own directory (main.cpp

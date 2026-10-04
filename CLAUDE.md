@@ -35,7 +35,11 @@ build, and only the Steam edition compiles `platform_steam.cpp` and ships
 `libsteam_api`. Until PLATFORMZ has its own App ID, development runs use Valve's
 Spacewar test app (480, written to `steam_appid.txt` beside the binary — a
 development-only file that must never ship in a depot). Steam invites carry
-`--match CODE`, the same text as the command-line flag.
+`--match CODE`, the same text as the command-line flag. Steam only adds its
+overlay to a game it launches, so to test the overlay on a Mac run
+`cmake --build --preset steam --target steam-test-app` and add the resulting
+`build/cmake-steam/PLATFORMZ Steam Test.app` to Steam once ("Add a Non-Steam
+Game" greys out bare binaries); later runs of the target refresh it in place.
 
 Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):
