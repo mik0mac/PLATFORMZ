@@ -22,6 +22,8 @@
 #include <string>
 #include <cctype>
 
+#include "invite.h"   // what a room code is
+
 namespace platform {
 
 //MARK: Invites
@@ -36,8 +38,11 @@ inline std::string JoinStringFor(const std::string& code) { return "--match " + 
 
 // The room code in a join string, or "" when there isn't a usable one. The
 // string came from another player's machine, so it is read strictly: the
-// "--match" token, then one code of letters and digits, at most 8 of them
-// (codes are 4 today), uppercased - nothing else is accepted.
+// "--match" token, then one code, and nothing else. What makes a code a code -
+// letters and digits, at most 8, uppercased - is invite.h's, shared with the
+// CODE field's paste so the two cannot disagree. Deliberately narrower than
+// invite::ExtractRoomCode: Steam only ever relays the string we published, so a
+// bare code or a link arriving this way is not ours.
 inline std::string ParseJoinString(const std::string& s) {
     const std::string flag = "--match";
     size_t i = 0;
@@ -47,16 +52,12 @@ inline std::string ParseJoinString(const std::string& s) {
     i += flag.size();
     if (i >= s.size() || !std::isspace((unsigned char)s[i])) return std::string();
     skipSpace();
-    std::string code;
-    while (i < s.size() && !std::isspace((unsigned char)s[i])) {
-        const unsigned char c = (unsigned char)s[i++];
-        if (!std::isalnum(c) || c > 127) return std::string();
-        code.push_back((char)std::toupper(c));
-    }
+    const size_t from = i;
+    while (i < s.size() && !std::isspace((unsigned char)s[i])) ++i;
+    const std::string word = s.substr(from, i - from);
     skipSpace();
     if (i != s.size()) return std::string();          // trailing junk
-    if (code.empty() || code.size() > 8) return std::string();
-    return code;
+    return invite::NormalizeCode(word);
 }
 
 #if defined(PLATFORMZ_STEAM)

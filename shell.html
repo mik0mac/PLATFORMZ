@@ -62,6 +62,17 @@
       document.addEventListener('webkitpointerlockerror', onErr);
     })();
 
+    // Paste: the game cannot read the clipboard (GLFW has none here, and a page
+    // may not read it uninvited), but the browser announces a paste the player
+    // makes. Park the text for the focused field in the game to take - see
+    // PlatformzTakePaste in ui.h, which ignores anything older than half a
+    // second. Not preventDefault'ed: nothing on the page is editable, so the
+    // browser has nothing else to do with it.
+    document.addEventListener('paste', function (e) {
+      var t = e.clipboardData && e.clipboardData.getData('text');
+      if (t && window.Module) Module.pendingPaste = { text: t, at: Date.now() };
+    });
+
     // Audio unlock: browsers create the Web Audio context suspended until a user
     // gesture. raylib's miniaudio only auto-unlocks on 'click'/'touchend', so a
     // player who starts the game with a key (the title screen accepts any key)

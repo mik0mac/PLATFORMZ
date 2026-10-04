@@ -16,6 +16,27 @@
 #include <string>
 #include <cmath> // fminf/fmaxf/roundf (UiSlider)
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+// Paste, browser edition. GLFW has no clipboard under emscripten, and a page may
+// not read the clipboard whenever it likes - but it IS told when the player
+// pastes. shell.html catches that 'paste' event and parks the text on
+// Module.pendingPaste with a timestamp; the focused text field takes it here.
+// Taking clears it, and anything older than half a second is dropped, so a
+// paste made while no field had focus cannot land in one focused later.
+// (EM_JS defines a function: fine here because only main.cpp's translation unit
+// includes ui.h.)
+EM_JS(int, PlatformzTakePaste, (char* out, int cap), {
+    var p = window.Module && Module.pendingPaste;
+    if (!p) return 0;
+    Module.pendingPaste = null;
+    if (Date.now() - p.at > 500) return 0;
+    if (lengthBytesUTF8(p.text) + 1 > cap) return 0;   // far longer than anything a field takes
+    stringToUTF8(p.text, out, cap);
+    return 1;
+});
+#endif
+
 //MARK: Theme
 // Defaults match the cyan element palette (color_outline {0,255,200}). Callers
 // can override per-widget where a different accent is wanted (e.g. a modal).
@@ -94,9 +115,14 @@ inline bool UiToggle(Rectangle r, bool& value, int fontSize = 20) {
 // field (or `maxTextWidth` pixels, if a tighter caller budget is given) — so
 // the text can fill the visible space but never overflow it. Narrow glyphs get
 // more characters than wide ones; maxLen stays as the hard backstop.
+//
+// `pasteTransform`, when given, sees a paste first: a non-empty answer REPLACES
+// the field's contents; an empty one lets the paste through as typed characters.
+// The CODE field uses it to turn a pasted invite link into its room code.
 inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
                         size_t maxLen = 16, int fontSize = 20,
-                        bool* pristine = nullptr, int maxTextWidth = 0) {
+                        bool* pristine = nullptr, int maxTextWidth = 0,
+                        std::string (*pasteTransform)(const std::string&) = nullptr) {
     bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) focused = hovered; // click toggles focus
 
@@ -124,23 +150,38 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
         // from a lobby has to be read off the screen and typed out by hand, which
         // rather defeats the copy button.
         //
-        // Cmd+V on macOS, Ctrl+V elsewhere. Under emscripten GLFW has no
-        // clipboard, so GetClipboardText comes back empty and this is a no-op:
-        // harmless, and the web build hands out links that are opened rather than
-        // pasted anyway.
+        // Cmd+V on macOS, Ctrl+V elsewhere. In the browser the page's own paste
+        // event does the work instead (see PlatformzTakePaste above) - a player
+        // already in the browser game who is handed an invite has to be able
+        // to paste it, so "links are opened, not pasted" was only half true.
         // EITHER modifier, on every platform. Cmd is the Mac chord and Ctrl the
         // one everywhere else, but accepting both costs nothing and leaves a
         // working fallback if one of them never arrives - which is not
         // hypothetical: macOS routes Cmd+key to the menu bar as a key
         // equivalent first, and GLFW does not always deliver the keypress that
         // follows.
+        std::string clip;
+#if defined(__EMSCRIPTEN__)
+        {
+            char buf[1024];
+            if (PlatformzTakePaste(buf, (int)sizeof(buf))) clip = buf;
+        }
+#else
         const bool pasteHeld = IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER)
                             || IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
         if (pasteHeld && IsKeyPressed(KEY_V)) {
-            const char* clip = GetClipboardText();
-            if (clip && *clip) {
-                if (pristine && *pristine) { text.clear(); *pristine = false; }
-                for (const char* q = clip; *q; ++q) {
+            const char* c = GetClipboardText();
+            if (c) clip = c;
+        }
+#endif
+        if (!clip.empty()) {
+            const std::string replaced = pasteTransform ? pasteTransform(clip) : std::string();
+            if (pristine && *pristine) { text.clear(); *pristine = false; }
+            if (!replaced.empty() && replaced.size() <= maxLen) {
+                text = replaced;
+                changed = true;
+            } else {
+                for (const char* q = clip.c_str(); *q; ++q) {
                     // Same filter the typed path uses, and the same two limits -
                     // a paste must not be able to overflow a field that typing
                     // cannot.

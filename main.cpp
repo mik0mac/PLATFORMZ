@@ -37,7 +37,10 @@ EM_JS(void, PlatformzSetUiOwnsMouse, (int owns), { if (window.Module) Module.uiO
 
 // COPY INVITE, browser edition. Builds this page's URL with ?match=CODE merged in
 // (keeping ?server= and ?key= intact - drop the key and the link stops working on
-// a gated server), puts it on the clipboard, and writes it back for display.
+// a gated server), puts it on the clipboard, and writes it back. Returns 0 when
+// the copy was refused outright, so the caller can show the link instead - the
+// one case where the player needs to see it. (navigator.clipboard's refusal
+// arrives later, as a rejected promise, and cannot be reported here.)
 //
 // The code is passed as a STRING ARGUMENT rather than interpolated into script
 // text. It is four characters from a fixed safe alphabet, so nothing could get
@@ -47,10 +50,11 @@ EM_JS(void, PlatformzSetUiOwnsMouse, (int owns), { if (window.Module) Module.uiO
 // raylib's SetClipboardText goes through GLFW, which has no clipboard under
 // emscripten, so the copy happens here. navigator.clipboard needs a secure
 // context, which a plain-http LAN server is not - hence the execCommand fallback.
-EM_JS(void, PlatformzCopyInvite, (const char* code, char* out, int cap), {
+EM_JS(int, PlatformzCopyInvite, (const char* code, char* out, int cap), {
     var u = new URL(location.href);
     u.searchParams.set('match', UTF8ToString(code));
     var link = u.toString();
+    var ok = 1;
     try {
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(link);
@@ -61,11 +65,12 @@ EM_JS(void, PlatformzCopyInvite, (const char* code, char* out, int cap), {
             t.style.opacity = '0';
             document.body.appendChild(t);
             t.select();
-            document.execCommand('copy');
+            ok = document.execCommand('copy') ? 1 : 0;
             document.body.removeChild(t);
         }
-    } catch (e) { /* clipboard refused: the link is still shown on screen */ }
+    } catch (e) { ok = 0; }
     stringToUTF8(link, out, cap);
+    return ok;
 });
 #else
 inline void PlatformzSetUiOwnsMouse(int) {} // no-op on native builds
@@ -1267,20 +1272,26 @@ int main(int argc, char** argv) {
         networked = sessionOnline;
     };
 
-    // What COPY INVITE puts on the clipboard. A browser friend gets a link they
-    // click; a native one has no link to click, so they get the code itself - the
-    // thing JOIN CODE and --match both take.
-    auto inviteStringFor = [&](const std::string& code) -> std::string {
+    // COPY INVITE: put the invite on the clipboard and return the line to show
+    // for it. A browser friend gets a link they click; a native one has no link
+    // to click, so they get the code itself - the thing JOIN CODE and --match
+    // both take (and the CODE field now accepts a pasted link too, invite.h).
+    //
+    // The notice says WHAT was copied, not the copy itself: the link is long
+    // and nobody reads it off the screen. The one exception is a browser that
+    // refused the copy, where showing the link is the player's only way to get it.
+    auto copyInvite = [&](const std::string& code) -> std::string {
         if (code.empty()) return std::string();
 #if defined(__EMSCRIPTEN__)
         // PlatformzCopyInvite does the clipboard work too - GLFW has no clipboard
-        // under emscripten, so SetClipboardText below would be a no-op there.
+        // under emscripten, so SetClipboardText would be a no-op there.
         char buf[512] = {0};
-        PlatformzCopyInvite(code.c_str(), buf, (int)sizeof(buf));
-        return std::string(buf);
+        if (!PlatformzCopyInvite(code.c_str(), buf, (int)sizeof(buf)))
+            return std::string("Couldn't copy - share this link: ") + buf;
+        return "Link copied.";
 #else
         SetClipboardText(code.c_str());
-        return code;
+        return "Code copied.";
 #endif
     };
 
@@ -1902,10 +1913,9 @@ int main(int argc, char** argv) {
                         // the page URL with match= merged in, so they click once;
                         // natively there is no link to hand out, so it is the code
                         // they type into JOIN CODE (or pass as --match).
-                        // inviteStringFor does the copying: the browser needs its
-                        // own clipboard path, so the two cannot be separated.
-                        const std::string invite = inviteStringFor(shell.inMatchCode);
-                        shell.copyNotice   = "COPIED: " + invite;
+                        // copyInvite does the copying: the browser needs its own
+                        // clipboard path, so the two cannot be separated.
+                        shell.copyNotice   = copyInvite(shell.inMatchCode);
                         shell.copyNoticeAt = GetTime();
                         break;
                     }
