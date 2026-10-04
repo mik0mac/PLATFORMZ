@@ -46,7 +46,8 @@ CXXFLAGS += -I$(BREW_PREFIX)/include
 LDFLAGS  += -L$(BREW_PREFIX)/lib
 endif
 
-# server_main.cpp + collisions.cpp (game logic, no rendering)
+# server_main.cpp + collisions.cpp (game logic, no rendering). Also listed in the
+# root CMakeLists.txt (the gameserver target) - add a new .cpp to both.
 SRCS     := server_main.cpp ../collisions.cpp
 
 # Every header is a dependency, exactly like the root Makefile's `HDRS :=

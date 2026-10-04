@@ -6,12 +6,13 @@ name: Build
 #   test-server   the unit tests and the live protocol probes (minutes)
 #   race-server   the same probes under ThreadSanitizer (slower still)
 #   build-web     the browser client, under emsdk (minutes, mostly cached)
+#   cmake-server  the server again, through CMakeLists.txt instead of the Makefile
+#   cmake-windows the Windows half of CMakeLists.txt (F1) - see that job
 #
-# The NATIVE client is still not built here, and cannot be: its Makefile is
-# macOS-only (Apple frameworks, /opt/homebrew). A macOS runner would use the same
-# compiler and OS as the machine that writes the code, so it would add little
+# The macOS native client is still not built here. A macOS runner would use the
+# same compiler and OS as the machine that writes the code, so it would add little
 # beyond a clean-checkout check while going red whenever Homebrew bumps raylib.
-# The web client is the opposite case - see build-web.
+# Windows and the web are the opposite case: builds nobody runs by hand.
 
 on:
   push:
@@ -217,3 +218,58 @@ jobs:
       # web/ artifacts match it - and those are what ship. See the script.
       - name: Committed bundle is newer than the protocol
         run: ./scripts/check-web-bundle-fresh.sh
+
+  # The server through CMake. The Makefile stays what the box and the test
+  # scripts build; this proves the second build of the same sources still agrees
+  # with it - same source list, same shim-before-root include order.
+  cmake-server:
+    name: CMake server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libboost-dev nlohmann-json3-dev
+
+      - name: Configure and build (gameserver + loadtest)
+        run: |
+          cmake --preset server
+          cmake --build --preset server -j 4
+
+  # The Windows client, which no one can build by hand here: raylib, mbedTLS
+  # and IXWebSocket fetched and built, then platformz.exe itself (F2, #93). A
+  # compile check, not a play test - it proves the Winsock UDP transport and the
+  # net_native.cpp split (no <windows.h> beside raylib.h) still build.
+  cmake-windows:
+    name: CMake Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true   # IXWebSocket
+
+      - name: Configure (client)
+        run: cmake --preset client
+
+      - name: Build the client
+        run: cmake --build --preset client -- /m
+
+      # The handout zip, through the same script a release uses - so its checks
+      # (version resource, no DLL a player lacks, signature verified before
+      # zipping) run on every push, not just on release day. No certificate
+      # yet (#94), so this produces the UNSIGNED zip.
+      - name: Package
+        shell: pwsh
+        run: ./packaging/windows/pack.ps1
+
+      - name: Upload the zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: platformz-windows
+          path: dist/PLATFORMZ-*windows-x64.zip
+          if-no-files-found: error

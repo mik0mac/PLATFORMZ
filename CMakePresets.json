@@ -1,0 +1,67 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Client + server",
+      "description": "Everything a dev machine builds: the native client and the gameserver.",
+      "binaryDir": "${sourceDir}/build/cmake-${presetName}"
+    },
+    {
+      "name": "client",
+      "displayName": "Client only",
+      "description": "The native client alone - the Windows starting point (no Boost needed).",
+      "binaryDir": "${sourceDir}/build/cmake-${presetName}",
+      "cacheVariables": {
+        "PLATFORMZ_BUILD_SERVER": "OFF"
+      }
+    },
+    {
+      "name": "server",
+      "displayName": "Server only",
+      "description": "The gameserver and load harness, as on the Linux box: no raylib at all.",
+      "binaryDir": "${sourceDir}/build/cmake-${presetName}",
+      "cacheVariables": {
+        "PLATFORMZ_BUILD_CLIENT": "OFF",
+        "PLATFORMZ_BUILD_LOADTEST": "ON"
+      }
+    },
+    {
+      "name": "steam",
+      "displayName": "Client, Steam edition",
+      "description": "The client with Steamworks (PLATFORMZ_STEAM). Needs the SDK beside the checkout as steamworks_sdk/ - never in it.",
+      "binaryDir": "${sourceDir}/build/cmake-${presetName}",
+      "cacheVariables": {
+        "PLATFORMZ_BUILD_SERVER": "OFF",
+        "PLATFORMZ_STEAM": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Release"
+    },
+    {
+      "name": "client",
+      "configurePreset": "client",
+      "configuration": "Release"
+    },
+    {
+      "name": "server",
+      "configurePreset": "server",
+      "configuration": "Release"
+    },
+    {
+      "name": "steam",
+      "configurePreset": "steam",
+      "configuration": "Release"
+    }
+  ]
+}

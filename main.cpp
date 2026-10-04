@@ -20,6 +20,7 @@
 #include "messages.h"    // transient on-screen message queue (kill-feed HUD)
 #include "profile.h"     // persistent local profile: name, clientId, volume, last LOCAL rules
 #include "local_scores.h" // the LOCAL high-score board, fed by offline matches only
+#include "platform.h"     // the storefront (Steam in a Steam build; nothing otherwise)
 
 #include <string>
 #include <unordered_map>
@@ -327,8 +328,13 @@ int main(int argc, char** argv) {
     // Contents/MacOS/ as nested *code*, so data can't live there. Hop up when
     // that layout is present. The loose dev build (./platformz beside assets/)
     // has no ../Resources and is unaffected; on web GetApplicationDirectory()
-    // is "/" so this is likewise false.
+    // is "/" so this is likewise false. On Windows the .exe sits beside assets\
+    // (CMakeLists.txt copies it there) and the anchor above is all it needs.
     if (DirectoryExists("../Resources/assets")) ChangeDirectory("../Resources");
+    // After the window, because Steam's overlay hooks the window's rendering.
+    // A no-op in every build but Steam's, and harmless there when Steam is not
+    // running - the game is the same game either way (#95).
+    platform::Init();
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
                           // quit key - quit via the window close button or Cmd+Q.
@@ -1362,6 +1368,46 @@ int main(int argc, char** argv) {
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
 
+        //MARK: PLATFORM (F4)
+        // Steam's callbacks run from here, once a frame. A friend's "Join game"
+        // while we are already running arrives as the same "--match CODE" text a
+        // launch-time invite puts on the command line (see platform.h), so it
+        // lands in inviteCode and is acted on below exactly like one.
+        platform::Update();
+        {
+            const std::string joinCode = platform::ParseJoinString(platform::TakeJoinRequest());
+            if (!joinCode.empty()) inviteCode = joinCode;
+        }
+        // Show friends the room we are standing in - online and seated only; a
+        // LOCAL match or a menu with no room shows nothing to join.
+        platform::SetJoinableRoom((networked && myIndex >= 0) ? shell.inMatchCode : std::string());
+
+        //MARK: INVITES
+        // An invite - --match, ?match= on a link, or a Steam friend's "Join game"
+        // - names a room to walk into. Acted on from any menu screen, and held
+        // while a match or countdown is under way: a join mid-match would pull the
+        // player out of the fight they are in, and an invite that waits for the
+        // next menu loses nothing.
+        //
+        // Gated on netAcked, NOT on holding a seat. It used to wait for
+        // myIndex >= 0 and only on the TITLE screen - written when connecting
+        // always seated you somewhere. Since C6b a connection holds no room until
+        // it picks one, so that gate never opened and invites did nothing.
+        if (sessionOnline && networked && !inviteCode.empty() && netAcked && net.isOpen()
+            && !shell.joinPending
+            && (screen == GameScreen::TITLE || screen == GameScreen::BROWSE
+                || screen == GameScreen::LOBBY)) {
+            if (myIndex >= 0 && shell.inMatchCode == inviteCode) {
+                inviteCode.clear();             // already standing in it
+            } else {
+                shell.setBrowseStatus("JOINING " + inviteCode + "...", GetTime());
+                // The code doubles as the password for an invite-only room, which
+                // is what makes one string the whole invite.
+                askToMove(serializeJoin(inviteCode, inviteCode), /*retryable*/ true);
+                inviteCode.clear();
+            }
+        }
+
         //MARK: PROFILE AUTOSAVE
         // Sample the live values into the profile every frame, then let it decide
         // whether that is worth a write (at most one every AUTOSAVE_INTERVAL, and
@@ -1618,17 +1664,7 @@ int main(int argc, char** argv) {
                 if (p == ServerMessage::Phase::Countdown) { screen = GameScreen::COUNTDOWN; continue; }
                 if (p == ServerMessage::Phase::Playing)   { enterNetworkedMatch(); continue; }
             }
-            // An invite names a room to walk into instead of idling in whatever
-            // one the server parked us in. Wait for the welcome (myIndex >= 0):
-            // before it we have no slot, and a join sent into that gap is answered
-            // to a connection the server has not finished setting up.
-            if (sessionOnline && !inviteCode.empty() && net.isOpen() && myIndex >= 0) {
-                shell.setBrowseStatus("JOINING " + inviteCode + "...", GetTime());
-                // The code doubles as the password for an invite-only room, which
-                // is what makes one string the whole invite.
-                askToMove(serializeJoin(inviteCode, inviteCode), /*retryable*/ true);
-                inviteCode.clear();
-            }
+            // (An invite is acted on above, under INVITES, for every menu screen.)
             // A completed move lands us in the room's lobby. Only a move WE asked
             // for sets this (see joinPending), so the welcome every client gets on
             // connect cannot trigger it.
@@ -2897,6 +2933,7 @@ int main(int argc, char** argv) {
     CloseAudioDevice();
     UnloadRenderTexture(sceneTarget);
     UnloadShader(grayscaleShader);
+    platform::Shutdown();
     CloseWindow();
     return 0;
 }

@@ -1,3 +1,6 @@
+# macOS + Homebrew. The cross-platform build (Windows, Linux) is CMakeLists.txt;
+# this file stays authoritative for the handout chain (app/sign/notarize/
+# dist-pack) and for `make web`, neither of which CMake does.
 CXX := g++
 
 # Local secrets (optional, gitignored). Create secrets.mk to bake private
@@ -45,7 +48,8 @@ LDFLAGS  := -L/opt/homebrew/lib $(RAYLIB_LINK) \
             -framework Security -framework CoreFoundation -lz
 
 TARGET := platformz
-SRCS := main.cpp collisions.cpp
+# Also listed in CMakeLists.txt (PLATFORMZ_CLIENT_SOURCES) - add a new .cpp to both.
+SRCS := main.cpp collisions.cpp net_native.cpp
 HDRS := $(wildcard *.h)
 
 all: $(TARGET)
@@ -133,6 +137,7 @@ dist:
 RAYLIB_STATIC  := $(HOME)/raylib-macos13/build-mac/raylib/libraylib.a
 APP_NAME       := PLATFORMZ
 APP_ID         := space.platformz.game
+# Also project(VERSION) in CMakeLists.txt, which stamps the Windows exe - keep in step.
 APP_VERSION    ?= 0.1.0
 APP_BUILD      ?= $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 APP_MIN_OS     := 13.0

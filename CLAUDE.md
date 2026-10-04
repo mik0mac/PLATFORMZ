@@ -16,7 +16,28 @@ Handout build (see `docs/deploy-vultr.md` for the full walkthrough):
 - `make dist-pack` — the whole chain → `dist/PLATFORMZ-mac-arm64.zip`, the
   warning-free handout. Recipients double-click; no Gatekeeper prompt, no `xattr`.
 
-Two things the handout build needs that a dev build doesn't, both **one-time and
+Windows handout (F3, #94): `cmake --preset client && cmake --build --preset
+client`, then `pwsh packaging/windows/pack.ps1` → `dist/PLATFORMZ-windows-x64.zip`.
+**There is no certificate yet**, so today it always produces
+`PLATFORMZ-UNSIGNED-windows-x64.zip` (SmartScreen warns). Signing plugs in through
+one variable, `PLATFORMZ_SIGNTOOL_ARGS` (see the script's header). Like `dist-pack`,
+it verifies before it zips: a version resource, no DLL outside Windows itself (the
+C++ runtime is linked statically, `/MT`), and — once signing is on — a valid,
+timestamped signature, or no correctly-named zip. CI's `CMake Windows` job runs it
+on every push. No Windows machine is in the loop, so that job is the only build.
+
+Steam edition (F4, #95): `cmake --preset steam && cmake --build --preset steam`
+→ `build/cmake-steam/`. It needs the Steamworks SDK unzipped **beside** the
+checkout as `../steamworks_sdk` — **never inside it**: the repo is public and
+Valve's terms forbid republishing the SDK, so CI never builds this edition. Two
+builds from one tree: `platform.h` holds do-nothing stand-ins for every other
+build, and only the Steam edition compiles `platform_steam.cpp` and ships
+`libsteam_api`. Until PLATFORMZ has its own App ID, development runs use Valve's
+Spacewar test app (480, written to `steam_appid.txt` beside the binary — a
+development-only file that must never ship in a depot). Steam invites carry
+`--match CODE`, the same text as the command-line flag.
+
+Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):
 - raylib built from source at `~/raylib-macos13` with
   `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`. Homebrew's bottle is `minos 15.0`, which
@@ -28,9 +49,25 @@ Toolchain is **macOS + Homebrew raylib**:
 `g++ -std=c++17 -I/opt/homebrew/include … -L/opt/homebrew/lib -lraylib
 -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo`.
 
-- `SRCS := main.cpp collisions.cpp`; all `*.h` are dependencies (wildcard).
+- `SRCS := main.cpp collisions.cpp net_native.cpp`; all `*.h` are dependencies (wildcard).
 - Editing a header or an existing `.cpp` needs **no** Makefile change.
-- Adding a **new** `.cpp` requires adding it to `SRCS` in the `Makefile`.
+- Adding a **new** `.cpp` requires adding it to `SRCS` in the `Makefile` **and**
+  to `CMakeLists.txt` (client: `PLATFORMZ_CLIENT_SOURCES`; server: the
+  `gameserver` target, beside `SRCS` in `server/Makefile`).
+
+**CMake (F1, #92)** is the cross-platform build, alongside the Makefiles rather
+than replacing them: `cmake --preset dev && cmake --build --preset dev` builds the
+client and server into `build/cmake-dev/` (presets `client` and `server` build one
+each). raylib, nlohmann/json and — on Windows — mbedTLS come from Homebrew when
+installed and are fetched at pinned, hash-checked versions otherwise. It reads
+`secrets.mk` like `make` does, so its client bakes in the same host and key.
+What it deliberately does **not** do: the handout chain (`make app` … `dist-pack`
+stays Makefile-only), and the web build — it **refuses Emscripten**, because the
+web build must never see `secrets.mk`. The deploy box and the test scripts still
+build with `make`. The Windows client (F2, #93) builds only through CMake — use
+the `client` preset — and CI's `CMake Windows` job is the only thing that
+compiles it; nobody has a Windows machine in the loop yet. It also writes `compile_commands.json`, which
+clangd can use to stop the false positives below.
 
 ## IMPORTANT: IDE diagnostics are false positives
 The clang/clangd language server isn't configured with `-I/opt/homebrew/include`,
@@ -44,7 +81,12 @@ Single-binary game. The main loop in `main.cpp` follows time → update → draw
 read input, mutate game state, then render — no state changes during draw.
 
 Header-only class design (`#pragma once`); most logic lives in headers, with
-only `main.cpp` and `collisions.cpp` as translation units.
+only `main.cpp`, `collisions.cpp` and `net_native.cpp` as translation units.
+`net_native.cpp` exists for Windows (F2): it holds the desktop network
+transports so no socket header ever shares a translation unit with `raylib.h` —
+`<windows.h>` and raylib declare the same names (`Rectangle`, `CloseWindow`,
+`DrawText`...). **Never include `raylib.h` (or a header that does) there, and
+never include a platform socket header anywhere else in the client.**
 
 - `main.cpp` — entry point and game loop. Input handling, gravity toggle, rocket
   firing, HUD text. Per frame: input → `player.updateVelocity/updateFuel` →
@@ -298,7 +340,8 @@ on the web but not native (see `docs/multiplayer-testing.md` for the full setup)
   fired rocket in `input.h`). Gravity is applied in `Rocket::updatePos`
   (`gravityEnabled`), inheritance once at spawn in `input.h` (`velocityInheritance`).
   Both default OFF, so rockets fly straight unless the toggle is on.
-- This builds/runs on macOS with Homebrew paths only; no cross-platform build.
+- The Makefile builds on macOS with Homebrew paths only; Windows goes through
+  CMake (see Build & run).
 - Assets load by **relative** path (`assets/sounds/…`), so `main.cpp` anchors the
   working directory right after `InitWindow`: `ChangeDirectory(GetApplicationDirectory())`,
   then a guarded hop to `../Resources` when that directory exists. That second line
