@@ -22,6 +22,7 @@
 #include "wire.h"        // LeaderboardEntry, MatchSummary
 #include "local_scores.h"// the LOCAL half of the HIGH SCORES modal
 #include "ui.h"          // the immediate-mode widgets the screens are built from
+#include "invite.h"      // a room code out of a pasted invite link (the CODE field)
 #include "audio.h"       // MasterVolumeAmpToDb/DbToAmp (the volume slider)
 
 #include <algorithm>     // std::max - the toggle row measures its own layout
@@ -832,7 +833,12 @@ inline BrowseResult DrawBrowse(ShellState& s, int screenW, int screenH,
     // right with the wider button above, and GO trimmed to 90, so the row still
     // clears BACK at the far edge.
     DrawText("CODE", (int)listX + 400, (int)by + 14, 16, ui::OUTLINE);
-    UiTextField({listX + 450.0f, by, 110.0f, 44.0f}, s.joinCode, s.joinCodeFocused, 8, 20);
+    // A pasted invite LINK becomes its code: the browser's COPY INVITE hands out
+    // the whole URL, which is the right thing to text someone with nothing
+    // open, and this is how a player already in the game - desktop or browser -
+    // uses one. A bare code or "--match CODE" works too (invite.h).
+    UiTextField({listX + 450.0f, by, 110.0f, 44.0f}, s.joinCode, s.joinCodeFocused, 8, 20,
+                nullptr, 0, invite::ExtractRoomCode);
     if (UiButton({listX + 580.0f, by, 90.0f, 44.0f}, "GO", 20) && connected && !s.joinCode.empty()) {
         out.action   = BrowseAction::Join;
         out.code     = s.joinCode;
