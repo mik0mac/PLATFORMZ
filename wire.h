@@ -150,6 +150,13 @@ inline const char* joinFailureText(JoinFailure f) {
     }
 }
 
+// A MusicId off the wire, where it is a bare int. Anything out of range - a newer
+// server with more cues than this build knows - becomes "none", so the client
+// falls back to its own pick instead of indexing past musicCueTable.
+inline MusicId MusicIdFromWire(int v) {
+    return (v >= 0 && v < MUSIC_COUNT) ? (MusicId)v : MUSIC_COUNT;
+}
+
 struct ServerMessage {
     // No `Full`. It used to be its own message and its own binary tag, sent just
     // before the server hung up on you; E2 retired both. Fullness is a JoinFail
@@ -191,6 +198,10 @@ struct ServerMessage {
     // from the previous match can't land on the new match's spawn state. 0 means
     // the server didn't send one (a build predating the field).
     uint32_t epoch = 0;
+    // State only: the music cue the room picked for its current phase (#174), so
+    // every client in it plays the same one. MUSIC_COUNT = none - the lobby, or a
+    // server that predates the field. Range-checked on decode (MusicIdFromWire).
+    MusicId  music = MUSIC_COUNT;
 
     // Lobby options (match-wide config: match size, bot difficulty, the
     // gameplay sliders + toggles - see MatchOptions in options.h). The server
@@ -546,6 +557,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
                            : ServerMessage::Phase::Unknown;
     msg.countdown = r.f32();
     msg.epoch     = r.u32(); // match epoch (state tag 0x09+)
+    msg.music     = MusicIdFromWire(r.u8()); // room's music cue (state tag 0x0D+)
 
     // Options (present every packet). Order must match the server's binary
     // state builder exactly (server_main.cpp).
@@ -891,6 +903,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                                      : ServerMessage::Phase::Unknown;
     msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
     msg.epoch     = j.value("ep", 0u);          // match epoch; echoed back in our input
+    msg.music     = MusicIdFromWire(j.value("mu", (int)MUSIC_COUNT)); // room's music cue (#174)
 
 
     // Lobby options snapshot (match-wide). Present every state packet; the client

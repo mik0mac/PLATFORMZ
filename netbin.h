@@ -41,8 +41,10 @@ namespace nb {
 // room name and preset joined it, 0x06 by the retired "full" rejection (see
 // below), and a stale client in the wild still speaks them. Reusing one would
 // make a genuine mismatch decode as valid.
-static const uint8_t STATE_BIN_VERSION   = 0x0B; // per-tick state packet (bumped: maxBots + minHumansToStart u8s added to the options block; 0x0A is WELCOME's)
-// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B
+// 0x0D, not 0x0C: 0x0C is WELCOME's. 0x0B is burned by the layout before the
+// room's music cue (#174) joined the header.
+static const uint8_t STATE_BIN_VERSION   = 0x0D; // per-tick state packet (bumped: u8 music cue after the epoch)
+// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B/0x0D
 // are taken by the tags below, by STATE, and by this packet's own past. Bumped
 // from 0x02 when the welcome grew the match code and kind, and again from 0x0A
 // when it grew the room's NAME and PRESET - a client that predates either reads
@@ -95,7 +97,7 @@ static const size_t CHUNK_PAYLOAD    = UDP_SAFE_DATAGRAM - CHUNK_HEADER;
 // Position/velocity/angle/small-scalar fields are quantized (see the putQ*
 // helpers below), which is why these are roughly half their pre-quantization
 // size - that's the point: it lets more asteroids fit the same datagram.
-static const size_t STATE_OVERHEAD  = 35;  // version/tick/seq/phase/options + section counts
+static const size_t STATE_OVERHEAD  = 36;  // version/tick/seq/phase/music/options + section counts
 static const size_t PLAYER_BYTES    = 37;  // 29 fixed (quantized, incl. the OOB countdown byte) + a typical name (1 + ~6) + 1 slack
 static const size_t ASTEROID_BYTES  = 19;  // id + qpos + qvel + qsize + health + qflash
 // Room reserved for the variable-length sections: in-flight rockets (16 B each),
