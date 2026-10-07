@@ -1,6 +1,7 @@
 #pragma once
 
 #include "constants.h"
+#include <array>
 #include <vector>
 #include <random>
 #include <algorithm>
@@ -12,6 +13,12 @@
 // When the server loads, add the tracks and shuffle them.  At the beginning of a game (a round of gameplay),
 // call getCurrentTrack() and send that musicId to the client(s).  At the end of the game, call next().
 // Repeat this for every screen.
+//
+// Online, the room on the server owns this choice (#174): each Match keeps its own
+// set from MakeJukeboxes() and sends the current MusicId in every state packet, so
+// everyone in the room hears the same cue. The client's own set still drives the
+// menu screens and LOCAL play, and is how it checks that a MusicId from the server
+// belongs to the screen it is on (contains()).
 
 class Jukebox {
 public:
@@ -72,6 +79,10 @@ public:
         currentTrackIndex = (currentTrackIndex + trackList.size() - 1) % trackList.size();
     }
 
+    bool contains(MusicId cueId) const {
+        return std::find(trackList.begin(), trackList.end(), cueId) != trackList.end();
+    }
+
     // MUSIC_COUNT means "no track" (empty jukebox).
     MusicId getCurrentTrack() const {
         if (trackList.empty()) return MUSIC_COUNT;
@@ -85,5 +96,18 @@ private:
     size_t nextTrackIndex = 0; // whatever the next track will be, not necessarily currentTrackIndex + 1.
 };
 
-
-
+// MARK: Track lists
+// Which cues each screen rotates through. The ONE list: the server builds a set per
+// room from it and the client builds its own, so the two can never disagree about
+// which tracks belong to which screen. Multi-track lists come back shuffled.
+inline std::array<Jukebox, SCREEN_COUNT> MakeJukeboxes() {
+    std::array<Jukebox, SCREEN_COUNT> jb;
+    jb[SCREEN_TITLE].addTrack(MUSIC_TITLE);
+    jb[SCREEN_COUNTDOWN].addTrack(MUSIC_COUNTDOWN);
+    jb[SCREEN_GAMEPLAY].addTrack(MUSIC_GAMEPLAY);
+    jb[SCREEN_GAMEPLAY].addTrack(MUSIC_PLACEHOLDER1);
+    jb[SCREEN_GAMEPLAY].addTrack(MUSIC_PLACEHOLDER2);
+    jb[SCREEN_GAMEOVER].addTrack(MUSIC_GAMEOVER);
+    for (Jukebox& j : jb) j.shuffle();
+    return jb;
+}

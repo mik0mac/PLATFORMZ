@@ -37,9 +37,9 @@ def set_target(host, port=None):
 # Tags per netbin.h. WELCOME is 0x0C since the welcome grew the room's NAME and
 # PRESET on top of its code and kind - values are never recycled there, so each
 # bump goes past the high-water mark rather than taking a free low value (0x0A is
-# burned by the layout before the name). STATE is 0x0B since the options block
-# grew the maxbots + minhumans bytes.
-STATE, WELCOME, CHUNK, FULL = 0x0B, 0x0C, 0x03, 0x06
+# burned by the layout before the name). STATE is 0x0D since the header grew the
+# room's music cue (#174); 0x0B was the layout before it.
+STATE, WELCOME, CHUNK, FULL = 0x0D, 0x0C, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
 # Wire order of mapSizeOrder (constants.h). Append only, same as there.
 MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]
@@ -73,6 +73,7 @@ class C:
         # on the wire.
         self.matchName, self.matchPreset = "", ""
         self.countdown = 0.0
+        self.music = None  # the room's music cue (MusicId) from the last state packet
         # The two rules with no OPTIONS slider, echoed in every state packet
         # like the rest of the bundle. Per-preset, so never assumed.
         self.maxBots   = 0
@@ -172,23 +173,25 @@ class C:
                     pass
             elif tag == STATE:
                 # header: u8 tag, u32 tick, u32 lastSeq  -> body starts at 9
-                # body: u8 phase, f32 countdown, u32 epoch, u8 nplayers-opt,
-                #       u8 maxbots, u8 minhumans, 7*f32, u8 fburn, u8 fregen,
-                #       u8 flags, u8 rosterCount
-                # (maxbots/minhumans at 19-20 are what STATE_BIN_VERSION 0x0B
-                # added to the options block; every offset after them shifted.)
+                # body: u8 phase, f32 countdown, u32 epoch, u8 music,
+                #       u8 nplayers-opt, u8 maxbots, u8 minhumans, 7*f32,
+                #       u8 fburn, u8 fregen, u8 flags, u8 rosterCount
+                # (music at 18 is what STATE_BIN_VERSION 0x0D added; every
+                # offset after it shifted by one.)
                 self.phase = PHASES.get(d[9], "?")
                 # f32 at 10: the pre-match countdown, and in LOBBY the official
                 # room's auto-start timer (0 unless armed).
                 self.countdown = struct.unpack_from("<f", d, 10)[0]
                 self.epoch = struct.unpack_from("<I", d, 14)[0]
+                # The room's music cue for this phase (MusicId; MUSIC_COUNT = none).
+                self.music = d[18]
                 # The two rules with no slider, straight after the roster size.
-                self.maxBots   = d[19]
-                self.minHumans = d[20]
-                # Option flags at 51; bits 16/32 are the map index (see
-                # mapSizeOrder in constants.h). Roster count follows at 52.
-                self.mapSize = MAP_SIZES[(d[51] >> 4) & 0x3]
-                self.nplayers = d[52]
+                self.maxBots   = d[20]
+                self.minHumans = d[21]
+                # Option flags at 52; bits 16/32 are the map index (see
+                # mapSizeOrder in constants.h). Roster count follows at 53.
+                self.mapSize = MAP_SIZES[(d[52] >> 4) & 0x3]
+                self.nplayers = d[53]
                 # Decode the roster so tests can assert on a player's actual
                 # state. Layout per buildStateBodyBinary: u32 id, 3x qpos(i16),
                 # 3x qvel(i16), yaw+pitch(u16), u8 hp, u8 fuel, u8 ammo,
@@ -196,7 +199,7 @@ class C:
                 # length-prefixed name.
                 self.players = {}
                 self.slots   = {}
-                off = 53
+                off = 54
                 try:
                     for _ in range(self.nplayers):
                         pid   = struct.unpack_from("<I", d, off)[0]; off += 4

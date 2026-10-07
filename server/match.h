@@ -33,6 +33,7 @@
 #include "../input.h"           // PlayerInput
 #include "../bot_controller.h"
 #include "../options.h"         // MatchOptions + its rule defaults + mapSizeOrder
+#include "../jukebox.h"         // the room's music pick (#174)
 #include "perf.h"               // A4 tick/egress instrumentation
 
 #include <boost/asio/ip/udp.hpp>
@@ -157,6 +158,17 @@ inline const char* phaseString(Phase p) {
         case Phase::PLAYING:   return "playing";
         case Phase::GAMEOVER:  return "gameover";
         default:               return "lobby";
+    }
+}
+
+// Which jukebox plays during a phase, or -1 for none. The lobby has none: the
+// client is on its menu screens there, which keep their own title track.
+inline int jukeboxScreenOf(Phase p) {
+    switch (p) {
+        case Phase::COUNTDOWN: return SCREEN_COUNTDOWN;
+        case Phase::PLAYING:   return SCREEN_GAMEPLAY;
+        case Phase::GAMEOVER:  return SCREEN_GAMEOVER;
+        default:               return -1;
     }
 }
 
@@ -364,6 +376,16 @@ struct Match {
     // the match now that the tick body is a method.
     Clock::time_point countdownEnd;      // when COUNTDOWN flips to PLAYING (valid only while COUNTDOWN)
     Phase             prevPhase = Phase::LOBBY; // previous tick's phase, for the match-end edge (scoreboard credit)
+    // The room's music (#174): the server picks, so every client in the room
+    // hears the same cue. One jukebox per screen, from the same list the client
+    // builds (jukebox.h), kept for the room's whole life so a multi-track screen
+    // walks its list match after match. Advanced on the phase-change edge, sent
+    // in every state packet via musicFor(). Sim thread only, like prevPhase.
+    std::array<Jukebox, SCREEN_COUNT> jukebox = MakeJukeboxes();
+    MusicId musicFor(Phase p) const {
+        const int s = jukeboxScreenOf(p);
+        return s < 0 ? MUSIC_COUNT : jukebox[s].getCurrentTrack();
+    }
     // When PLAYING -> GAMEOVER fired, and whether it has been stamped yet. The
     // stamp happens in the match-end edge block, which runs AFTER the sim block
     // that reads it - so on the very first GAMEOVER tick the timestamp does not

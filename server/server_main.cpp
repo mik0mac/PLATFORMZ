@@ -1160,9 +1160,11 @@ static std::string buildLeaderboard(const std::string& identity) {
 std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
     std::string s;
     s.reserve(1024);
-    s += ",\"phase\":\"" + std::string(phaseString(gamePhase.load())) + "\"";
+    const Phase ph = gamePhase.load(); // once: the music below must match the phase sent
+    s += ",\"phase\":\"" + std::string(phaseString(ph)) + "\"";
     s += ",\"countdown\":" + jf(countdownRemaining.load()); // seconds left in the pre-match countdown (0 unless COUNTDOWN)
     s += ",\"ep\":" + std::to_string(matchEpoch.load()); // match epoch; clients echo it in their input packets
+    s += ",\"mu\":" + std::to_string((int)musicFor(ph)); // the room's music cue (#174); MUSIC_COUNT = none
 
     // Players
     s += ",\"players\":[";
@@ -1346,9 +1348,11 @@ std::string Match::buildStatePacket(uint32_t tick, uint32_t lastSeq,
 std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     std::string b;
     b.reserve(768);
-    nb::putU8(b, (uint8_t)gamePhase.load()); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
+    const Phase ph = gamePhase.load(); // once: the music below must match the phase sent
+    nb::putU8(b, (uint8_t)ph); // Phase enum: 0 lobby,1 countdown,2 playing,3 gameover
     nb::putF32(b, countdownRemaining.load());
     nb::putU32(b, matchEpoch.load()); // match epoch; clients echo it in their input packets
+    nb::putU8(b, (uint8_t)musicFor(ph)); // the room's music cue (#174; STATE_BIN_VERSION 0x0D)
 
     // Options (match-wide), same values buildStatePacket puts in "opt". Order
     // must match applyBinaryState() in wire.h exactly.
@@ -3534,6 +3538,12 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 leaderboardDirty = true;
                 std::cout << "Scoreboard: credited match, " << scoreboard.scores.size()
                           << " careers / " << scoreboard.runs.size() << " runs total\n";
+            }
+            // Leaving a phase moves its jukebox on, so the next match plays the
+            // next track - the same rule the client uses for its own screens.
+            if (prevPhase != nowPhase) {
+                const int left = jukeboxScreenOf(prevPhase);
+                if (left >= 0) jukebox[left].next();
             }
             prevPhase = nowPhase;
         }

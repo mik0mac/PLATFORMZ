@@ -404,17 +404,11 @@ int main(int argc, char** argv) {
     // load all cues
     for (MusicCue& mc : musicCueTable) mc.load();
 
-    // Server side (this process, in local play): one jukebox per screen holds
-    // that screen's MusicIds and picks the current one. Persists across games
-    // so multi-track screens cycle through their list.
-    Jukebox jukebox[SCREEN_COUNT];
-    jukebox[SCREEN_TITLE].addTrack(MUSIC_TITLE);
-    jukebox[SCREEN_COUNTDOWN].addTrack(MUSIC_COUNTDOWN);
-    jukebox[SCREEN_GAMEPLAY].addTrack(MUSIC_GAMEPLAY);
-    jukebox[SCREEN_GAMEPLAY].addTrack(MUSIC_PLACEHOLDER1);
-    jukebox[SCREEN_GAMEPLAY].addTrack(MUSIC_PLACEHOLDER2);
-    jukebox[SCREEN_GAMEPLAY].shuffle();
-    jukebox[SCREEN_GAMEOVER].addTrack(MUSIC_GAMEOVER);
+    // One jukebox per screen holds that screen's MusicIds and picks the current
+    // one. Persists across games so multi-track screens cycle through their
+    // list. Drives the menu screens and LOCAL play; online, the match screens
+    // play the room's pick instead (netMusic, #174).
+    std::array<Jukebox, SCREEN_COUNT> jukebox = MakeJukeboxes();
 
     // The in-loop music switch only fires on a screen *transition*, and the
     // game boots already on the title screen - start the first cue by hand.
@@ -605,6 +599,10 @@ int main(int argc, char** argv) {
                                      // previous match (see ServerMessage::epoch in wire.h). Updated
                                      // in BOTH drain paths - pumpNet and the PLAYING poll - because
                                      // the lobby/countdown/game-over screens only use the former.
+    MusicId netMusic        = MUSIC_COUNT; // networked: the cue the room's server picked for its
+                                           // current phase (#174), so everyone in it hears the same
+                                           // one. MUSIC_COUNT = none (lobby, or an older server).
+                                           // Updated in both drain paths, like netEpoch.
     bool  netMatchOver  = false; // networked: latched once the server reports the match ended, so the gameOverTimer countdown survives packet-less frames
 
     // Title-screen menu state (widgets live in ui.h). The name is local-only for
@@ -1132,7 +1130,7 @@ int main(int argc, char** argv) {
                 // handled above - welcome / shell.leaderboard / full / version mismatch
             }
             else if (m.type == ServerMessage::Type::State) {
-                phase = m.phase; netCountdown = m.countdown; netEpoch = m.epoch;
+                phase = m.phase; netCountdown = m.countdown; netEpoch = m.epoch; netMusic = m.music;
                 // Apply the server's live options to our OPTIONS modal. Don't
                 // stomp a control the local user is actively driving: skip a
                 // slider while it's being dragged, and for the toggles only take
@@ -1503,7 +1501,14 @@ int main(int argc, char** argv) {
             // gets a fresh track (no-op for single-track screens), then fade in
             // whatever the new screen's jukebox currently points at.
             jukebox[screenIdOf(previousScreen)].next();
-            MusicId id = jukebox[screenIdOf(screen)].getCurrentTrack();
+            const int sid = screenIdOf(screen);
+            MusicId id = jukebox[sid].getCurrentTrack();
+            // Online, the room picks (#174): every client in it gets the same
+            // MusicId in its state packets. Taken only if it is one of THIS
+            // screen's tracks, which covers the menu screens (the server sends
+            // none in its lobby), an older server (none at all), and a packet
+            // that has already moved on to the next phase's cue.
+            if (networked && jukebox[sid].contains(netMusic)) id = netMusic;
             if (id != MUSIC_COUNT) musicCueTable[id].fadeIn();
             previousScreen = screen;
         }
@@ -2404,6 +2409,7 @@ int main(int argc, char** argv) {
                 } else if (m.type == ServerMessage::Type::State) {
                     netPhase = m.phase; // track phase so we can detect the match ending
                     netEpoch = m.epoch; // stamp on the input we send from next frame
+                    netMusic = m.music;
                 }
             }
             localIndex = myIndex;

@@ -207,12 +207,22 @@ cannot land on the new one's spawn state.
 | `challenge` | `c` | UDP only. Not a refusal — answer it and hello again |
 | `identity` | `tok` | a token to store and present from now on. Sent when you had none, or yours no longer verifies |
 | **welcome** | slot + room identity + static world | JSON over WS, binary tag `0x0C` over UDP |
-| **state** | phase, countdown, epoch, options, roster | JSON over WS, binary tag `0x09` over UDP, 60 Hz |
+| **state** | phase, countdown, epoch, music, options, roster | JSON over WS, binary tag `0x0D` over UDP, 60 Hz |
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |
 | `leaderboard` | `lb[{n,s,b}]`, optional `best` | the best RUNS, already ranked. `b` marks the bot row. `best` is this client's own best run, pinned under the board — absent when they have none, and absent when it is already up there. This is the **ONLINE** tab of the client's HIGH SCORES modal; the LOCAL tab is a second board the client keeps itself (`local_scores.h`, fed only by offline matches) and never reaches the wire |
 | *(chunk)* | tag `0x03` | transport framing, reassembled below the protocol |
+
+**Music** in the state is `mu`, a `MusicId` (`constants.h`): the cue the room
+picked for its current phase, so everyone in the room hears the same one (#174).
+Each room keeps one jukebox per screen, built from the same list the client
+builds (`jukebox.h`), and moves a phase's jukebox on when the phase ends, so a
+room plays its gameplay tracks in turn, match after match. The lobby sends
+`MUSIC_COUNT` (none): the client is on its menu screens there and keeps its own
+title track. A client takes the cue only if it belongs to the screen it is on,
+and anything out of range reads as none, so a newer server with more tracks just
+falls back to the client's own pick.
 
 **Room identity** in the welcome is `m`, `k`, `n`, `p` — code, kind, name, and
 the preset it was seeded from. None of it is derivable client-side: quick match
