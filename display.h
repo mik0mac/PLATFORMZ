@@ -71,6 +71,9 @@ inline bool IsFullscreen() { return PlatformzIsFullscreen() != 0; }
 inline void ExitFullscreen() { PlatformzExitFullscreen(); }
 inline void SetFullscreenKeyEnabled(bool ok) { PlatformzSetFullscreenKeyOk(ok ? 1 : 0); }
 inline void HandleFullscreenKey() {} // shell.html owns F on the web
+inline void HandleEscapeKey() {      // usually the browser has already left
+    if (IsKeyPressed(KEY_ESCAPE) && IsFullscreen()) ExitFullscreen();
+}
 inline void BeginFrame() { BeginDrawing(); }
 inline void EndFrame()   { EndDrawing(); }
 
@@ -143,11 +146,19 @@ inline void SetFullscreen(bool on) {
     if (on != IsFullscreen()) ToggleBorderlessWindowed();
 }
 #endif
-inline void ExitFullscreen() { SetFullscreen(false); }
 inline void SetFullscreenKeyEnabled(bool) {}
+// The keys act on RELEASE, not press. macOS animates the switch, and a key let
+// go during that animation never reaches the window: GLFW keeps believing the key
+// is held, reads the next press of it as a key-REPEAT, and IsKeyPressed ignores
+// repeats - so every other press of F (or Esc) did nothing. Acting once the key
+// is already up means no release is ever in flight when the animation starts.
 // F toggles. The caller decides whether F is free (not typing into a field).
 inline void HandleFullscreenKey() {
-    if (IsKeyPressed(KEY_F)) SetFullscreen(!IsFullscreen());
+    if (IsKeyReleased(KEY_F)) SetFullscreen(!IsFullscreen());
+}
+// Esc leaves. Its other jobs (close a modal, back, pause) stay on the press.
+inline void HandleEscapeKey() {
+    if (IsKeyReleased(KEY_ESCAPE) && IsFullscreen()) SetFullscreen(false);
 }
 
 // In place of BeginDrawing/EndDrawing for every frame the game shows. Mouse

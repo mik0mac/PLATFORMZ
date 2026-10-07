@@ -1677,7 +1677,8 @@ int main(int argc, char** argv) {
         // F toggles fullscreen on every screen (#24) - except while a text field
         // has the keyboard, where F is a letter. Esc always leaves fullscreen, on
         // top of whatever else it does on the current screen (close a modal, go
-        // back, pause): it is not consumed here, so those still happen.
+        // back, pause): it is not consumed here, so those still happen. Both act
+        // on the key's RELEASE natively - see display.h for the macOS reason.
         // On the web, shell.html owns F (see display.h for why); the game only
         // tells it whether the key is free.
         display::SetFullscreenKeyEnabled(!typingName);
@@ -1686,9 +1687,10 @@ int main(int argc, char** argv) {
             display::HandleFullscreenKey();
             if (display::IsFullscreen() != wasFull) consumeLookFrames = 2; // the window jump moves the captured cursor
         }
-        if (IsKeyPressed(KEY_ESCAPE) && display::IsFullscreen()) {
-            display::ExitFullscreen();
-            consumeLookFrames = 2;
+        {
+            const bool wasFull = display::IsFullscreen();
+            display::HandleEscapeKey();
+            if (display::IsFullscreen() != wasFull) consumeLookFrames = 2;
         }
 
         // MARK: TITLE SCREEN
