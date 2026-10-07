@@ -113,6 +113,20 @@ never include a platform socket header anywhere else in the client.**
   Spatial-grid broad phase + narrow-phase geometry + game-rule reactions.
 - `camera.h` — `CameraFromPlayer(player)` builds the first-person `Camera3D`
   from player state each frame (eye at the player-sphere center).
+- `display.h` — fullscreen (#24) and the fixed **1000x700 canvas** every screen is
+  laid out on. Every frame goes through `display::BeginFrame()/EndFrame()`, never
+  `BeginDrawing()/EndDrawing()` directly: when the window isn't exactly the canvas
+  size (fullscreen, or a resized window — the native window is resizable now) the
+  frame is drawn into an off-screen 1000x700 texture and letterboxed onto the
+  window, with raylib's mouse offset/scale set so `GetMousePosition()` stays in
+  canvas pixels. So **never size anything off `GetScreenWidth()/Height()`** — that
+  is the window; use `display::CANVAS_W/H` (or main.cpp's `screenWidth/Height`).
+  macOS uses the system's own fullscreen (the NSWindow's `toggleFullScreen:`, via
+  the Objective-C runtime) because raylib's `ToggleFullscreen` switches a Retina
+  display's resolution; Windows/Linux use raylib's borderless windowed. On the web
+  the browser scales the canvas instead, and `shell.html` owns the F key — a page
+  may only go fullscreen inside the key's own event handler; the game just tells
+  it when F is free (not while a text field has focus).
 - `random.h` — `RandomFloat(min, max)` (seeded `std::mt19937`).
 - `profile.h` — the client's **only** persistence LAYER (two things now sit on
   it: the profile below and `local_scores.h`): display name, a stable
@@ -294,7 +308,9 @@ scrolled out of view would still take a click.
 
 ## Controls
 WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
-Left Shift for stronger (earth) gravity · **P or Esc** pause · Esc no longer
+Left Shift for stronger (earth) gravity · **P or Esc** pause · **F** fullscreen
+on/off (any screen, unless a text field has focus) · Esc also always leaves
+fullscreen, on top of whatever else it does there · Esc no longer
 toggles cursor capture on its own.
 
 The **PAUSE screen** (#164, `main.cpp`, `MARK: PAUSE`) is where a match is ended

@@ -265,9 +265,11 @@ inline void DrawControlsModal(ShellState& s, bool wasOpen) {
         "P or Esc      pause / scores",
         "Q (paused)    end match, or leave",
         "+ / -         volume up/down",
+        "F             fullscreen on/off",
     };
+    // 30px rows: nine of them end above the CLOSE button (34 stopped fitting).
     int ly = (int)m.y + 60;
-    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 34; }
+    for (const char* ln : lines) { DrawText(ln, (int)m.x + 40, ly, 18, RAYWHITE); ly += 30; }
     if (UiModalClose(m, wasOpen)) s.showControls = false;
 }
 
