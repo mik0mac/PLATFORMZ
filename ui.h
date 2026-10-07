@@ -156,10 +156,7 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
         // to paste it, so "links are opened, not pasted" was only half true.
         // EITHER modifier, on every platform. Cmd is the Mac chord and Ctrl the
         // one everywhere else, but accepting both costs nothing and leaves a
-        // working fallback if one of them never arrives - which is not
-        // hypothetical: macOS routes Cmd+key to the menu bar as a key
-        // equivalent first, and GLFW does not always deliver the keypress that
-        // follows.
+        // working fallback if one of them never arrives.
         std::string clip;
 #if defined(__EMSCRIPTEN__)
         {
@@ -169,7 +166,18 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
 #else
         const bool pasteHeld = IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER)
                             || IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
-        if (pasteHeld && IsKeyPressed(KEY_V)) {
+        // V is looked for in raylib's key QUEUE as well as IsKeyPressed (#180).
+        // IsKeyPressed compares this frame's key state with the last one's, so a
+        // key that went down AND back up between two frames never registers. On
+        // macOS that is what the first Cmd+V after switching to the game often
+        // looks like: V's press is held back and delivered in the same batch as
+        // its release. The queue records every press however briefly it lasted.
+        // Reading it drains it, which is safe here: the only other reader is the
+        // game-over screen's "press any key", which has no text field.
+        bool vTapped = IsKeyPressed(KEY_V);
+        for (int k = GetKeyPressed(); k != 0; k = GetKeyPressed())
+            if (k == KEY_V) vTapped = true;
+        if (pasteHeld && vTapped) {
             const char* c = GetClipboardText();
             if (c) clip = c;
         }
