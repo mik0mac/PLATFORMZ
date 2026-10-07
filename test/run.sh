@@ -22,6 +22,9 @@
 # (platform.h). It comes from another player's machine, so most of it is what
 # the parser must refuse. invite_test.cpp is its wider sibling: the CODE field's
 # paste, which also takes the browser's invite link and a bare code.
+#
+# And messages_test.cpp: the kill-feed (#178) - fold duplicates, then cap by dropping
+# the oldest.
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -59,6 +62,10 @@ run_native invite_test.cpp invite_test
 echo
 echo "=== platform_test (native) ==="
 run_native platform_test.cpp platform_test
+
+echo
+echo "=== messages_test (native) ==="
+run_native messages_test.cpp messages_test
 
 echo
 echo "=== web_profile_test (localStorage) ==="

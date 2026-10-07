@@ -10,6 +10,7 @@
 
 const float DEFAULT_MSG_DURATION = 5.0f; // seconds
 const Color DEFAULT_MSG_COLOR = {0, 255, 255, 255}; // cyan text
+const int   MSG_MAX_ON_SCREEN = 4; // kill-feed cap (#178); see MessageQueue::limit
 
 // MARK: Visibility
 enum VIS_TYPE {
@@ -113,6 +114,7 @@ class Message {
     float duration = DEFAULT_MSG_DURATION; // seconds
     float timeRemaining = DEFAULT_MSG_DURATION; // seconds
     Color color = DEFAULT_MSG_COLOR; // default to white text
+    int count = 1; // how many identical lines this one stands for (MessageQueue::limit)
 
     void update(float dt) {
         timeRemaining -= dt;
@@ -265,6 +267,32 @@ public:
     }
 
     bool empty() const { return queue.empty(); }
+
+    // MARK: limit
+    // Cap the feed at maxShown lines (#178). First fold duplicates - same
+    // text, same colour - into the NEWEST copy, which keeps its slot and its
+    // fresher timer and counts the ones it absorbed ("YOU HIT GEOFF. x3").
+    // Folding happens under the cap too: a repeat is one event happening again,
+    // not news. Then, if still over the cap, drop the oldest.
+    //
+    // Run it after generate() and the visibility filter: duplicates are judged
+    // on the text THIS viewer sees ("YOU HIT GEOFF."), which only exists then.
+    void limit(int maxShown) {
+        for (int i = (int)queue.size() - 1; i > 0; --i) {
+            for (int j = i - 1; j >= 0; --j) {
+                const Message& older = queue[j];
+                Message& newer = queue[i];
+                if (older.text == newer.text && older.color.r == newer.color.r &&
+                    older.color.g == newer.color.g && older.color.b == newer.color.b) {
+                    newer.count += older.count;
+                    queue.erase(queue.begin() + j);
+                    --i; // everything from j up shifted down one, newer included
+                }
+            }
+        }
+        if ((int)queue.size() > maxShown)
+            queue.erase(queue.begin(), queue.end() - maxShown);
+    }
 
     // MARK: get messages
     std::vector<Message>& getMessages() { return queue; }

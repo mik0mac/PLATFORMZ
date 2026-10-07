@@ -125,7 +125,10 @@ static void DrawMessageQueue(MessageQueue& mq, int screenW, int screenH) {
         const Message& msg = *it;
         float a = (msg.timeRemaining < fadeTime) ? msg.timeRemaining / fadeTime : 1.0f;
         if (a < 0.0f) a = 0.0f;
-        const char* t = msg.text.c_str();
+        // A line standing for folded duplicates (MessageQueue::limit) says how many.
+        const std::string line = (msg.count > 1)
+            ? msg.text + " x" + std::to_string(msg.count) : msg.text;
+        const char* t = line.c_str();
         int x = (screenW - MeasureText(t, fontSize)) / 2;
         // Dark outline behind the text so it stays legible over the 3D scene;
         // fades with the fill via the same alpha. 8 offsets = full surround,
@@ -2826,6 +2829,7 @@ int main(int argc, char** argv) {
                 bool visible = msg.visible(localPlayer->id);
                 if (!visible) messageQueue.remove(msg_index); else msg_index++;
             }
+            messageQueue.limit(MSG_MAX_ON_SCREEN);
             DrawMessageQueue(messageQueue, screenWidth, screenHeight);
             messageQueue.update(dt);
 
