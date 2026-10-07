@@ -10,6 +10,7 @@
 #include <algorithm>   // std::nth_element (F3 perf overlay p95)
 #include "input.h"
 #include "ui.h"
+#include "display.h"    // fullscreen + the fixed 1000x700 canvas it letterboxes
 #include "screens.h"   // GameScreen + ShellState: the menu shell        // immediate-mode menu widgets (title screen)
 #include "audio.h"     // sound FX que, load/unload, trigger
 #include "jukebox.h"
@@ -321,9 +322,10 @@ int main(int argc, char** argv) {
     // live on the very first title frame.
     localscores::Load();
 
-    const int screenWidth = 1000;
-    const int screenHeight = 700;
+    const int screenWidth  = display::CANVAS_W; // every screen is laid out on this canvas;
+    const int screenHeight = display::CANVAS_H; // fullscreen scales it (display.h)
     const int textHeight = 20;
+    display::ConfigFlags();
     InitWindow(screenWidth, screenHeight, "PLATFORMZ");
     // Assets load by relative path (assets/sounds, assets/music), so anchor the
     // working directory to the binary's own folder. Without this, launching the
@@ -343,6 +345,7 @@ int main(int argc, char** argv) {
     // A no-op in every build but Steam's, and harmless there when Steam is not
     // running - the game is the same game either way (#95).
     platform::Init();
+    display::Init();
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // Esc is ours (free/recapture the mouse), not raylib's
                           // quit key - quit via the window close button or Cmd+Q.
@@ -1323,10 +1326,11 @@ int main(int argc, char** argv) {
     };
 
     // "Press any key to start/continue": any key other than Escape (which is
-    // reserved for the cursor toggle), or a left-mouse click.
+    // reserved for the cursor toggle) or F (fullscreen - toggling it must not
+    // also walk off the screen), or a left-mouse click.
     auto startPressed = [&]() {
         int k = GetKeyPressed();
-        return (k != 0 && k != KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        return (k != 0 && k != KEY_ESCAPE && k != KEY_F) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     };
 
     // Remember the previous screen so we can detect a transition and change music.
@@ -1652,8 +1656,10 @@ int main(int argc, char** argv) {
         // match without it ever clicking would carry a stale `true` into PLAYING
         // and lose the keys for the whole match.
         // Text entry swallows the volume keys wherever a field has focus - the
-        // title's NAME box, the browser's CODE box, the custom room's name.
+        // title's NAME box, the lobby's NAME box, the browser's CODE box, the
+        // custom room's name.
         const bool typingName = (screen == GameScreen::TITLE  && shell.nameFocused)
+                             || (screen == GameScreen::LOBBY  && shell.nameFocused)
                              || (screen == GameScreen::CUSTOM && shell.customNameFocused)
                              || (screen == GameScreen::BROWSE && shell.joinCodeFocused);
         if (!typingName) {
@@ -1666,6 +1672,26 @@ int main(int argc, char** argv) {
                 PlaySound(volumeChange); // feedback for the change
                 SetMasterVolume(MasterVolumeDbToAmp(currentDb - MASTER_VOLUME_STEP_DB));
             }
+        }
+
+        // MARK: FULLSCREEN
+        // F toggles fullscreen on every screen (#24) - except while a text field
+        // has the keyboard, where F is a letter. Esc always leaves fullscreen, on
+        // top of whatever else it does on the current screen (close a modal, go
+        // back, pause): it is not consumed here, so those still happen. Both act
+        // on the key's RELEASE natively - see display.h for the macOS reason.
+        // On the web, shell.html owns F (see display.h for why); the game only
+        // tells it whether the key is free.
+        display::SetFullscreenKeyEnabled(!typingName);
+        if (!typingName) {
+            const bool wasFull = display::IsFullscreen();
+            display::HandleFullscreenKey();
+            if (display::IsFullscreen() != wasFull) consumeLookFrames = 2; // the window jump moves the captured cursor
+        }
+        {
+            const bool wasFull = display::IsFullscreen();
+            display::HandleEscapeKey();
+            if (display::IsFullscreen() != wasFull) consumeLookFrames = 2;
         }
 
         // MARK: TITLE SCREEN
@@ -1701,7 +1727,7 @@ int main(int argc, char** argv) {
             const bool scoresWasOpen   = shell.showScores;
             const bool uiEnabled = !shell.showControls && !shell.showScores;
 
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 bool nameEdited = false;
@@ -1790,7 +1816,7 @@ int main(int argc, char** argv) {
                 if (shell.showScores)
                     DrawLeaderboardModal(shell, screenWidth, scoresWasOpen,
                                          networked && net.isOpen());
-            EndDrawing();
+            display::EndFrame();
 #if !defined(__EMSCRIPTEN__)
             if (g_quitRequested) break;
 #endif
@@ -1806,7 +1832,7 @@ int main(int argc, char** argv) {
             const bool optionsWasOpen = shell.showOptions;
             const bool uiEnabled = !shell.showOptions;
 
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 LocalResult r = DrawLocalSetup(shell, gameSpace.getPlayers(), myDisplayName(),
@@ -1826,7 +1852,7 @@ int main(int argc, char** argv) {
                 // Local play reads localOpt straight out of the sim at START, so
                 // a changed control needs no further action.
                 if (shell.showOptions) DrawOptionsModal(shell, localOpt, optionsWasOpen);
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
 
@@ -1851,7 +1877,7 @@ int main(int argc, char** argv) {
             if (shell.showOptions && IsKeyPressed(KEY_ESCAPE)) shell.showOptions = false;
             else if (!shell.showOptions && IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
 
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 const bool optionsWasOpen = shell.showOptions;
@@ -1869,7 +1895,7 @@ int main(int argc, char** argv) {
                 // Nothing to send yet - the room does not exist. The bundle goes
                 // out the moment it does, above.
                 if (shell.showOptions) DrawOptionsModal(shell, onlineOpt, optionsWasOpen);
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
 
@@ -1902,7 +1928,7 @@ int main(int argc, char** argv) {
             // popups, not three.
             const bool uiEnabled = !shell.showControls && !shell.showOptions;
 
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 const bool ready = net.isOpen() && myIndex >= 0;
@@ -1963,7 +1989,7 @@ int main(int argc, char** argv) {
                     && net.isOpen())
                     net.send(serializeOptions(onlineOpt));
                 if (shell.showControls) DrawControlsModal(shell, controlsWasOpen);
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
         // MARK: COUNTDOWN SCREEN
@@ -2066,7 +2092,7 @@ int main(int argc, char** argv) {
 
             if (IsKeyPressed(KEY_ESCAPE)) { screen = GameScreen::TITLE; continue; }
 
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime());
                 BrowseResult r = DrawBrowse(shell, screenWidth, screenHeight,
@@ -2120,7 +2146,7 @@ int main(int argc, char** argv) {
                     case BrowseAction::None:
                         break;
                 }
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
 
@@ -2176,7 +2202,7 @@ int main(int argc, char** argv) {
             int countNum = (int)ceilf(remaining);
             if (countNum < 1) countNum = 1; // never flash "0" before the flip to PLAYING
 
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 DrawStarfieldBackdrop((float)GetTime()); // slow-drifting stars behind the UI
                 UiTextCentered("PLATFORMZ", screenWidth, 110, 80, RAYWHITE); // keep the title
@@ -2188,7 +2214,7 @@ int main(int argc, char** argv) {
                     DrawCentered(L.text, ly, 24, Fade({0, 255, 200, 255}, a));  // platform color.
                     ly += 40;
                 }
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
         // MARK: GAME_OVER SCREEN
@@ -2209,7 +2235,7 @@ int main(int argc, char** argv) {
             const bool leavePressed = startPressed();
             if (gameOverHold > 0.0f) gameOverHold -= dt;
             else if (leavePressed) returnToTitle();
-            BeginDrawing();
+            display::BeginFrame();
             ClearBackground(BLACK);
             // Stars behind the scoreboard. On the eliminated path the frozen
             // greyscale frame blitted below covers this (and already has stars
@@ -2269,7 +2295,7 @@ int main(int argc, char** argv) {
                 DrawCentered(leaveText, noticeY, 20, pressKeyColor);
             }
 
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
 
@@ -2621,7 +2647,7 @@ int main(int argc, char** argv) {
         // Networked mode before the server's welcome/first state arrives: there's
         // no local player yet, so show a connecting screen and skip the world draw.
         if (localPlayer == nullptr) {
-            BeginDrawing();
+            display::BeginFrame();
                 ClearBackground(BLACK);
                 // "JOINING" only once the server has actually assigned us a slot
                 // (myIndex); merely having an open socket isn't "in" yet - and for
@@ -2640,7 +2666,7 @@ int main(int argc, char** argv) {
                              20, 70, 14, RED);
                 else if (!net.lastError().empty())
                     DrawText(net.lastError().c_str(), 20, 70, 14, RED);
-            EndDrawing();
+            display::EndFrame();
             continue;
         }
         // From here the local player exists; alias it so the draw code below is
@@ -2652,7 +2678,7 @@ int main(int argc, char** argv) {
         // by the damage glitch. No game state changes in here - purely visual.
 
         // Capture pass. Must be its own BeginTextureMode block, outside
-        // BeginDrawing - you can't nest the two, and the frame has to exist
+        // display::BeginFrame - you can't nest the two, and the frame has to exist
         // before it can be distorted. gameSpace.draw() is unchanged; it just
         // renders into the target now instead of the back buffer.
         // Far clip scales with the map so opposite-corner geometry never gets
@@ -2672,8 +2698,8 @@ int main(int argc, char** argv) {
             EndMode3D();
         EndTextureMode();
 
-        // Screen pass. Everything between BeginDrawing/EndDrawing hits the screen.
-        BeginDrawing();
+        // Screen pass. Everything between BeginFrame/EndFrame hits the screen.
+        display::BeginFrame();
             ClearBackground(BLACK);
 
             // Networked: damage is server-side, so flashIntensity() is always 0
@@ -2857,7 +2883,7 @@ int main(int argc, char** argv) {
                              y + 40, 20, RED);
             }
 
-        EndDrawing();
+        display::EndFrame();
 
         // The player just died: this frame already rendered with the death
         // glitch/greyscale; flip to GAME_OVER so the next frame shows the
@@ -2953,6 +2979,7 @@ int main(int argc, char** argv) {
     for (MusicCue& mc : musicCueTable) mc.unload();
     CloseAudioDevice();
     UnloadRenderTexture(sceneTarget);
+    display::Shutdown();
     UnloadShader(grayscaleShader);
     platform::Shutdown();
     CloseWindow();
