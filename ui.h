@@ -38,6 +38,39 @@ EM_JS(int, PlatformzTakePaste, (char* out, int cap), {
 });
 #endif
 
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#include <objc/runtime.h> // UiSyncClickPosition: ask the NSWindow where the mouse is
+#include <objc/message.h>
+#endif
+
+//MARK: Click position
+// Call once per frame, before any widget runs (#180).
+//
+// macOS sends mouse MOVES only to the window in front. While another window - a
+// second copy of the game, the browser holding an invite - is in front, this one
+// is never told the cursor moved, so the click that brings it forward is read at
+// the last place it DID see the mouse: often not over this window at all. The
+// text field you clicked into then reads that as a click elsewhere and drops its
+// focus, and the Cmd+V that follows goes nowhere.
+//
+// So on any frame with a click, ask the window where the cursor really is and
+// put raylib's idea of it there. (SetMousePosition also warps the OS cursor -
+// to where it already is, so nothing visibly moves.) Skipped while the cursor
+// is captured for mouse-look, where the position is virtual. Windows delivers
+// moves to background windows, so nothing there needs this.
+inline void UiSyncClickPosition() {
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+    if (IsCursorHidden()) return;
+    if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) return;
+    void* win = GetWindowHandle(); // the NSWindow on macOS
+    if (!win) return;
+    struct Point { double x, y; };   // NSPoint: window coordinates, origin bottom-left
+    using Fn = Point (*)(void*, SEL);
+    const Point p = ((Fn)objc_msgSend)(win, sel_registerName("mouseLocationOutsideOfEventStream"));
+    SetMousePosition((int)p.x, GetScreenHeight() - (int)p.y);
+#endif
+}
+
 //MARK: Theme
 // Defaults match the cyan element palette (color_outline {0,255,200}). Callers
 // can override per-widget where a different accent is wanted (e.g. a modal).
@@ -157,10 +190,7 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
         // to paste it, so "links are opened, not pasted" was only half true.
         // EITHER modifier, on every platform. Cmd is the Mac chord and Ctrl the
         // one everywhere else, but accepting both costs nothing and leaves a
-        // working fallback if one of them never arrives - which is not
-        // hypothetical: macOS routes Cmd+key to the menu bar as a key
-        // equivalent first, and GLFW does not always deliver the keypress that
-        // follows.
+        // working fallback if one of them never arrives.
         std::string clip;
 #if defined(__EMSCRIPTEN__)
         {
@@ -170,7 +200,18 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
 #else
         const bool pasteHeld = IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER)
                             || IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
-        if (pasteHeld && IsKeyPressed(KEY_V)) {
+        // V is looked for in raylib's key QUEUE as well as IsKeyPressed (#180).
+        // IsKeyPressed compares this frame's key state with the last one's, so a
+        // key that went down AND back up between two frames never registers. On
+        // macOS that is what the first Cmd+V after switching to the game often
+        // looks like: V's press is held back and delivered in the same batch as
+        // its release. The queue records every press however briefly it lasted.
+        // Reading it drains it, which is safe here: the only other reader is the
+        // game-over screen's "press any key", which has no text field.
+        bool vTapped = IsKeyPressed(KEY_V);
+        for (int k = GetKeyPressed(); k != 0; k = GetKeyPressed())
+            if (k == KEY_V) vTapped = true;
+        if (pasteHeld && vTapped) {
             const char* c = GetClipboardText();
             if (c) clip = c;
         }
