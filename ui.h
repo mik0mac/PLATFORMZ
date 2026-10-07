@@ -13,6 +13,7 @@
 #pragma once
 
 #include "raylib.h"
+#include "display.h" // CANVAS_W/H: the modal backdrop covers the canvas, not the window
 #include <string>
 #include <cmath> // fminf/fmaxf/roundf (UiSlider)
 
@@ -256,17 +257,18 @@ inline void UiTextCentered(const char* t, int areaWidth, int y, int fontSize, Co
 // The shared frame every title-screen popup (CONTROLS, OPTIONS) draws: a dim
 // full-screen backdrop + opaque modal panel + centered title. Call first, then
 // draw the modal body, then UiModalClose() for the bottom CLOSE button. Sizes
-// off the live window (GetScreenWidth/Height) so callers pass only the panel.
+// off the canvas (display.h) so callers pass only the panel - not off the window,
+// which in fullscreen is the monitor and would centre the title off the panel.
 inline void UiModalChrome(Rectangle r, const char* title) {
-    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.7f));
+    DrawRectangle(0, 0, display::CANVAS_W, display::CANVAS_H, Fade(BLACK, 0.7f));
     UiModalPanel(r);
-    UiTextCentered(title, GetScreenWidth(), (int)r.y + 20, 30, ui::OUTLINE);
+    UiTextCentered(title, display::CANVAS_W, (int)r.y + 20, 30, ui::OUTLINE);
 }
 
 // CLOSE button pinned bottom-center of modal panel `r`. `enabled` gates the click
 // (callers pass the previous frame's open flag so the click that opened the modal
 // can't immediately close it). Returns true on the frame it's clicked.
 inline bool UiModalClose(Rectangle r, bool enabled) {
-    Rectangle b = {GetScreenWidth() / 2.0f - 70.0f, r.y + r.height - 60.0f, 140.0f, 40.0f};
+    Rectangle b = {display::CANVAS_W / 2.0f - 70.0f, r.y + r.height - 60.0f, 140.0f, 40.0f};
     return enabled && UiButton(b, "CLOSE");
 }

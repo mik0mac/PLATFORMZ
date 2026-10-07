@@ -10,13 +10,31 @@
     #status { position: fixed; top: 8px; left: 10px; z-index: 2; }
     canvas.emscripten { display: block; margin: 0 auto; background: #000;
                         outline: none; }
+    /* Fullscreen (F): the STAGE goes fullscreen, not the canvas, and the canvas
+       is stretched inside it with its 10:7 shape kept - black bars fill the rest.
+       Not the canvas itself: a fullscreened canvas is sized to the whole screen
+       and letterboxed by object-fit, and emscripten maps mouse positions over
+       the element's full box, so every click would land off target. Here the
+       canvas's box is exactly the picture, and its backing store stays 1000x700
+       - the game never learns the screen changed size. */
+    #stage:fullscreen         { display: flex; align-items: center;
+                                justify-content: center; background: #000; }
+    #stage:-webkit-full-screen { display: flex; align-items: center;
+                                justify-content: center; background: #000;
+                                width: 100%; height: 100%; }
+    #stage:fullscreen canvas.emscripten,
+    #stage:-webkit-full-screen canvas.emscripten {
+      width: min(100vw, calc(100vh * 10 / 7)); height: min(100vh, calc(100vw * 7 / 10));
+    }
   </style>
 </head>
 <body>
   <div id="status">loading…</div>
   <!-- Click the canvas to capture the mouse (pointer lock) and start audio. -->
-  <canvas class="emscripten" id="canvas" tabindex="-1"
-          oncontextmenu="event.preventDefault()"></canvas>
+  <div id="stage">
+    <canvas class="emscripten" id="canvas" tabindex="-1"
+            oncontextmenu="event.preventDefault()"></canvas>
+  </div>
   <script>
     var Module = {
       canvas: document.getElementById('canvas'),
@@ -60,6 +78,39 @@
       }
       document.addEventListener('pointerlockerror', onErr);
       document.addEventListener('webkitpointerlockerror', onErr);
+    })();
+
+    // Fullscreen: F toggles it, Esc leaves it (the browser does that part
+    // itself). Handled HERE rather than in the game because a page may only go
+    // fullscreen from inside the user's own key or click handler, and the game
+    // reads its keys on the next animation frame - by then it no longer counts.
+    // The game says whether F is free to take: Module.fullscreenKeyOk is false
+    // while one of its text fields has focus, where F is just a letter (set every
+    // frame by display::SetFullscreenKeyEnabled). The game calls
+    // Module.exitFullscreen on Esc, in case the browser kept the key.
+    (function () {
+      var stage = document.getElementById('stage');
+      function current() {
+        return document.fullscreenElement || document.webkitFullscreenElement;
+      }
+      function enter() {
+        var req = stage.requestFullscreen || stage.webkitRequestFullscreen;
+        if (!req) return;
+        var r = req.call(stage);
+        if (r && typeof r.catch === 'function') r.catch(function () {});
+      }
+      function exit() {
+        if (!current()) return;
+        var ex = document.exitFullscreen || document.webkitExitFullscreen;
+        var r = ex && ex.call(document);
+        if (r && typeof r.catch === 'function') r.catch(function () {});
+      }
+      Module.exitFullscreen = exit;
+      document.addEventListener('keydown', function (e) {
+        if (e.code !== 'KeyF' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (!Module.fullscreenKeyOk) return;
+        if (current()) exit(); else enter();
+      });
     })();
 
     // Paste: the game cannot read the clipboard (GLFW has none here, and a page
