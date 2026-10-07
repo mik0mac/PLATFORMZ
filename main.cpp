@@ -1379,6 +1379,7 @@ int main(int argc, char** argv) {
         // dt = seconds since last frame. Multiply all movement by this
         // so speed is consistent regardless of framerate.
         float dt = GetFrameTime();
+        UiSyncClickPosition(); // a click into a background window lands where it was made (ui.h)
 
         //MARK: PLATFORM (F4)
         // Steam's callbacks run from here, once a frame. A friend's "Join game"
