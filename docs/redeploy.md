@@ -19,8 +19,8 @@ nothing here goes live until its PR is merged.
 
 - `ssh mik0mac@platformz.space`
 - `cd /opt/PLATFORMZ`
-- `git checkout main && git pull`
-- `make -C server`
+- `sudo git checkout main && git pull`
+- `sudo make -C server`
 - `sudo systemctl restart platformz`
 - `sudo cp /opt/PLATFORMZ/web/platformz.* /var/www/platformz/`
 
@@ -37,7 +37,7 @@ nothing here goes live until its PR is merged.
 A desktop player on an older build than the server gets SERVER VERSION MISMATCH,
 so hand out fresh builds with any protocol change.
 
-- Mac: `make dist-pack` -> `dist/PLATFORMZ-mac-arm64.zip`
+- Mac: `make dist-pack` -> `dist/PLATFORMZ-mac-arm64.zip` (prerequisites and checks: `package-mac.md`)
 - Windows: `gh run download <run-id> -n platformz-windows` (the merged commit's CI run) -> `PLATFORMZ-UNSIGNED-windows-x64.zip`
 - Steam: nothing to upload yet (no App ID, #95)
 
