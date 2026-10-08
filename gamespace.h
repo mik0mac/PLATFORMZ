@@ -489,10 +489,32 @@ public:
     }
 
     // eye: the camera position, for view-dependent effects (explosion depth cueing).
+    // Platform flash from explosions: 0, or for the strongest blast whose damage
+    // radius reaches the platform's box, time fade (1 - t)^2 x proximity (nearest
+    // point of the box to the blast, floored at PLATFORM_BLAST_FLASH_MIN). Derived
+    // from the explosions each frame - no state, so networked clients get it free.
+    float platformBlastFlash(const Platform& platform) const {
+        float best = 0.0f;
+        Vector3 half = Vector3Scale(platform.size, 0.5f);
+        for (const Explosion& e : explosions) {
+            float R = e.maxRadius;
+            if (R <= 0.0f) continue;
+            Vector3 lo = Vector3Subtract(platform.position, half);
+            Vector3 hi = Vector3Add(platform.position, half);
+            Vector3 nearest = Vector3Clamp(e.position, lo, hi);
+            float d = Vector3Distance(nearest, e.position);
+            if (d >= R) continue;
+            float t = Clamp(e.radius / R, 0.0f, 1.0f);
+            float proximity = std::max(PLATFORM_BLAST_FLASH_MIN, 1.0f - d / R);
+            best = std::max(best, (1.0f - t) * (1.0f - t) * proximity);
+        }
+        return best;
+    }
+
     void draw(int localPlayerIndex, Vector3 eye) {
         // ---- Pass 1: opaque wireframes (write depth) ----
         if (wallsEnabled) DrawWalls(walls);
-        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
+        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE, platformBlastFlash(platform));
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
@@ -501,7 +523,7 @@ public:
 
         // ---- Pass 2: translucent fills (no depth write), one flush pair ----
         BeginTranslucentFill();
-        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL);
+        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL, platformBlastFlash(platform));
         drawPlayersPass(localPlayerIndex, PASS_FILL);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);

@@ -427,9 +427,20 @@ const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
 // damageRadius, so the visual shows the whole zone at once and fades out rather
 // than growing. Everything runs off t = radius / maxRadius (0 -> 1 over the
 // blast's life), which networked clients get from the synced radius for free.
-const float EXPLOSION_FLASH_T = 0.08f;     // t span the outer ring stays near-white before easing to orange
-const float EXPLOSION_SHOCK_T = 0.12f;     // t span the inner shockwave ring takes to reach the edge (~0.2 s)
+const float EXPLOSION_FLASH_T = 0.08f;     // t span the zone ring stays near-white before easing to orange
+const float EXPLOSION_RING_FADE_T = 0.5f;  // t at which the fixed zone ring is gone - short, so the blast doesn't read as a hard border
 const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
+// Shockwave: one ring that rushes out, decelerates, and keeps going past the
+// damage radius while fading over the whole life - a blast dispersing, not a
+// wall. radius = R * REACH * (1 - (1 - t)^EASE); with REACH 2 and EASE 4 it
+// crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
+const float EXPLOSION_SHOCK_REACH = 4.0f;  // final shockwave radius, as a multiple of the damage radius
+const float EXPLOSION_SHOCK_EASE = 4.0f;   // ease-out power: higher = faster start, longer coast
+// Platforms inside a blast's damage radius flash (GameSpace::platformBlastFlash).
+// A platform is mostly translucent fill, which the blast light barely tints, so
+// a rocket hitting one needs its own feedback. Strength = time fade x proximity.
+const float PLATFORM_BLAST_FLASH_MIN = 0.35f;      // proximity floor, so a platform just inside the edge still flashes visibly
+const unsigned char PLATFORM_BLAST_FILL_ALPHA = 150; // fill alpha at full flash (normal fill is 40)
 // Blast light: geometry inside an active blast glows its colour, fading with t.
 // BLAST_LIGHT_MAX must match the array size in main.cpp's world shader.
 const int   BLAST_LIGHT_MAX = 8;           // blasts lit at once (the strongest win)

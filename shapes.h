@@ -98,8 +98,18 @@ inline void DrawWalls(const Walls& walls) {
     DrawGridRoom(walls.halfSize, spacing, walls.color_outline);
 }
 
-inline void DrawPlatform(const Platform& platform, DrawPass pass) {
-    DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, platform.color_outline, platform.color_fill, pass);
+// flash (0..1, GameSpace::platformBlastFlash): an explosion's damage radius
+// reaches this platform - wire and fill heat toward the blast orange.
+inline void DrawPlatform(const Platform& platform, DrawPass pass, float flash = 0.0f) {
+    Color outline = platform.color_outline;
+    Color fill = platform.color_fill;
+    if (flash > 0.0f) {
+        Color hot = {255, 170, 60, 255};
+        outline = ColorLerp(outline, hot, flash);
+        hot.a = PLATFORM_BLAST_FILL_ALPHA;
+        fill = ColorLerp(fill, hot, flash);
+    }
+    DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, outline, fill, pass);
 }
 
 // A VFX spark: a short streak drawn behind its direction of travel, fading out
@@ -508,27 +518,30 @@ inline void DrawSphereSilhouette(Vector3 center, float r, Vector3 eye, Color col
 
 inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye) {
     // Splash damage lands in full on the first frame, out to the whole radius
-    // (ApplyExplosionSplashDamage), so the visual shows the whole zone at once and
-    // fades rather than growing. explosion.radius still grows 0 -> maxRadius, but
-    // only as the clock t (synced over the network for free). Wire only - the
-    // interior is lit by the blast light in main.cpp's world shader.
+    // (ApplyExplosionSplashDamage). explosion.radius still grows 0 -> maxRadius,
+    // but here it is only the clock t (synced over the network for free). Wire
+    // only - the damage zone's interior is lit by the blast light in main.cpp's
+    // world shader, and platforms in it flash (DrawPlatform).
     if (pass == PASS_FILL) return;
     float t = explosion.maxRadius > 0.0f ? (explosion.radius / explosion.maxRadius) : 1.0f;
     t = Clamp(t, 0.0f, 1.0f);
-    float fade = (1.0f - t) * (1.0f - t);
     float R = explosion.maxRadius;
-
-    // Outer ring: the damage zone's outline from frame 0. Near-white flash that
-    // eases to the explosion's orange, fading out over the blast's life.
     Color flash = {255, 240, 210, 255};
-    Color ring = ColorLerp(flash, explosion.color_outline, Clamp(t / EXPLOSION_FLASH_T, 0.0f, 1.0f));
-    ring.a = (unsigned char)(255 * fade);
-    DrawSphereSilhouette(explosion.position, R, eye, ring);
 
-    // Shockwave: races out to the edge in the first moment - the "bang".
-    if (t < EXPLOSION_SHOCK_T) {
-        float s = t / EXPLOSION_SHOCK_T;
-        flash.a = (unsigned char)(255 * (1.0f - s));
-        DrawSphereSilhouette(explosion.position, R * s, eye, flash);
+    // Zone ring: the damage radius's outline, there from frame 0 because that is
+    // when the damage lands. Near-white easing to orange, and gone early so the
+    // blast doesn't leave a hard border behind.
+    if (t < EXPLOSION_RING_FADE_T) {
+        float k = 1.0f - t / EXPLOSION_RING_FADE_T;
+        Color ring = ColorLerp(flash, explosion.color_outline, Clamp(t / EXPLOSION_FLASH_T, 0.0f, 1.0f));
+        ring.a = (unsigned char)(255 * k * k);
+        DrawSphereSilhouette(explosion.position, R, eye, ring);
     }
+
+    // Shockwave: rushes out, decelerates, and carries on past the damage radius,
+    // cooling from white to orange and thinning out over the whole life.
+    float shockR = R * EXPLOSION_SHOCK_REACH * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
+    Color shock = ColorLerp(flash, explosion.color_outline, t);
+    shock.a = (unsigned char)(255 * powf(1.0f - t, 1.5f));
+    if (shockR > 0.0f) DrawSphereSilhouette(explosion.position, shockR, eye, shock);
 }
