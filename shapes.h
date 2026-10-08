@@ -557,35 +557,33 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
         DrawSphereSilhouette(explosion.position, R, eye, ring);
     }
 
-    // Shockwave: a 3D shell of dots that rushes out, decelerates, and carries on
-    // past the damage radius, thickening into a cloud and cooling from white to
-    // orange as it fades. Each dot is a small camera-facing '+' of fixed WORLD
-    // size, so perspective sizes it (near big, far small); the far side of the
-    // shell draws dimmer. Unlike a silhouette ring it stays visible from inside.
+    // Shockwave: a 3D shell of spark streaks that rushes out, decelerates, and
+    // carries on past the damage radius, thickening into a cloud and cooling from
+    // white to orange as it fades. Each streak trails back toward the centre along
+    // its own direction, like DrawSpark, and its length follows its current speed:
+    // long while the shell races out, spark-sized once it coasts. The far side of
+    // the shell draws dimmer; unlike a silhouette ring it stays visible from inside.
     float shockR = R * EXPLOSION_SHOCK_REACH * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
     if (shockR <= 0.0f) return;
     Color shock = ColorLerp(flash, explosion.color_outline, t);
     float alpha = 255.0f * powf(1.0f - t, 1.5f);
+    // d(shockR)/dt in units/sec: the curve's slope over t, divided by the blast's
+    // lifetime (expansionRate is scaled with maxRadius, locally and on clients).
+    float life = explosion.expansionRate > 0.0f ? R / explosion.expansionRate : 1.0f;
+    float shockSpeed = R * EXPLOSION_SHOCK_REACH * EXPLOSION_SHOCK_EASE
+                     * powf(1.0f - t, EXPLOSION_SHOCK_EASE - 1.0f) / life;
 
     // Rotate the pattern per blast, hashed from its position: two blasts don't
     // share one, and every client draws the same (no extra synced state).
     Vector3 p0 = explosion.position;
     Matrix spin = MatrixRotateXYZ({p0.x * 1.7f + p0.z * 0.3f, p0.y * 2.3f + p0.x * 0.5f, p0.z * 1.1f + p0.y * 0.7f});
-
-    float dotSize = fmaxf(EXPLOSION_DOT_SIZE, shockR * EXPLOSION_DOT_SIZE_GROWTH);
-
-    // One billboard basis per explosion (dots are tiny, so it's close enough).
-    Vector3 fwd = Vector3Subtract(p0, eye);
-    if (Vector3LengthSqr(fwd) < 1e-6f) fwd = {0, 0, 1};
-    fwd = Vector3Normalize(fwd);
-    Vector3 up = (fabsf(fwd.y) > 0.99f) ? Vector3{1, 0, 0} : Vector3{0, 1, 0};
-    Vector3 right = Vector3Scale(Vector3Normalize(Vector3CrossProduct(fwd, up)), dotSize * 0.5f);
-    up = Vector3Scale(Vector3Normalize(Vector3CrossProduct(right, fwd)), dotSize * 0.5f);
     bool inside = Vector3Distance(eye, p0) <= shockR;
 
     for (const Vector4& d : ExplosionDotDirs()) {
         Vector3 dir = Vector3Transform({d.x, d.y, d.z}, spin);
-        Vector3 p = Vector3Add(p0, Vector3Scale(dir, shockR * d.w));
+        float dist = shockR * d.w;
+        Vector3 p = Vector3Add(p0, Vector3Scale(dir, dist));
+        float len = Clamp(shockSpeed * d.w * EXPLOSION_STREAK_TIME, SPARK_STREAK_LENGTH, fmaxf(dist, SPARK_STREAK_LENGTH));
         Color c = shock;
         float k = 1.0f;
         if (!inside) {
@@ -594,7 +592,6 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
             k = Lerp(EXPLOSION_DOT_BACK_ALPHA, 1.0f, s * s * (3.0f - 2.0f * s));
         }
         c.a = (unsigned char)(alpha * k);
-        DrawLine3D(Vector3Subtract(p, right), Vector3Add(p, right), c);
-        DrawLine3D(Vector3Subtract(p, up), Vector3Add(p, up), c);
+        DrawLine3D(p, Vector3Subtract(p, Vector3Scale(dir, len)), c);
     }
 }

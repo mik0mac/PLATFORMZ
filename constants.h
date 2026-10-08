@@ -428,19 +428,18 @@ const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
 // than growing. Everything runs off t = radius / maxRadius (0 -> 1 over the
 // blast's life), which networked clients get from the synced radius for free.
 const float EXPLOSION_FLASH_T = 0.08f;     // t span the zone ring stays near-white before easing to orange
-const float EXPLOSION_RING_FADE_T = 0.5f;  // t at which the fixed zone ring is gone - short, so the blast doesn't read as a hard border
+const float EXPLOSION_RING_FADE_T = 0.25f;  // t at which the fixed zone ring is gone - short, so the blast doesn't read as a hard border
 const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
-// Shockwave: a 3D shell of dots that rushes out, decelerates, and keeps going
-// past the damage radius while fading over the whole life - a blast dispersing,
-// not a wall. radius = R * REACH * (1 - (1 - t)^EASE); e.g. REACH 2 / EASE 4
-// crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
+// Shockwave: a 3D shell of spark streaks that rushes out, decelerates, and
+// keeps going past the damage radius while fading over the whole life - a blast
+// dispersing, not a wall. radius = R * REACH * (1 - (1 - t)^EASE); e.g. REACH 2 /
+// EASE 4 crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
 const float EXPLOSION_SHOCK_REACH = 1.5f;  // final shockwave radius, as a multiple of the damage radius
-const float EXPLOSION_SHOCK_EASE = 1.5f;   // ease-out power: higher = faster start, longer coast
-const int   EXPLOSION_DOT_COUNT = 240;     // dots in the shell (evenly spread, Fibonacci sphere)
-const float EXPLOSION_DOT_SIZE = 0.6f;     // minimum world size of each dot's '+', units - world-sized, so near dots look bigger
-const float EXPLOSION_DOT_SIZE_GROWTH = 0.025f; // dots also grow with the shell: size >= shell radius x this, so a wide shell's dots stay visible
-const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-dot speed variation (+/-), so the shell thickens into a cloud
-const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side dot alpha, as a fraction of the near side's
+const float EXPLOSION_SHOCK_EASE = 3.0f;   // ease-out power: higher = faster start, longer coast
+const int   EXPLOSION_DOT_COUNT = 240;     // streaks in the shell (evenly spread, Fibonacci sphere)
+const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-streak speed variation (+/-), so the shell thickens into a cloud
+const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a fraction of the near side's
+const float EXPLOSION_STREAK_TIME = 0.04f; // streak length = this many seconds of its current travel (motion blur); floored at SPARK_STREAK_LENGTH
 // Platforms inside a blast's damage radius flash (GameSpace::platformBlastFlash).
 // A platform is mostly translucent fill, which the blast light barely tints, so
 // a rocket hitting one needs its own feedback. Strength = time fade x proximity.
