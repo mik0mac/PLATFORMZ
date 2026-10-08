@@ -23,12 +23,18 @@ jobs:
   build-server:
     name: Compile
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install build dependencies
+        # An Ubuntu mirror that stops answering hangs apt with no output; one
+        # sat for GitHub's 6-hour job cap. Retry and time out per request, and
+        # cap the step, so a bad mirror fails in minutes and says where.
+        timeout-minutes: 10
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-network >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y libboost-dev libboost-system-dev
 
@@ -49,7 +55,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build dependencies
+        # An Ubuntu mirror that stops answering hangs apt with no output; one
+        # sat for GitHub's 6-hour job cap. Retry and time out per request, and
+        # cap the step, so a bad mirror fails in minutes and says where.
+        timeout-minutes: 10
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-network >/dev/null
           sudo apt-get update -qq
           # lsof: run_probes.sh uses it to prove the port is free between probes,
           # which is how it catches a stray server from the previous one.
@@ -114,7 +125,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build dependencies
+        # An Ubuntu mirror that stops answering hangs apt with no output; one
+        # sat for GitHub's 6-hour job cap. Retry and time out per request, and
+        # cap the step, so a bad mirror fails in minutes and says where.
+        timeout-minutes: 10
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-network >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y libboost-dev libboost-system-dev lsof
 
@@ -225,12 +241,18 @@ jobs:
   cmake-server:
     name: CMake server
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install build dependencies
+        # An Ubuntu mirror that stops answering hangs apt with no output; one
+        # sat for GitHub's 6-hour job cap. Retry and time out per request, and
+        # cap the step, so a bad mirror fails in minutes and says where.
+        timeout-minutes: 10
         run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-ci-network >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y libboost-dev nlohmann-json3-dev
 
