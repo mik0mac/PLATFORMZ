@@ -430,12 +430,17 @@ const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
 const float EXPLOSION_FLASH_T = 0.08f;     // t span the zone ring stays near-white before easing to orange
 const float EXPLOSION_RING_FADE_T = 0.5f;  // t at which the fixed zone ring is gone - short, so the blast doesn't read as a hard border
 const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
-// Shockwave: one ring that rushes out, decelerates, and keeps going past the
-// damage radius while fading over the whole life - a blast dispersing, not a
-// wall. radius = R * REACH * (1 - (1 - t)^EASE); with REACH 2 and EASE 4 it
+// Shockwave: a 3D shell of dots that rushes out, decelerates, and keeps going
+// past the damage radius while fading over the whole life - a blast dispersing,
+// not a wall. radius = R * REACH * (1 - (1 - t)^EASE); e.g. REACH 2 / EASE 4
 // crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
-const float EXPLOSION_SHOCK_REACH = 4.0f;  // final shockwave radius, as a multiple of the damage radius
-const float EXPLOSION_SHOCK_EASE = 4.0f;   // ease-out power: higher = faster start, longer coast
+const float EXPLOSION_SHOCK_REACH = 1.5f;  // final shockwave radius, as a multiple of the damage radius
+const float EXPLOSION_SHOCK_EASE = 1.5f;   // ease-out power: higher = faster start, longer coast
+const int   EXPLOSION_DOT_COUNT = 240;     // dots in the shell (evenly spread, Fibonacci sphere)
+const float EXPLOSION_DOT_SIZE = 0.6f;     // minimum world size of each dot's '+', units - world-sized, so near dots look bigger
+const float EXPLOSION_DOT_SIZE_GROWTH = 0.025f; // dots also grow with the shell: size >= shell radius x this, so a wide shell's dots stay visible
+const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-dot speed variation (+/-), so the shell thickens into a cloud
+const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side dot alpha, as a fraction of the near side's
 // Platforms inside a blast's damage radius flash (GameSpace::platformBlastFlash).
 // A platform is mostly translucent fill, which the blast light barely tints, so
 // a rocket hitting one needs its own feedback. Strength = time fade x proximity.

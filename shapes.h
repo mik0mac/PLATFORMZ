@@ -516,6 +516,25 @@ inline void DrawSphereSilhouette(Vector3 center, float r, Vector3 eye, Color col
     DrawBillboardCircle(c, r * sqrtf(1.0f - (r * r) / (d * d)), eye, EXPLOSION_RING_SEGMENTS, col);
 }
 
+// EXPLOSION_DOT_COUNT unit directions spread evenly over a sphere (Fibonacci
+// lattice), built once. w is each dot's fixed speed factor, 1 +/- DOT_SPREAD,
+// from a cheap hash of its index - what thickens the shell into a cloud.
+inline const std::vector<Vector4>& ExplosionDotDirs() {
+    static const std::vector<Vector4> dirs = [] {
+        std::vector<Vector4> v;
+        const float golden = PI * (3.0f - sqrtf(5.0f));
+        for (int i = 0; i < EXPLOSION_DOT_COUNT; ++i) {
+            float y = 1.0f - 2.0f * (i + 0.5f) / (float)EXPLOSION_DOT_COUNT;
+            float r = sqrtf(1.0f - y * y);
+            float a = golden * (float)i;
+            float h = fmodf(sinf((float)i * 12.9898f) * 43758.5453f, 1.0f); // -1..1
+            v.push_back({r * cosf(a), y, r * sinf(a), 1.0f + EXPLOSION_DOT_SPREAD * h});
+        }
+        return v;
+    }();
+    return dirs;
+}
+
 inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye) {
     // Splash damage lands in full on the first frame, out to the whole radius
     // (ApplyExplosionSplashDamage). explosion.radius still grows 0 -> maxRadius,
@@ -538,10 +557,44 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
         DrawSphereSilhouette(explosion.position, R, eye, ring);
     }
 
-    // Shockwave: rushes out, decelerates, and carries on past the damage radius,
-    // cooling from white to orange and thinning out over the whole life.
+    // Shockwave: a 3D shell of dots that rushes out, decelerates, and carries on
+    // past the damage radius, thickening into a cloud and cooling from white to
+    // orange as it fades. Each dot is a small camera-facing '+' of fixed WORLD
+    // size, so perspective sizes it (near big, far small); the far side of the
+    // shell draws dimmer. Unlike a silhouette ring it stays visible from inside.
     float shockR = R * EXPLOSION_SHOCK_REACH * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
+    if (shockR <= 0.0f) return;
     Color shock = ColorLerp(flash, explosion.color_outline, t);
-    shock.a = (unsigned char)(255 * powf(1.0f - t, 1.5f));
-    if (shockR > 0.0f) DrawSphereSilhouette(explosion.position, shockR, eye, shock);
+    float alpha = 255.0f * powf(1.0f - t, 1.5f);
+
+    // Rotate the pattern per blast, hashed from its position: two blasts don't
+    // share one, and every client draws the same (no extra synced state).
+    Vector3 p0 = explosion.position;
+    Matrix spin = MatrixRotateXYZ({p0.x * 1.7f + p0.z * 0.3f, p0.y * 2.3f + p0.x * 0.5f, p0.z * 1.1f + p0.y * 0.7f});
+
+    float dotSize = fmaxf(EXPLOSION_DOT_SIZE, shockR * EXPLOSION_DOT_SIZE_GROWTH);
+
+    // One billboard basis per explosion (dots are tiny, so it's close enough).
+    Vector3 fwd = Vector3Subtract(p0, eye);
+    if (Vector3LengthSqr(fwd) < 1e-6f) fwd = {0, 0, 1};
+    fwd = Vector3Normalize(fwd);
+    Vector3 up = (fabsf(fwd.y) > 0.99f) ? Vector3{1, 0, 0} : Vector3{0, 1, 0};
+    Vector3 right = Vector3Scale(Vector3Normalize(Vector3CrossProduct(fwd, up)), dotSize * 0.5f);
+    up = Vector3Scale(Vector3Normalize(Vector3CrossProduct(right, fwd)), dotSize * 0.5f);
+    bool inside = Vector3Distance(eye, p0) <= shockR;
+
+    for (const Vector4& d : ExplosionDotDirs()) {
+        Vector3 dir = Vector3Transform({d.x, d.y, d.z}, spin);
+        Vector3 p = Vector3Add(p0, Vector3Scale(dir, shockR * d.w));
+        Color c = shock;
+        float k = 1.0f;
+        if (!inside) {
+            float facing = Vector3DotProduct(dir, Vector3Normalize(Vector3Subtract(eye, p)));
+            float s = Clamp((facing + 0.2f) / 0.4f, 0.0f, 1.0f);
+            k = Lerp(EXPLOSION_DOT_BACK_ALPHA, 1.0f, s * s * (3.0f - 2.0f * s));
+        }
+        c.a = (unsigned char)(alpha * k);
+        DrawLine3D(Vector3Subtract(p, right), Vector3Add(p, right), c);
+        DrawLine3D(Vector3Subtract(p, up), Vector3Add(p, up), c);
+    }
 }
