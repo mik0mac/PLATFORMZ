@@ -53,7 +53,6 @@ inline void DrawShadedWireBox(Vector3 position, float width, float height, float
 }
 
 // Same fill+wireframe layering as DrawShadedWireBox, but for a sphere.
-// Used for asteroids and the explosion effect.
 inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Color fillColor, DrawPass pass) {
     if (pass == PASS_FILL) DrawSphere(position, radius, fillColor);
     else                   DrawSphereWires(position, radius, 16, 16, wireColor);
@@ -478,28 +477,58 @@ inline void DrawRocket(const Rocket& rocket, DrawPass pass) {
     }
 }
 
-inline void DrawExplosion(const Explosion& explosion, DrawPass pass) {
-    // Two-layer vector explosion, all driven by Explosion::update(dt) (called
-    // each frame in gamespace.h), which grows radius 0 -> maxRadius:
-    //   - a bright near-white outer shockwave shell (wire only) that flashes
-    //     at the leading edge and fades as it expands
-    //   - a slower orange core sphere with the translucent fill underneath
+// A circle facing the eye: lies in the plane through `center` perpendicular to
+// the view direction, so it always reads as a clean round vector ring.
+inline void DrawBillboardCircle(Vector3 center, float radius, Vector3 eye, int segments, Color col) {
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(center, eye));
+    Vector3 up = (fabsf(fwd.y) > 0.99f) ? Vector3{1, 0, 0} : Vector3{0, 1, 0};
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
+    up = Vector3CrossProduct(right, fwd);
+    Vector3 prev = Vector3Add(center, Vector3Scale(right, radius));
+    for (int i = 1; i <= segments; ++i) {
+        float a = 2.0f * PI * (float)i / (float)segments;
+        Vector3 p = Vector3Add(center, Vector3Add(Vector3Scale(right, cosf(a) * radius),
+                                                  Vector3Scale(up,    sinf(a) * radius)));
+        DrawLine3D(prev, p, col);
+        prev = p;
+    }
+}
+
+// The on-screen outline of a sphere of radius r: seen from distance d it is the
+// circle r*r/d toward the eye, of radius r*sqrt(1 - r*r/d*d). Drawing that ring
+// means it lines up exactly with what is inside the sphere at any range. No
+// outline exists from inside the sphere, so it draws nothing there.
+inline void DrawSphereSilhouette(Vector3 center, float r, Vector3 eye, Color col) {
+    Vector3 toEye = Vector3Subtract(eye, center);
+    float d = Vector3Length(toEye);
+    if (d <= r) return;
+    Vector3 c = Vector3Add(center, Vector3Scale(toEye, (r * r / d) / d));
+    DrawBillboardCircle(c, r * sqrtf(1.0f - (r * r) / (d * d)), eye, EXPLOSION_RING_SEGMENTS, col);
+}
+
+inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye) {
+    // Splash damage lands in full on the first frame, out to the whole radius
+    // (ApplyExplosionSplashDamage), so the visual shows the whole zone at once and
+    // fades rather than growing. explosion.radius still grows 0 -> maxRadius, but
+    // only as the clock t (synced over the network for free). Wire only - the
+    // interior is lit by the blast light in main.cpp's world shader.
+    if (pass == PASS_FILL) return;
     float t = explosion.maxRadius > 0.0f ? (explosion.radius / explosion.maxRadius) : 1.0f;
     t = Clamp(t, 0.0f, 1.0f);
+    float fade = (1.0f - t) * (1.0f - t);
+    float R = explosion.maxRadius;
 
-    // Outer shockwave: full current radius, near-white flash fading to nothing.
-    // Wire-only, so it only draws in the wire pass.
-    if (pass == PASS_WIRE) {
-        unsigned char shockAlpha = (unsigned char)(255 * (1.0f - t));
-        Color shockColor = {255, 230, 180, shockAlpha};
-        DrawSphereWires(explosion.position, explosion.radius, 16, 16, shockColor);
+    // Outer ring: the damage zone's outline from frame 0. Near-white flash that
+    // eases to the explosion's orange, fading out over the blast's life.
+    Color flash = {255, 240, 210, 255};
+    Color ring = ColorLerp(flash, explosion.color_outline, Clamp(t / EXPLOSION_FLASH_T, 0.0f, 1.0f));
+    ring.a = (unsigned char)(255 * fade);
+    DrawSphereSilhouette(explosion.position, R, eye, ring);
+
+    // Shockwave: races out to the edge in the first moment - the "bang".
+    if (t < EXPLOSION_SHOCK_T) {
+        float s = t / EXPLOSION_SHOCK_T;
+        flash.a = (unsigned char)(255 * (1.0f - s));
+        DrawSphereSilhouette(explosion.position, R * s, eye, flash);
     }
-
-    // Core: smaller orange sphere lagging the shockwave. Fill alpha is already
-    // faded by Explosion::update; fade the wire outline over the lifetime too.
-    float coreRadius = explosion.radius * 0.6f;
-    unsigned char coreOutlineAlpha = (unsigned char)(255 * (1.0f - t));
-    Color coreOutline = {explosion.color_outline.r, explosion.color_outline.g,
-                         explosion.color_outline.b, coreOutlineAlpha};
-    DrawShadedSphere(explosion.position, coreRadius, coreOutline, explosion.color_fill, pass);
 }

@@ -422,6 +422,31 @@ const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as p
 // the OPTIONS "EXPLOSION RADIUS" slider's max (4x, see options.h).
 const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
 
+// Explosion visual (shapes.h DrawExplosion + the blast light in main.cpp's world
+// shader). Splash damage lands in FULL on the blast's first frame, out to
+// damageRadius, so the visual shows the whole zone at once and fades out rather
+// than growing. Everything runs off t = radius / maxRadius (0 -> 1 over the
+// blast's life), which networked clients get from the synced radius for free.
+const float EXPLOSION_FLASH_T = 0.08f;     // t span the outer ring stays near-white before easing to orange
+const float EXPLOSION_SHOCK_T = 0.12f;     // t span the inner shockwave ring takes to reach the edge (~0.2 s)
+const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
+// Blast light: geometry inside an active blast glows its colour, fading with t.
+// BLAST_LIGHT_MAX must match the array size in main.cpp's world shader.
+const int   BLAST_LIGHT_MAX = 8;           // blasts lit at once (the strongest win)
+const float BLAST_LIGHT_STRENGTH = 0.9f;   // additive glow at full strength, 0..1+
+const float BLAST_LIGHT_COLOR[3] = {1.0f, 0.55f, 0.1f}; // RGB 0..1, the explosion orange
+
+//MARK: Fog Constants
+// Distance fog over the arena (main.cpp world shader; never the starfield). Eye
+// depth in units. Corner-to-corner diagonals: SMALL ~312, MEDIUM ~416 (halfSize
+// * 2 * sqrt(3)). FOG_START sits past SMALL's, so SMALL never shows any fog, and
+// MEDIUM only ever gets ~6% at the very farthest corner - effectively none. Keep
+// FOG_START above ~360 when tuning so it stays that way. FOG_MAX < 1 so the far
+// walls dim but never vanish.
+const float FOG_START = 360.0f; // depth where fog begins, units
+const float FOG_END = 1080.0f;  // depth where fog reaches FOG_MAX, units
+const float FOG_MAX = 0.8f;     // strongest fog: fraction of alpha removed, 0..1
+
 //MARK: Spark VFX Constants
 // Sparks are pure visual particles (no collision). Shared physics/draw, spawned
 // as one-time elimination bursts. (The jetpack exhaust plume that also used

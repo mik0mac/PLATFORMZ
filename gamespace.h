@@ -488,14 +488,15 @@ public:
         return 1.0f - Clamp((maxAxis - walls.halfSize) / span, 0.0f, 1.0f);
     }
 
-    void draw(int localPlayerIndex = -1) {
+    // eye: the camera position, for view-dependent effects (explosion depth cueing).
+    void draw(int localPlayerIndex, Vector3 eye) {
         // ---- Pass 1: opaque wireframes (write depth) ----
         if (wallsEnabled) DrawWalls(walls);
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
-        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE, eye);
         for (Spark& spark : sparks)            DrawSpark(spark); // wire-only lines
 
         // ---- Pass 2: translucent fills (no depth write), one flush pair ----
@@ -504,7 +505,7 @@ public:
         drawPlayersPass(localPlayerIndex, PASS_FILL);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);
-        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL, eye);
         EndTranslucentFill();
     }
 #endif // PLATFORMZ_SERVER
