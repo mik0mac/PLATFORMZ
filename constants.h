@@ -439,6 +439,11 @@ const float EXPLOSION_SHOCK_EASE = 3.0f;   // ease-out power: higher = faster st
 const int   EXPLOSION_DOT_COUNT = 240;     // streaks in the shell (evenly spread, Fibonacci sphere)
 const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-streak speed variation (+/-), so the shell thickens into a cloud
 const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a fraction of the near side's
+// Where the streak shell starts, as a multiple of the damage radius: 0 = from
+// the blast centre, 1 = born on the damage radius and travelling outward from
+// it toward REACH (the per-streak spread applies to the travel only, so the
+// shell starts as a clean sphere). Keep it below EXPLOSION_SHOCK_REACH.
+const float EXPLOSION_STREAK_START = 1.0f;
 const float EXPLOSION_STREAK_TIME = 0.04f; // streak length = this many seconds of its current travel (motion blur); floored at SPARK_STREAK_LENGTH
 // Platforms inside a blast's damage radius flash (GameSpace::platformBlastFlash).
 // A platform is mostly translucent fill, which the blast light barely tints, so

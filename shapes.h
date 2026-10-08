@@ -563,14 +563,18 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
     // its own direction, like DrawSpark, and its length follows its current speed:
     // long while the shell races out, spark-sized once it coasts. The far side of
     // the shell draws dimmer; unlike a silhouette ring it stays visible from inside.
-    float shockR = R * EXPLOSION_SHOCK_REACH * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
+    // The shell starts at R * STREAK_START and travels the rest of the way to
+    // R * REACH; STREAK_START 0 is the original from-the-centre burst.
+    float startR = R * EXPLOSION_STREAK_START;
+    float travel = R * fmaxf(EXPLOSION_SHOCK_REACH - EXPLOSION_STREAK_START, 0.0f);
+    float shockR = startR + travel * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
     if (shockR <= 0.0f) return;
     Color shock = ColorLerp(flash, explosion.color_outline, t);
     float alpha = 255.0f * powf(1.0f - t, 1.5f);
     // d(shockR)/dt in units/sec: the curve's slope over t, divided by the blast's
     // lifetime (expansionRate is scaled with maxRadius, locally and on clients).
     float life = explosion.expansionRate > 0.0f ? R / explosion.expansionRate : 1.0f;
-    float shockSpeed = R * EXPLOSION_SHOCK_REACH * EXPLOSION_SHOCK_EASE
+    float shockSpeed = travel * EXPLOSION_SHOCK_EASE
                      * powf(1.0f - t, EXPLOSION_SHOCK_EASE - 1.0f) / life;
 
     // Rotate the pattern per blast, hashed from its position: two blasts don't
@@ -581,7 +585,7 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
 
     for (const Vector4& d : ExplosionDotDirs()) {
         Vector3 dir = Vector3Transform({d.x, d.y, d.z}, spin);
-        float dist = shockR * d.w;
+        float dist = startR + (shockR - startR) * d.w; // spread the travel, not the start
         Vector3 p = Vector3Add(p0, Vector3Scale(dir, dist));
         float len = Clamp(shockSpeed * d.w * EXPLOSION_STREAK_TIME, SPARK_STREAK_LENGTH, fmaxf(dist, SPARK_STREAK_LENGTH));
         Color c = shock;
