@@ -83,6 +83,7 @@ class C:
         # They are different questions: the first is the pending choice everyone
         # can see before start, the second is what got built.
         self.mapSize = ""
+        self.endedByHost = False  # state flag bit 64: the host ended this GAMEOVER (#188)
         self.half = 0.0
         # Leaderboard arrivals, and the phase we believed we were in at the time.
         # The server sends the table BEFORE the state packet announcing GAMEOVER,
@@ -191,6 +192,8 @@ class C:
                 # Option flags at 52; bits 16/32 are the map index (see
                 # mapSizeOrder in constants.h). Roster count follows at 53.
                 self.mapSize = MAP_SIZES[(d[52] >> 4) & 0x3]
+                # Bit 64: this GAMEOVER is the host's request (#188).
+                self.endedByHost = bool(d[52] & 64)
                 self.nplayers = d[53]
                 # Decode the roster so tests can assert on a player's actual
                 # state. Layout per buildStateBodyBinary: u32 id, 3x qpos(i16),

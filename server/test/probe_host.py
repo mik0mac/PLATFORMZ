@@ -89,9 +89,13 @@ print("and cannot end everyone's match")
 d.send({"type": "endmatch"})
 time.sleep(2.0)
 check(b.phase == "playing", f"DELTA's ENDMATCH ignored (phase={b.phase})")
+check(not d.endedByHost, "...and marked nothing as host-ended")
 b.send({"type": "endmatch"})
 time.sleep(2.0)
 check(b.phase == "gameover", f"the real host's ENDMATCH works (phase={b.phase})")
+# #188: everyone, not just the host, is told it was a request rather than a
+# finish, so every client skips its wind-down to the result together.
+check(b.endedByHost and d.endedByHost, "and every client is told the host ended it")
 
 for x in (b, c, d):
     x.alive = False

@@ -680,6 +680,12 @@ int main(int argc, char** argv) {
         bool taken = false;
         std::vector<GameOverRow> rows;
         enum class Outcome { NONE, SURVIVED, ELIMINATED } outcome = Outcome::NONE;
+        // Online only: who ended the match early with their [Q] (#188), as the
+        // line to show - "You ended the match." for the host, "<HOST> has
+        // ended the match." for everyone else. Empty for a match that finished.
+        // Replaces the outcome line: "survived" means little when nobody was
+        // allowed to lose.
+        std::string endedLine;
     } gameOverShot;
     bool  paused        = false;           // PLAYING, cursor freed, scores shown. LOCAL freezes the sim; online it is this client's screen only (#164)
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
@@ -863,6 +869,7 @@ int main(int argc, char** argv) {
     };
     auto captureGameOver = [&]() {
         gameOverShot.taken = true;
+        gameOverShot.endedLine.clear();
         gameOverShot.rows  = currentScoreRows();
         const std::vector<Player>& ps = gameSpace.getPlayers();
         const int localIndex = networked ? myIndex : 0;
@@ -1333,7 +1340,9 @@ int main(int argc, char** argv) {
         screen = GameScreen::BROWSE;
     };
 
-    // GAME_OVER/title -> TITLE. Local: wipe the world for a clean restart.
+    // Out of a finished match, back to where it was set up. Local: wipe the world
+    // and return to LOCAL setup, so the next run is one START away with the same
+    // rules (#187) - the same place an online match returns you, its room.
     // Networked: stay connected (back to the lobby) so START can restart; the
     // server owns the world and resyncs it. The NetClient dtor closes on exit.
     auto returnToTitle = [&]() {
@@ -1359,10 +1368,11 @@ int main(int argc, char** argv) {
         // winding down leaves nothing to return to, and the lobby would render a
         // roster we have no part in. The browser is where a roomless client
         // belongs, so send them there to pick again.
-        if (networked) shell.syncShadows(onlineOpt);
+        // One modal, two option sets: hand it the ones this screen edits.
+        shell.syncShadows(networked ? onlineOpt : localOpt);
         const bool haveRoom = myIndex >= 0;
         if (networked && !haveRoom) openBrowser();
-        screen = !networked      ? GameScreen::TITLE
+        screen = !networked      ? GameScreen::LOCAL
                : haveRoom        ? GameScreen::LOBBY
                                  : GameScreen::BROWSE;
         // An offline match is over; the session is online again if it ever was.
@@ -2344,10 +2354,16 @@ int main(int argc, char** argv) {
             // Outcome banner for the local player - from the snapshot, so a
             // lobby reset reviving every slot cannot turn "eliminated" into
             // "survived" while the player is reading it (#170).
+            //
+            // A match the host stopped early says so instead (#188): the banner
+            // and its colour still follow how YOU fared, but "you survived"
+            // claims a win nobody was allowed to finish.
+            const bool endedEarly = !gameOverShot.endedLine.empty();
+            const char* endedLine = gameOverShot.endedLine.c_str();
             if (gameOverShot.outcome != GameOverSnapshot::Outcome::NONE) {
                 if (gameOverShot.outcome == GameOverSnapshot::Outcome::SURVIVED) {
                     DrawCentered("GAME OVER", 240, 80, BLUE);
-                    DrawCentered("You survived!", 360, 20, BLUE);
+                    DrawCentered(endedEarly ? endedLine : "You survived!", 360, 20, BLUE);
                     scoreColor = GRAY;
                     pressKeyColor = BLUE;
                 }
@@ -2360,7 +2376,7 @@ int main(int argc, char** argv) {
                             {0, 0, (float)screenWidth, (float)screenHeight}, {0, 0}, 0.0f, WHITE);
                     if (grayscaleOK) EndShaderMode();
                     DrawCentered("GAME OVER", 240, 80, RED);
-                    DrawCentered("You were eliminated.", 360, 20, RED);
+                    DrawCentered(endedEarly ? endedLine : "You were eliminated.", 360, 20, RED);
                 }
             }
 
@@ -2380,13 +2396,13 @@ int main(int argc, char** argv) {
             // is on screen while the input is being dropped teaches the player
             // that the key did not work.
             //
-            // And it names where the key GOES. returnToTitle() only reaches the
-            // title offline; in a room it goes back to that room, and with no
-            // room (a slot lost while the match wound down) to the browser. It
-            // said "title" in all three cases.
+            // And it names where the key GOES. returnToTitle() goes back to
+            // where the match was set up: offline the LOCAL setup screen, in a
+            // room that room, and with no room (a slot lost while the match
+            // wound down) the browser.
             if (gameOverHold <= 0.0f) {
                 const char* leaveText =
-                    !networked        ? "Press any key to return to title."
+                    !networked        ? "Press any key to return to match setup."
                   : myIndex >= 0      ? "Press any key to return to the match room."
                                       : "Press any key to return to the match browser.";
                 DrawCentered(leaveText, noticeY, 20, pressKeyColor);
@@ -2473,6 +2489,7 @@ int main(int argc, char** argv) {
         Player*     localPlayer = nullptr; // the player the camera + HUD follow (null until connected)
         int         localIndex  = networked ? myIndex : 0;
         ServerMessage::Phase netPhase = ServerMessage::Phase::Unknown; // latest server phase (networked); drives the game-over edge below
+        bool netEndedByHost = false; // ...and whether that GameOver was the host's [Q] (#188)
 
         if (networked) {
             // Seed the look prediction BEFORE this frame's accumulate + send. We
@@ -2535,6 +2552,7 @@ int main(int argc, char** argv) {
                     // handled
                 } else if (m.type == ServerMessage::Type::State) {
                     netPhase = m.phase; // track phase so we can detect the match ending
+                    netEndedByHost = m.endedByHost;
                     netEpoch = m.epoch; // stamp on the input we send from next frame
                     netMusic = m.music;
                 }
@@ -3033,8 +3051,28 @@ int main(int argc, char** argv) {
                 // The first GameOver packet carries the final roster - the same
                 // edge the server credits its board on. Snapshot it now rather
                 // than GAME_OVER_TIMER later when the screen appears (#170).
-                if (!netMatchOver) captureGameOver();
+                if (!netMatchOver) {
+                    captureGameOver();
+                    // Named now, from the same roster the snapshot froze: the
+                    // host can leave or rename while others read the result.
+                    if (netEndedByHost) {
+                        gameOverShot.endedLine = "THE HOST has ended the match."; // no host flag seen
+                        const std::vector<Player>& ps = gameSpace.getPlayers();
+                        for (int i = 0; i < (int)ps.size(); ++i) {
+                            if (!ps[i].isHost) continue;
+                            gameOverShot.endedLine = (i == myIndex)
+                                ? std::string("You ended the match.")
+                                : ps[i].name + " has ended the match.";
+                            break;
+                        }
+                    }
+                }
                 netMatchOver = true; // latch: survives packet-less (Unknown) frames
+                // The host stopped it (#188): no final kill to watch, so no
+                // wind-down - everyone goes to the result on this frame. The
+                // host included, who would otherwise sit through a pause they
+                // asked to skip.
+                if (netEndedByHost) gameOverTimer = 0.0f;
             }
             if (netMatchOver) {
                 gameOverTimer -= dt;

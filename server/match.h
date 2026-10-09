@@ -200,6 +200,12 @@ struct Match {
 
     // ---- Phase ----------------------------------------------------------
     std::atomic<Phase> gamePhase{Phase::LOBBY};
+    // This GAMEOVER was the host's [Q], not a last-player-standing finish (#188).
+    // Sent with the phase so every client skips its death-FX wind-down: a match
+    // stopped on request has no final kill to linger on. Written BEFORE the
+    // phase flip, so a builder that reads GAMEOVER always reads the flag with it;
+    // cleared wherever the phase leaves GAMEOVER for a new match or the lobby.
+    std::atomic<bool>  endedByHost{false};
     // Which bot name each slot gets, as an order into BOT_NAME_STRINGS. Per
     // MATCH, and per ROOM: shared globally, every room on the box would field the
     // same "random" lineup, which is the samey-ness this exists to remove.
