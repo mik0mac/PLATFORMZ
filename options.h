@@ -400,7 +400,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.botDifficulty        = 0.2f;
         o.explosionRadiusScale = 2.0f;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
-    }, "The default setup.  LARGE map.")},   // MatchOptions{}.mapSize == MEDIUM
+    }, "The default setup.  LARGE map.")},
 
     {"CLASSIC HYPED", MakePreset("CLASSIC HYPED", [](MatchOptions& o) {
         o.mapSize              = "LARGE";
