@@ -516,23 +516,39 @@ inline void DrawSphereSilhouette(Vector3 center, float r, Vector3 eye, Color col
     DrawBillboardCircle(c, r * sqrtf(1.0f - (r * r) / (d * d)), eye, EXPLOSION_RING_SEGMENTS, col);
 }
 
-// EXPLOSION_DOT_COUNT unit directions spread evenly over a sphere (Fibonacci
-// lattice), built once. w is each dot's fixed speed factor, 1 +/- DOT_SPREAD,
-// from a cheap hash of its index - what thickens the shell into a cloud.
-inline const std::vector<Vector4>& ExplosionDotDirs() {
-    static const std::vector<Vector4> dirs = [] {
-        std::vector<Vector4> v;
-        const float golden = PI * (3.0f - sqrtf(5.0f));
-        for (int i = 0; i < EXPLOSION_DOT_COUNT; ++i) {
-            float y = 1.0f - 2.0f * (i + 0.5f) / (float)EXPLOSION_DOT_COUNT;
-            float r = sqrtf(1.0f - y * y);
-            float a = golden * (float)i;
+// Points evenly filling the unit ball, built once: a Halton sequence (bases 2,
+// 3, 5), so ANY prefix of it is still evenly spread - which is what lets the
+// count follow the blast's size. Each point: unit direction, radial fraction
+// (cube root, for an even spread by volume), and a speed factor 1 +/- DOT_SPREAD.
+struct ExplosionDot { Vector3 dir; float frac; float speed; };
+
+inline float Halton(int i, int base) {
+    float f = 1.0f, r = 0.0f;
+    for (; i > 0; i /= base) { f /= (float)base; r += f * (float)(i % base); }
+    return r;
+}
+
+inline const std::vector<ExplosionDot>& ExplosionDotPoints() {
+    static const std::vector<ExplosionDot> pts = [] {
+        std::vector<ExplosionDot> v;
+        v.reserve(EXPLOSION_DOT_MAX);
+        for (int i = 1; i <= EXPLOSION_DOT_MAX; ++i) {
+            float z = 1.0f - 2.0f * Halton(i, 2);
+            float a = 2.0f * PI * Halton(i, 3);
+            float r = sqrtf(fmaxf(0.0f, 1.0f - z * z));
             float h = fmodf(sinf((float)i * 12.9898f) * 43758.5453f, 1.0f); // -1..1
-            v.push_back({r * cosf(a), y, r * sinf(a), 1.0f + EXPLOSION_DOT_SPREAD * h});
+            v.push_back({{r * cosf(a), z, r * sinf(a)}, cbrtf(Halton(i, 5)),
+                         1.0f + EXPLOSION_DOT_SPREAD * h});
         }
         return v;
     }();
-    return dirs;
+    return pts;
+}
+
+// How many streaks fill a blast of radius R (see EXPLOSION_DOT_SIZE_POWER).
+inline int ExplosionDotCount(float R) {
+    float n = EXPLOSION_DOT_COUNT * powf(R / EXPLOSION_DAMAGE_RADIUS, EXPLOSION_DOT_SIZE_POWER);
+    return (int)Clamp(n, (float)EXPLOSION_DOT_MIN, (float)EXPLOSION_DOT_MAX);
 }
 
 inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye) {
@@ -561,8 +577,8 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
 // The explosion's streak shell (ShockBurst, elements.h), on its own clock so it
 // can outlive the explosion (EXPLOSION_SHOCK_LIFE_SCALE).
 inline void DrawShockBurst(const ShockBurst& burst, Vector3 eye) {
-    // Shockwave: a 3D shell of spark streaks that rushes out, decelerates, and
-    // carries on past the damage radius, thickening into a cloud and cooling from
+    // Shockwave: a 3D ball of spark streaks, filling the sphere, that rushes out,
+    // decelerates, and carries on past the damage radius, thickening into a cloud and cooling from
     // white to orange as it fades. Each streak trails back toward the centre along
     // its own direction, like DrawSpark, and its length follows its current speed:
     // long while the shell races out, spark-sized once it coasts. The far side of
@@ -589,11 +605,18 @@ inline void DrawShockBurst(const ShockBurst& burst, Vector3 eye) {
     Matrix spin = MatrixRotateXYZ({p0.x * 1.7f + p0.z * 0.3f, p0.y * 2.3f + p0.x * 0.5f, p0.z * 1.1f + p0.y * 0.7f});
     bool inside = Vector3Distance(eye, p0) <= shockR;
 
-    for (const Vector4& d : ExplosionDotDirs()) {
-        Vector3 dir = Vector3Transform({d.x, d.y, d.z}, spin);
-        float dist = startR + (shockR - startR) * d.w; // spread the travel, not the start
+    const std::vector<ExplosionDot>& pts = ExplosionDotPoints();
+    int count = ExplosionDotCount(R);
+    for (int i = 0; i < count; ++i) {
+        const ExplosionDot& d = pts[i];
+        Vector3 dir = Vector3Transform(d.dir, spin);
+        // The whole ball expands: each streak sits at its fraction of its own
+        // (spread) shell radius, so inner streaks move slower, like a real blast.
+        float shell = startR + (shockR - startR) * d.speed;
+        float dist = shell * d.frac;
         Vector3 p = Vector3Add(p0, Vector3Scale(dir, dist));
-        float len = Clamp(shockSpeed * d.w * EXPLOSION_STREAK_TIME, SPARK_STREAK_LENGTH, fmaxf(dist, SPARK_STREAK_LENGTH));
+        float len = Clamp(shockSpeed * d.speed * d.frac * EXPLOSION_STREAK_TIME,
+                          SPARK_STREAK_LENGTH, fmaxf(dist, SPARK_STREAK_LENGTH));
         Color c = shock;
         float k = 1.0f;
         if (!inside) {

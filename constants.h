@@ -436,7 +436,13 @@ const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
 // EASE 4 crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
 const float EXPLOSION_SHOCK_REACH = 1.2f;  // final shockwave radius, as a multiple of the damage radius
 const float EXPLOSION_SHOCK_EASE = 1.0f;   // ease-out power: higher = faster start, longer coast
-const int   EXPLOSION_DOT_COUNT = 360;     // streaks in the shell (evenly spread, Fibonacci sphere)
+const int   EXPLOSION_DOT_COUNT = 360;     // streaks filling a blast of the DEFAULT radius (EXPLOSION_DAMAGE_RADIUS)
+// The streaks fill the whole sphere, and their number scales with its size so a
+// bigger blast reads as bigger: count = DOT_COUNT * (R / EXPLOSION_DAMAGE_RADIUS)^POWER.
+// POWER 3 keeps the density per volume constant; 2 grows more gently.
+const float EXPLOSION_DOT_SIZE_POWER = 2.0f;
+const int   EXPLOSION_DOT_MIN = 60;        // floor, so a tiny blast is still a cloud
+const int   EXPLOSION_DOT_MAX = 3000;      // ceiling (the slider's 4x radius at POWER 3 would ask for 64x)
 const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-streak speed variation (+/-), so the shell thickens into a cloud
 const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a fraction of the near side's
 // Where the streak shell starts, as a multiple of the damage radius: 0 = from

@@ -409,7 +409,8 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.maxBots              = 2;
         o.botDifficulty        = 0.5f;
         o.speedBoost           = 1.25f;
-        o.rocketSpeedScale     = 1.25f;
+        o.jetpackThrust        = 1.5f;
+        o.rocketSpeedScale     = 2.0f;
         o.explosionRadiusScale = 3.0f;   // slider max is 4.0
     }, "Boosted version of classic.  LARGE map.")},
 
@@ -425,7 +426,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.explosionRadiusScale = 3.0f;
         o.rocketSpeedScale     = 2.0f;
         o.coastMode            = false;      // friction on: release the key, slow down
-    }, "No self-damage and speed boosted.  No coast mode.")},
+    }, "No self-damage. Big explosions. Speed boosted. No coast mode.")},
 
     {"MAYHEM", MakePreset("MAYHEM", [](MatchOptions& o) {
         o.mapSize              = "SMALL";
@@ -434,16 +435,18 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.botDifficulty        = 0.7f;
         o.maxBots              = 2;          
         o.friendlyFire         = false;
-        o.explosionRadiusScale = 4.0f;
+        o.explosionRadiusScale = 1.0f;
         o.speedBoost           = 1.25f;
+        o.jetpackThrust        = 1.25f;
         o.wallElasticity       = 1.0f;
-    }, "Super big and super fast on a SMALL map.")},
+        o.platformElasticity   = 1.0f;
+    }, "Extra fast on a SMALL map.")},
 
     {"VOID", MakePreset("THE VOID", [](MatchOptions& o) {
         o.mapSize               = "XL";
         o.numPlayers            = 8;
         o.minHumansToStart      = (PRESET_TESTING_MODE) ? 1 : 3; // an empty void is a dull one
-        o.botDifficulty         = 0.6f;
+        o.botDifficulty         = 0.9f;
         o.maxBots               = 3;
         o.fuelConsumption       = 50.0f;
         o.fuelRegenPct          = 10.0f;
