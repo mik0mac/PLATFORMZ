@@ -55,11 +55,15 @@ static int sentences(const std::string& s) {
 
 struct Case { const char* what; void (*tune)(MatchOptions&); const char* says; };
 
+// What a stock room says: just its arena. Derived from the default rather than
+// spelled out, so retuning the default map doesn't fail every quiet case below.
+static const std::string STOCK = MatchOptions{}.mapSize + " map.";
+
 int main() {
     printf("a room nobody retuned says only where it is played\n");
     {
         MatchOptions o;
-        eq(generateRoomDescription(o), "MEDIUM map.", "stock options");
+        eq(generateRoomDescription(o), STOCK, "stock options");
         o.mapSize = "XL";
         eq(generateRoomDescription(o), "XL map.", "stock options on another arena");
     }
@@ -110,7 +114,7 @@ int main() {
         for (const Case& c : quiet) {
             MatchOptions o;
             c.tune(o);
-            eq(generateRoomDescription(o), "MEDIUM map.", c.what);
+            eq(generateRoomDescription(o), STOCK, c.what);
         }
     }
 
@@ -118,7 +122,7 @@ int main() {
     {
         MatchOptions o;
         o.speedBoost = 1.0f + ROOM_DESC_TOLERANCE * 0.5f;
-        eq(generateRoomDescription(o), "MEDIUM map.", "inside the tolerance");
+        eq(generateRoomDescription(o), STOCK, "inside the tolerance");
         o.speedBoost = 1.0f + ROOM_DESC_TOLERANCE * 2.0f;
         has(generateRoomDescription(o), "Speed boosted!", "outside it");
     }
