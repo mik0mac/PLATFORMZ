@@ -400,10 +400,10 @@ const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets
 
 const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
 
-const float ROCKET_SPEED = 180.0f; // units/sec
-const float ROCKET_KICKBACK_FACTOR = 0.03f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
-const bool ROCKET_GRAVITY_ENABLED = false; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS, options.h).
-const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = false; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS (options.h).
+const float ROCKET_SPEED = 270.0f; // units/sec
+const float ROCKET_KICKBACK_FACTOR = 0.02f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
+const bool ROCKET_GRAVITY_ENABLED = true; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS, options.h).
+const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = true; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS (options.h).
 const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + rocket radius) so a freshly-fired rocket clears the body, units
 const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
@@ -434,9 +434,9 @@ const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
 // keeps going past the damage radius while fading over the whole life - a blast
 // dispersing, not a wall. radius = R * REACH * (1 - (1 - t)^EASE); e.g. REACH 2 /
 // EASE 4 crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
-const float EXPLOSION_SHOCK_REACH = 1.5f;  // final shockwave radius, as a multiple of the damage radius
-const float EXPLOSION_SHOCK_EASE = 3.0f;   // ease-out power: higher = faster start, longer coast
-const int   EXPLOSION_DOT_COUNT = 240;     // streaks in the shell (evenly spread, Fibonacci sphere)
+const float EXPLOSION_SHOCK_REACH = 1.2f;  // final shockwave radius, as a multiple of the damage radius
+const float EXPLOSION_SHOCK_EASE = 1.0f;   // ease-out power: higher = faster start, longer coast
+const int   EXPLOSION_DOT_COUNT = 360;     // streaks in the shell (evenly spread, Fibonacci sphere)
 const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-streak speed variation (+/-), so the shell thickens into a cloud
 const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a fraction of the near side's
 // Where the streak shell starts, as a multiple of the damage radius: 0 = from
@@ -444,6 +444,10 @@ const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a frac
 // it toward REACH (the per-streak spread applies to the travel only, so the
 // shell starts as a clean sphere). Keep it below EXPLOSION_SHOCK_REACH.
 const float EXPLOSION_STREAK_START = 1.0f;
+// The streak shell runs on its own clock (ShockBurst, elements.h), not the
+// explosion's: it lasts this many explosion lifetimes. The zone ring, blast light
+// and platform flash still follow the explosion itself.
+const float EXPLOSION_SHOCK_LIFE_SCALE = 2.0f;
 const float EXPLOSION_STREAK_TIME = 0.04f; // streak length = this many seconds of its current travel (motion blur); floored at SPARK_STREAK_LENGTH
 // Platforms inside a blast's damage radius flash (GameSpace::platformBlastFlash).
 // A platform is mostly translucent fill, which the blast light barely tints, so

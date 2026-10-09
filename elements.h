@@ -764,6 +764,20 @@ public:
     float fade() const { return lifetime > 0.0f ? Clamp(1.0f - age / lifetime, 0.0f, 1.0f) : 0.0f; }
 };
 
+//MARK: ShockBurst (VFX)
+// The explosion's streak shell, on its own clock. An Explosion is erased the
+// moment its radius reaches maxRadius (locally and in every network packet), so
+// a shell meant to outlive it can't read the explosion's t. GameSpace spawns one
+// of these per newly seen explosion and ages it; visual only, never synced.
+struct ShockBurst {
+    Vector3 position{0, 0, 0};
+    float maxRadius = 0.0f;  // the explosion's damage/visual radius, R
+    Color color = {255, 150, 0, 255};
+    float age = 0.0f;        // seconds
+    float life = 1.0f;       // seconds
+    float t() const { return life > 0.0f ? Clamp(age / life, 0.0f, 1.0f) : 1.0f; }
+};
+
 //MARK: Spark emitter (asteroid / player elimination bursts)
 // (A cone emitter for the jetpack exhaust plume was deprecated and archived in
 // docs/archive/exhaust-plume.md.)

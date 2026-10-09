@@ -556,7 +556,11 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
         ring.a = (unsigned char)(255 * k * k);
         DrawSphereSilhouette(explosion.position, R, eye, ring);
     }
+}
 
+// The explosion's streak shell (ShockBurst, elements.h), on its own clock so it
+// can outlive the explosion (EXPLOSION_SHOCK_LIFE_SCALE).
+inline void DrawShockBurst(const ShockBurst& burst, Vector3 eye) {
     // Shockwave: a 3D shell of spark streaks that rushes out, decelerates, and
     // carries on past the damage radius, thickening into a cloud and cooling from
     // white to orange as it fades. Each streak trails back toward the centre along
@@ -565,21 +569,23 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
     // the shell draws dimmer; unlike a silhouette ring it stays visible from inside.
     // The shell starts at R * STREAK_START and travels the rest of the way to
     // R * REACH; STREAK_START 0 is the original from-the-centre burst.
+    float t = burst.t();
+    float R = burst.maxRadius;
+    Vector3 p0 = burst.position;
+    Color flash = {255, 240, 210, 255};
     float startR = R * EXPLOSION_STREAK_START;
     float travel = R * fmaxf(EXPLOSION_SHOCK_REACH - EXPLOSION_STREAK_START, 0.0f);
     float shockR = startR + travel * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
     if (shockR <= 0.0f) return;
-    Color shock = ColorLerp(flash, explosion.color_outline, t);
+    Color shock = ColorLerp(flash, burst.color, t);
     float alpha = 255.0f * powf(1.0f - t, 1.5f);
-    // d(shockR)/dt in units/sec: the curve's slope over t, divided by the blast's
-    // lifetime (expansionRate is scaled with maxRadius, locally and on clients).
-    float life = explosion.expansionRate > 0.0f ? R / explosion.expansionRate : 1.0f;
+    // d(shockR)/dt in units/sec: the curve's slope over t, over the burst's life.
+    float life = burst.life;
     float shockSpeed = travel * EXPLOSION_SHOCK_EASE
                      * powf(1.0f - t, EXPLOSION_SHOCK_EASE - 1.0f) / life;
 
     // Rotate the pattern per blast, hashed from its position: two blasts don't
     // share one, and every client draws the same (no extra synced state).
-    Vector3 p0 = explosion.position;
     Matrix spin = MatrixRotateXYZ({p0.x * 1.7f + p0.z * 0.3f, p0.y * 2.3f + p0.x * 0.5f, p0.z * 1.1f + p0.y * 0.7f});
     bool inside = Vector3Distance(eye, p0) <= shockR;
 

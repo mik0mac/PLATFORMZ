@@ -2575,6 +2575,7 @@ int main(int argc, char** argv) {
             // Tick the bursts: the server owns every other object, but sparks are
             // a local-only effect, so the client drifts/fades/retires them itself.
             gameSpace.updateSparks(dt);
+            gameSpace.updateShockBursts(dt); // streak shells for newly seen explosions
 
             std::vector<Player>& players = gameSpace.getPlayers();
             if (localIndex >= 0 && localIndex < (int)players.size()) {
@@ -2669,6 +2670,7 @@ int main(int argc, char** argv) {
                 gameSpace.updatePositions(simDt);
                 RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
                 gameSpace.updateActiveObjects();                // erase destroyed/finished
+                gameSpace.updateShockBursts(simDt);             // streak shells (visual, own clock)
 
                 // Reticles follow the player's FINAL (post-collision) position;
                 // smoothed for non-local players, snapped for the local one.
