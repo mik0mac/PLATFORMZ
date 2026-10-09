@@ -471,6 +471,99 @@ int main(int argc, char** argv) {
     const bool grayscaleOK = IsShaderValid(grayscaleShader) &&
                              grayscaleShader.id != rlGetShaderIdDefault();
 
+    // World shader, applied around gameSpace.draw() only (never the starfield -
+    // stars are at infinity). Two effects:
+    //  - Distance fog: eye depth is 1/gl_FragCoord.w; fading alpha fades to the
+    //    black background. FOG_START/END/MAX (constants.h).
+    //  - Blast light: geometry inside an active explosion's damage radius glows
+    //    its colour, fading out with the blast (uniforms refreshed each frame
+    //    below). Needs world positions, hence a vertex shader: rlgl's immediate
+    //    mode applies rlPushMatrix/rlTranslatef on the CPU, so vertexPosition is
+    //    already world space for every Draw* call in gameSpace.draw().
+    // Same two dialects as the greyscale shader, bridged with #defines so the
+    // body is written once. Same guard: invalid means no fog and no glow.
+#if defined(__EMSCRIPTEN__)
+    const char* worldVertHead =
+        "#version 100\n"
+        "#define IN attribute\n"
+        "#define OUT varying\n";
+    const char* worldFragHead =
+        "#version 100\n"
+        "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+        "precision highp float;\n" // world distances reach ~1000
+        "#else\n"
+        "precision mediump float;\n"
+        "#endif\n"
+        "#define IN varying\n"
+        "#define TEX texture2D\n"
+        "#define OUT_COLOR gl_FragColor\n";
+#else
+    const char* worldVertHead =
+        "#version 330\n"
+        "#define IN in\n"
+        "#define OUT out\n";
+    const char* worldFragHead =
+        "#version 330\n"
+        "#define IN in\n"
+        "#define TEX texture\n"
+        "out vec4 finalColor;\n"
+        "#define OUT_COLOR finalColor\n";
+#endif
+    // raylib's default vertex shader, plus the world position.
+    std::string worldVert = std::string(worldVertHead) +
+        "IN vec3 vertexPosition;\n"
+        "IN vec2 vertexTexCoord;\n"
+        "IN vec4 vertexColor;\n"
+        "OUT vec2 fragTexCoord;\n"
+        "OUT vec4 fragColor;\n"
+        "OUT vec3 fragWorldPos;\n"
+        "uniform mat4 mvp;\n"
+        "void main() {\n"
+        "    fragTexCoord = vertexTexCoord;\n"
+        "    fragColor = vertexColor;\n"
+        "    fragWorldPos = vertexPosition;\n"
+        "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
+        "}\n";
+    std::string worldFrag = std::string(worldFragHead) +
+        "#define BLAST_MAX " + std::to_string(BLAST_LIGHT_MAX) + "\n"
+        "IN vec2 fragTexCoord;\n"
+        "IN vec4 fragColor;\n"
+        "IN vec3 fragWorldPos;\n"
+        "uniform sampler2D texture0;\n"
+        "uniform vec4 colDiffuse;\n"
+        "uniform vec3 fogParams;\n"            // start, end, max
+        "uniform vec4 blast[BLAST_MAX];\n"     // xyz centre, w radius (0 = unused)
+        "uniform float blastGlow[BLAST_MAX];\n" // 0..1 strength, fades with the blast
+        "uniform vec3 blastColor;\n"
+        "void main() {\n"
+        "    vec4 c = TEX(texture0, fragTexCoord) * colDiffuse * fragColor;\n"
+        "    float g = 0.0;\n"
+        "    for (int i = 0; i < BLAST_MAX; i++) {\n"
+        "        float r = blast[i].w;\n"
+        "        if (r <= 0.0) continue;\n"
+        "        float d = distance(fragWorldPos, blast[i].xyz);\n"
+        // Lit to the edge of the damage zone (soft last 15%), a little hotter at the centre.
+        "        g += blastGlow[i] * (1.0 - smoothstep(0.85 * r, r, d)) * (1.0 - 0.4 * clamp(d / r, 0.0, 1.0));\n"
+        "    }\n"
+        "    c.rgb = min(c.rgb + blastColor * min(g, 1.0), vec3(1.0));\n"
+        "    float depth = 1.0 / gl_FragCoord.w;\n"
+        "    float fog = fogParams.z * clamp((depth - fogParams.x) / (fogParams.y - fogParams.x), 0.0, 1.0);\n"
+        "    OUT_COLOR = vec4(c.rgb, c.a * (1.0 - fog));\n"
+        "}\n";
+    Shader worldShader = LoadShaderFromMemory(worldVert.c_str(), worldFrag.c_str());
+    const bool worldShaderOK = IsShaderValid(worldShader) && worldShader.id != rlGetShaderIdDefault();
+    int blastLoc = -1, blastGlowLoc = -1;
+    if (worldShaderOK) {
+        float fogParams[3] = {FOG_START, FOG_END, FOG_MAX};
+        SetShaderValue(worldShader, GetShaderLocation(worldShader, "fogParams"), fogParams, SHADER_UNIFORM_VEC3);
+        float blastColor[3] = {BLAST_LIGHT_COLOR[0] * BLAST_LIGHT_STRENGTH,
+                               BLAST_LIGHT_COLOR[1] * BLAST_LIGHT_STRENGTH,
+                               BLAST_LIGHT_COLOR[2] * BLAST_LIGHT_STRENGTH};
+        SetShaderValue(worldShader, GetShaderLocation(worldShader, "blastColor"), blastColor, SHADER_UNIFORM_VEC3);
+        blastLoc     = GetShaderLocation(worldShader, "blast");
+        blastGlowLoc = GetShaderLocation(worldShader, "blastGlow");
+    }
+
     // Game state lives here, declared once, mutated every frame
     GameSpace gameSpace; // The main game space containing platforms, asteroids, and players
 
@@ -2482,6 +2575,7 @@ int main(int argc, char** argv) {
             // Tick the bursts: the server owns every other object, but sparks are
             // a local-only effect, so the client drifts/fades/retires them itself.
             gameSpace.updateSparks(dt);
+            gameSpace.updateShockBursts(dt); // streak shells for newly seen explosions
 
             std::vector<Player>& players = gameSpace.getPlayers();
             if (localIndex >= 0 && localIndex < (int)players.size()) {
@@ -2576,6 +2670,7 @@ int main(int argc, char** argv) {
                 gameSpace.updatePositions(simDt);
                 RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
                 gameSpace.updateActiveObjects();                // erase destroyed/finished
+                gameSpace.updateShockBursts(simDt);             // streak shells (visual, own clock)
 
                 // Reticles follow the player's FINAL (post-collision) position;
                 // smoothed for non-local players, snapped for the local one.
@@ -2694,7 +2789,31 @@ int main(int argc, char** argv) {
                 // Stars first, centered on the camera (no parallax), depth-mask
                 // off inside - everything after paints straight over them.
                 DrawStarfield(sceneCam.position, (float)GetTime());
-                gameSpace.draw(localIndex); // skip drawing our own body (first-person)
+                if (worldShaderOK) {
+                    // Blast light: the newest BLAST_LIGHT_MAX explosions (pushed in
+                    // spawn order, locally and in every state packet), glow fading
+                    // with the same t = radius / maxRadius clock DrawExplosion uses.
+                    float blast[BLAST_LIGHT_MAX * 4] = {};
+                    float blastGlow[BLAST_LIGHT_MAX] = {};
+                    const auto& explosions = gameSpace.getExplosions();
+                    int n = 0;
+                    for (int i = (int)explosions.size() - 1; i >= 0 && n < BLAST_LIGHT_MAX; --i) {
+                        const Explosion& e = explosions[i];
+                        if (e.maxRadius <= 0.0f) continue;
+                        float t = Clamp(e.radius / e.maxRadius, 0.0f, 1.0f);
+                        blast[n * 4 + 0] = e.position.x;
+                        blast[n * 4 + 1] = e.position.y;
+                        blast[n * 4 + 2] = e.position.z;
+                        blast[n * 4 + 3] = e.maxRadius;
+                        blastGlow[n] = (1.0f - t) * (1.0f - t);
+                        ++n;
+                    }
+                    SetShaderValueV(worldShader, blastLoc, blast, SHADER_UNIFORM_VEC4, BLAST_LIGHT_MAX);
+                    SetShaderValueV(worldShader, blastGlowLoc, blastGlow, SHADER_UNIFORM_FLOAT, BLAST_LIGHT_MAX);
+                    BeginShaderMode(worldShader);
+                }
+                gameSpace.draw(localIndex, sceneCam.position); // skip drawing our own body (first-person)
+                if (worldShaderOK) EndShaderMode();
             EndMode3D();
         EndTextureMode();
 
@@ -2981,6 +3100,7 @@ int main(int argc, char** argv) {
     UnloadRenderTexture(sceneTarget);
     display::Shutdown();
     UnloadShader(grayscaleShader);
+    UnloadShader(worldShader);
     platform::Shutdown();
     CloseWindow();
     return 0;

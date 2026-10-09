@@ -127,7 +127,7 @@ int main() {
     CHECK(p.clientId.size() == 36,                  "malformed clientId is replaced");
     CHECK(p.masterVolumeDb <= 0.0f,                 "out-of-range volume is clamped");
     CHECK(p.lastLocalOptions.numPlayers <= GAMESPACE_NUMBER_OF_PLAYERS, "roster is clamped to the cap");
-    CHECK(p.lastLocalOptions.mapSize == "MEDIUM",   "unknown map falls back to the default");
+    CHECK(p.lastLocalOptions.mapSize == MatchOptions{}.mapSize, "unknown map falls back to the default");
     CHECK(p.lastLocalOptions.botDifficulty == MatchOptions{}.botDifficulty,
                                                     "wrong-typed number is ignored, not thrown on");
     CHECK(p.lastLocalOptions.explosionRadiusScale <= 4.0f, "out-of-range scale is clamped");

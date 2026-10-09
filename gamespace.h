@@ -103,6 +103,8 @@ public:
         rockets.clear();
         explosions.clear();
         sparks.clear();
+        shockBursts.clear();
+        seenExplosions.clear();
         audioEvents.clear();
     }
 
@@ -136,6 +138,8 @@ public:
         rockets.clear();    // Rockets will be generated when the player shoots.
         explosions.clear(); // Explosions will be generated when rockets detonate.
         sparks.clear();     // VFX particles, spawned by jetpack exhaust / asteroid bursts.
+        shockBursts.clear();
+        seenExplosions.clear();
     }
 
     // Scatter the asteroids randomly, keeping each at least
@@ -304,6 +308,8 @@ public:
         rockets.clear();
         explosions.clear();
         sparks.clear();
+        shockBursts.clear();
+        seenExplosions.clear();
     }
 
     // MARK: Update Objects
@@ -398,6 +404,37 @@ public:
             [](const Spark& spark) { return !spark.isActive; }), sparks.end());
     }
 
+    // Age the streak shells and spawn one for each explosion not seen last
+    // frame. Explosions carry no id and are rebuilt from every network packet,
+    // but they never move, so "new" means "no explosion was here last frame".
+    // A client can first see a blast a few ticks in, so the shell's age starts
+    // at the explosion's elapsed time and stays in step with its ring. Client
+    // only (both local and networked); the server never calls it.
+    void updateShockBursts(float dt) {
+        for (ShockBurst& b : shockBursts) b.age += dt;
+        shockBursts.erase(std::remove_if(shockBursts.begin(), shockBursts.end(),
+            [](const ShockBurst& b) { return b.age >= b.life; }), shockBursts.end());
+
+        std::vector<Vector3> now;
+        now.reserve(explosions.size());
+        for (const Explosion& e : explosions) {
+            now.push_back(e.position);
+            bool seen = false;
+            for (const Vector3& p : seenExplosions)
+                if (Vector3DistanceSqr(p, e.position) < 0.01f) { seen = true; break; }
+            if (seen || e.maxRadius <= 0.0f || e.expansionRate <= 0.0f) continue;
+            float explosionLife = e.maxRadius / e.expansionRate;
+            ShockBurst b;
+            b.position  = e.position;
+            b.maxRadius = e.maxRadius;
+            b.color     = e.color_outline;
+            b.life      = explosionLife * EXPLOSION_SHOCK_LIFE_SCALE;
+            b.age       = Clamp(e.radius / e.maxRadius, 0.0f, 1.0f) * explosionLife;
+            shockBursts.push_back(b);
+        }
+        seenExplosions.swap(now);
+    }
+
     void updateActiveObjects() {
         // Spawn a one-time spherical spark burst for each asteroid about to be
         // removed. Done here so it fires regardless of what destroyed it (rocket
@@ -488,23 +525,47 @@ public:
         return 1.0f - Clamp((maxAxis - walls.halfSize) / span, 0.0f, 1.0f);
     }
 
-    void draw(int localPlayerIndex = -1) {
+    // eye: the camera position, for view-dependent effects (explosion depth cueing).
+    // Platform flash from explosions: 0, or for the strongest blast whose damage
+    // radius reaches the platform's box, time fade (1 - t)^2 x proximity (nearest
+    // point of the box to the blast, floored at PLATFORM_BLAST_FLASH_MIN). Derived
+    // from the explosions each frame - no state, so networked clients get it free.
+    float platformBlastFlash(const Platform& platform) const {
+        float best = 0.0f;
+        Vector3 half = Vector3Scale(platform.size, 0.5f);
+        for (const Explosion& e : explosions) {
+            float R = e.maxRadius;
+            if (R <= 0.0f) continue;
+            Vector3 lo = Vector3Subtract(platform.position, half);
+            Vector3 hi = Vector3Add(platform.position, half);
+            Vector3 nearest = Vector3Clamp(e.position, lo, hi);
+            float d = Vector3Distance(nearest, e.position);
+            if (d >= R) continue;
+            float t = Clamp(e.radius / R, 0.0f, 1.0f);
+            float proximity = std::max(PLATFORM_BLAST_FLASH_MIN, 1.0f - d / R);
+            best = std::max(best, (1.0f - t) * (1.0f - t) * proximity);
+        }
+        return best;
+    }
+
+    void draw(int localPlayerIndex, Vector3 eye) {
         // ---- Pass 1: opaque wireframes (write depth) ----
         if (wallsEnabled) DrawWalls(walls);
-        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE);
+        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE, platformBlastFlash(platform));
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
-        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE, eye);
         for (Spark& spark : sparks)            DrawSpark(spark); // wire-only lines
+        for (ShockBurst& burst : shockBursts)  DrawShockBurst(burst, eye); // wire-only streaks
 
         // ---- Pass 2: translucent fills (no depth write), one flush pair ----
         BeginTranslucentFill();
-        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL);
+        for (Platform& platform : platforms)   DrawPlatform(platform, PASS_FILL, platformBlastFlash(platform));
         drawPlayersPass(localPlayerIndex, PASS_FILL);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);
-        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL, eye);
         EndTranslucentFill();
     }
 #endif // PLATFORMZ_SERVER
@@ -644,6 +705,8 @@ private:
     // int number_of_explosions = 0; // Explosions will be generated when rockets detonate.
     std::vector<Explosion> explosions;
     std::vector<Spark> sparks; // VFX particles (jetpack exhaust, asteroid bursts); visual only.
+    std::vector<ShockBurst> shockBursts; // explosion streak shells on their own clock; visual only.
+    std::vector<Vector3> seenExplosions; // last frame's explosion positions, to spot new ones (client only).
     std::vector<NetAudioEvent> audioEvents; // sound events this tick; serialized + cleared by the server, drained by the client.
     std::vector<Message> messages;
 };

@@ -165,7 +165,7 @@ struct MatchOptions {
     // START buttons got pressed, because a lobby everyone can see has to show
     // the map BEFORE the match starts - and the browser wants to advertise it.
     // Crosses the wire as an index into mapSizeOrder (above).
-    std::string mapSize = "MEDIUM";
+    std::string mapSize = "LARGE";
 
     int   numPlayers    = GAMESPACE_DEFAULT_PLAYERS; // roster size: humans + bots + empty slots
     float botDifficulty = BOT_DIFFICULTY_DEFAULT;    // 0.0..BOT_DIFFICULTY
@@ -394,11 +394,13 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
     // The label must remain DEFAUT so the serer knows it is where a player goes
     // on quick match all other options being equal
     {"DEFAULT", MakePreset("CLASSIC", [](MatchOptions& o) {
-        o.mapSize              = "MEDIUM";
+        o.mapSize              = "LARGE";
         o.numPlayers           = 6;
         o.maxBots              = 2;
+        o.botDifficulty        = 0.2f;
+        o.explosionRadiusScale = 2.0f;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
-    }, "The default setup.  MEDIUM map.")},   // MatchOptions{}.mapSize == MEDIUM
+    }, "The default setup.  LARGE map.")},
 
     {"CLASSIC HYPED", MakePreset("CLASSIC HYPED", [](MatchOptions& o) {
         o.mapSize              = "LARGE";
@@ -441,7 +443,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.mapSize               = "XL";
         o.numPlayers            = 8;
         o.minHumansToStart      = (PRESET_TESTING_MODE) ? 1 : 3; // an empty void is a dull one
-        o.botDifficulty         = 0.35f;
+        o.botDifficulty         = 0.6f;
         o.maxBots               = 3;
         o.fuelConsumption       = 50.0f;
         o.fuelRegenPct          = 10.0f;
