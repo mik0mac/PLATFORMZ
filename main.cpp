@@ -685,7 +685,7 @@ int main(int argc, char** argv) {
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
 
     //MARK: Perf overlay
-    // F3 toggles a frame-time overlay (FPS, avg/p95/max over the last 120 frames,
+    // F3 or ` toggles a frame-time overlay (FPS, avg/p95/max over the last 120 frames,
     // live object counts). While it's on, a greppable "PERF ..." line prints to
     // stdout every 5s - the paper trail for map-size benchmark runs.
     bool   perfOverlay = false;
@@ -1765,6 +1765,10 @@ int main(int argc, char** argv) {
                 PlaySound(volumeChange); // feedback for the change
                 SetMasterVolume(MasterVolumeDbToAmp(currentDb - MASTER_VOLUME_STEP_DB));
             }
+            // ` also toggles the perf overlay (F3 is Mission Control on a Mac
+            // keyboard without fn). Unlike F3 it types a character, so it is
+            // gated here with the volume keys.
+            if (IsKeyPressed(KEY_GRAVE)) perfOverlay = !perfOverlay;
         }
 
         // MARK: FULLSCREEN

@@ -310,7 +310,8 @@ scrolled out of view would still take a click.
 WASD move · mouse look · left-click fire rocket · Space jetpack (up) · hold
 Left Shift for stronger (earth) gravity · **P or Esc** pause · **F** fullscreen
 on/off (any screen, unless a text field has focus) · Esc also always leaves
-fullscreen, on top of whatever else it does there · Esc no longer
+fullscreen, on top of whatever else it does there · **`** or **F3** toggles the
+FPS/perf overlay (` is ignored while a text field has focus) · Esc no longer
 toggles cursor capture on its own.
 
 The **PAUSE screen** (#164, `main.cpp`, `MARK: PAUSE`) is where a match is ended
