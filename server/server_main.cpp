@@ -1165,6 +1165,7 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
     s += ",\"countdown\":" + jf(countdownRemaining.load()); // seconds left in the pre-match countdown (0 unless COUNTDOWN)
     s += ",\"ep\":" + std::to_string(matchEpoch.load()); // match epoch; clients echo it in their input packets
     s += ",\"mu\":" + std::to_string((int)musicFor(ph)); // the room's music cue (#174); MUSIC_COUNT = none
+    if (ph == Phase::GAMEOVER && endedByHost.load()) s += ",\"eh\":1"; // host ended it (#188); absent otherwise
 
     // Players
     s += ",\"players\":[";
@@ -1378,7 +1379,11 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
                           | (pendingRocketsPhysics.load() ? 2 : 0)
                           | (pendingFriendlyFire.load() ? 4 : 0)
                           | (pendingCoastMode.load() ? 8 : 0)
-                          | ((pendingMap.load() & 0x3) << 4)));
+                          | ((pendingMap.load() & 0x3) << 4)
+                          // Bit 64: this GAMEOVER is the host's [Q] (#188). Not an
+                          // option, but this byte had the spare bits, and an older
+                          // client masks the ones it knows - no version bump.
+                          | ((ph == Phase::GAMEOVER && endedByHost.load()) ? 64 : 0)));
 
     // Players (fixed roster; u8 count is plenty).
     auto& players = gameSpace.getPlayers();
@@ -2760,15 +2765,16 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
     }
 
     //MARK: Msg: endmatch
-    // Control message: the host pressed the end-match key (M). Host-only
+    // Control message: the host pressed [Q] on the PAUSE screen. Host-only
     // (isHostConn - the lowest connected slot, "player 1"), like start/options.
     // PLAYING-only so a stray press can't disturb the lobby or countdown. The
-    // phase flip reaches every client in the next tick's state broadcast, and
-    // each runs its normal game-over sequence.
+    // phase flip reaches every client in the next tick's state broadcast, with
+    // endedByHost beside it so they go straight to the game-over screen (#188).
     if (msg.find("\"type\":\"endmatch\"") != std::string::npos) {
         if (optionsLocked) return;       // public room: no stranger may end it
         if (!isHostConn(connId)) return; // host-only; matches the client's gating
         if (gamePhase.load() == Phase::PLAYING) {
+            endedByHost = true;          // before the flip - see the declaration
             gamePhase = Phase::GAMEOVER;
             std::cout << "Match ended by host request\n";
         }
@@ -3177,6 +3183,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             if (++matchEpoch == 0) matchEpoch = 1;
             gameOverStamped = false; // fresh match: no wind-down pending
             gameOverSimIdle = false;
+            endedByHost     = false;
             gamePhase = Phase::COUNTDOWN;
             countdownEnd = now + std::chrono::duration_cast<Clock::duration>(
                                      std::chrono::duration<double>(COUNTDOWN_SECONDS));
@@ -3332,6 +3339,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 gamePhase       = Phase::LOBBY;
                 gameOverStamped = false;
                 gameOverSimIdle = false;
+                endedByHost     = false;
                 phase           = Phase::LOBBY;
                 simThisTick     = false;
                 std::cout << "Match world freed after " << (int)GAMEOVER_LOBBY_SECONDS

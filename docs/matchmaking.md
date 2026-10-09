@@ -176,7 +176,7 @@ take the server's default.
 | `leave` | — | back to the default room |
 | `start` | the options bundle | host only; locked rooms ignore it |
 | `options` | the options bundle | host only; echoed live to everyone |
-| `endmatch` | — | host only |
+| `endmatch` | — | host only; the GAMEOVER it causes carries `eh` (below) |
 | *(input)* | `seq`, `ep`, `mx`, `mz`, `jp`, `grav`, `fire`, `yaw`, `pitch` | **no `type`** — the 60 Hz packet, kept small |
 
 **`quick` picks the fullest room first**, so players pack together instead of
@@ -223,6 +223,15 @@ room plays its gameplay tracks in turn, match after match. The lobby sends
 title track. A client takes the cue only if it belongs to the screen it is on,
 and anything out of range reads as none, so a newer server with more tracks just
 falls back to the client's own pick.
+
+**Ended by the host** is `eh: 1` in a GAMEOVER state the host's `endmatch`
+caused, and absent otherwise; over UDP it is bit 64 of the options flags byte
+(#188). It is a fact about the match, not an option, but that byte had spare
+bits and an older client masks the ones it knows, so it cost no
+`STATE_BIN_VERSION` bump. A client that sees it skips its death-FX wind-down
+and goes straight to the result: a match stopped on request has no final kill
+to linger on. Cleared when the room starts its next countdown or returns to its
+lobby.
 
 **Room identity** in the welcome is `m`, `k`, `n`, `p` — code, kind, name, and
 the preset it was seeded from. None of it is derivable client-side: quick match

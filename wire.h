@@ -192,6 +192,10 @@ struct ServerMessage {
     std::string matchPreset;
     Phase    phase    = Phase::Unknown; // State only
     float    countdown = 0.0f; // State only: seconds left in the pre-match countdown (0 unless Countdown)
+    // State only: this GameOver is the host's [Q], not a finish (#188) - skip the
+    // death-FX wind-down and go straight to the game-over screen. False from a
+    // server that predates it, which just keeps the old wind-down.
+    bool     endedByHost = false;
     // State only: the server's match epoch, bumped every time a match is built.
     // The client echoes the newest one it has seen in each input packet; the
     // server drops input stamped with any other, so an input still in flight
@@ -583,6 +587,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     // so the arena reached every client in the lobby without growing the packet
     // or spending a STATE_BIN_VERSION bump.
     msg.opt.mapSize            = MapSizeName((optFlags >> 4) & 0x3);
+    // Bit 64 is not an option but the match's: the host ended it (#188).
+    msg.endedByHost            = (optFlags & 64) != 0;
 
     // Players - fixed slots, never erased; hide slots the server stopped sending.
     {
@@ -903,6 +909,7 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                                      : ServerMessage::Phase::Unknown;
     msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
     msg.epoch     = j.value("ep", 0u);          // match epoch; echoed back in our input
+    msg.endedByHost = j.value("eh", 0) != 0;    // the host ended it (#188); absent otherwise
     msg.music     = MusicIdFromWire(j.value("mu", (int)MUSIC_COUNT)); // room's music cue (#174)
 
 
