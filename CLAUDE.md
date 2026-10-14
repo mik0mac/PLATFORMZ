@@ -40,6 +40,14 @@ overlay to a game it launches, so to test the overlay on a Mac run
 `cmake --build --preset steam --target steam-test-app` and add the resulting
 `build/cmake-steam/PLATFORMZ Steam Test.app` to Steam once ("Add a Non-Steam
 Game" greys out bare binaries); later runs of the target refresh it in place.
+What actually ships to Steam is **not** that CMake build: `make steam-depot` runs
+the Mac handout chain with `STEAM=1` (macOS-13 raylib, signed, notarized, plus
+`libsteam_api.dylib` and `packaging/steam/entitlements.plist`) into
+`dist/steam/mac/`, and `pack.ps1 -Steam` stages `dist/steam/windows/`.
+`make steam-upload` runs `packaging/steam/check-depot.sh` and then SteamCMD. The
+entitlements are load-bearing: without disable-library-validation the hardened
+runtime refuses Valve's differently-signed dylib and the game **does not start**.
+Commands: `docs/package-steam.md`.
 
 Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):

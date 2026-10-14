@@ -52,6 +52,27 @@ TARGET := platformz
 SRCS := main.cpp collisions.cpp net_native.cpp
 HDRS := $(wildcard *.h)
 
+# The Steam edition (F4, #95), for the depot that is uploaded to Steam: the
+# handout chain below run with STEAM=1 (`make steam-depot` does that). Day-to-day
+# Steam development is CMake's `steam` preset; this exists because the shipped
+# build has to be the handout one - raylib for macOS 13, signed, notarized.
+# The SDK lives BESIDE the checkout and never in it (public repo, Valve's terms).
+# The binary goes to build/steam/ so it never replaces the dev ./platformz: it
+# cannot start without libsteam_api.dylib beside it.
+STEAM ?=
+ifeq ($(STEAM),1)
+STEAM_SDK     ?= ../steamworks_sdk
+# Either the sdk/ folder itself or the zip's top folder above it.
+STEAM_SDK_DIR := $(if $(wildcard $(STEAM_SDK)/public/steam/steam_api.h),$(STEAM_SDK),$(STEAM_SDK)/sdk)
+# Its install name is @loader_path/libsteam_api.dylib, so linking it by path is
+# all it takes for the binary to look for it in its own folder.
+STEAM_DYLIB   := $(STEAM_SDK_DIR)/redistributable_bin/osx/libsteam_api.dylib
+SRCS     += platform_steam.cpp
+CXXFLAGS += -DPLATFORMZ_STEAM=1 -I$(STEAM_SDK_DIR)/public
+LDFLAGS  += $(STEAM_DYLIB)
+TARGET   := build/steam/platformz
+endif
+
 all: $(TARGET)
 
 build/ix:
@@ -66,6 +87,7 @@ $(IX_LIB): $(IX_OBJS)
 # Game links the prebuilt IX lib. Editing a header rebuilds the game TUs (main +
 # collisions) but not IX.
 $(TARGET): $(SRCS) $(HDRS) $(IX_LIB)
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(SRCS) $(IX_LIB) -o $(TARGET) $(LDFLAGS)
 
 # The packaged handout build runs a process called `platformz` too, so a stale
@@ -150,6 +172,18 @@ APP_ICON       := packaging/$(APP_NAME).icns
 # command line (or in secrets.mk) if the cert is ever reissued.
 CODESIGN_ID    ?= Developer ID Application: Michael MacAllister (9WM486296X)
 NOTARY_PROFILE ?= platformz-notary
+APP_ENTITLEMENTS :=
+
+# STEAM=1 builds the same bundle into the Steam depot's content folder instead.
+# APP_ZIP moves too, only because `app` deletes it: a Steam build must never
+# remove the website handout zip. The entitlements are what the Steam overlay
+# needs under the hardened runtime - see packaging/steam/entitlements.plist.
+ifeq ($(STEAM),1)
+STEAM_CONTENT_MAC := dist/steam/mac
+APP_DIR          := $(STEAM_CONTENT_MAC)/$(APP_NAME).app
+APP_ZIP          := dist/steam/$(APP_NAME)-steam-mac.zip
+APP_ENTITLEMENTS := packaging/steam/entitlements.plist
+endif
 
 app:
 	rm -f $(TARGET)
@@ -158,11 +192,12 @@ app:
 	        RAYLIB_LINK='$(RAYLIB_STATIC) -framework CoreAudio -framework AudioToolbox'
 	rm -rf $(APP_DIR) $(APP_ZIP) $(NOTARY_ZIP)
 	mkdir -p $(APP_DIR)/Contents/MacOS $(APP_DIR)/Contents/Resources
-	cp $(TARGET) $(APP_DIR)/Contents/MacOS/$(TARGET)
+	cp $(TARGET) $(APP_DIR)/Contents/MacOS/$(notdir $(TARGET))
+	$(if $(STEAM_DYLIB),cp $(STEAM_DYLIB) $(APP_DIR)/Contents/MacOS/)
 	cp -R assets $(APP_DIR)/Contents/Resources/assets
 	printf 'APPL????' > $(APP_DIR)/Contents/PkgInfo
 	sed -e 's/@APP_NAME@/$(APP_NAME)/g'     -e 's/@APP_ID@/$(APP_ID)/g' \
-	    -e 's/@APP_EXE@/$(TARGET)/g'        -e 's/@APP_VERSION@/$(APP_VERSION)/g' \
+	    -e 's/@APP_EXE@/$(notdir $(TARGET))/g' -e 's/@APP_VERSION@/$(APP_VERSION)/g' \
 	    -e 's/@APP_BUILD@/$(APP_BUILD)/g'   -e 's/@APP_MIN_OS@/$(APP_MIN_OS)/g' \
 	    packaging/Info.plist.in > $(APP_DIR)/Contents/Info.plist
 	@if [ -f "$(APP_ICON)" ]; then \
@@ -183,13 +218,16 @@ pack-unsigned: app
 
 # One codesign call, not --deep: there is no nested code (raylib and
 # IXWebSocket are static, otool -L shows only Apple libraries). --deep is a
-# *verify* flag; Apple deprecates it for signing.
+# *verify* flag; Apple deprecates it for signing. The Steam edition's one nested
+# library, libsteam_api.dylib, keeps Valve's own Developer ID signature (with a
+# secure timestamp, so notarization accepts it); the --verify below covers it.
 sign: app
 	@security find-identity -v -p codesigning | grep -qF "$(CODESIGN_ID)" || { \
 	  echo "ERROR: signing identity not in keychain:"; \
 	  echo "       $(CODESIGN_ID)"; \
 	  echo "       check with: security find-identity -v -p codesigning"; exit 1; }
 	codesign --force --options runtime --timestamp \
+	  $(if $(APP_ENTITLEMENTS),--entitlements $(APP_ENTITLEMENTS)) \
 	  --sign "$(CODESIGN_ID)" $(APP_DIR)
 	codesign --verify --deep --strict --verbose=2 $(APP_DIR)
 	@codesign -dv --verbose=4 $(APP_DIR) 2>&1 | grep -q 'flags=.*runtime' || { \
@@ -227,6 +265,38 @@ dist-pack: notarize
 	rm -f $(APP_ZIP)
 	ditto -c -k --keepParent $(APP_DIR) $(APP_ZIP)
 	@echo "==> $(APP_ZIP)  (signed, notarized, stapled)"
+
+# --- Steam depot (F4, #95) --------------------------------------------------
+# The Steam edition goes out as a FOLDER per platform under dist/steam/, which
+# SteamCMD uploads - no zip. Same chain as the handout (static raylib, Developer
+# ID, notarized), plus libsteam_api.dylib and the overlay's entitlements, then
+# checked by packaging/steam/check-depot.sh before anything can upload it.
+#
+#   make steam-depot      dist/steam/mac/PLATFORMZ.app, notarized and checked
+#   make steam-app        the same bundle unsigned - local test only, fails the check
+#   make steam-upload STEAM_USER=<login> [STEAM_BRANCH=beta] [STEAM_PREVIEW=1]
+#
+# The Windows depot is dist/steam/windows, from `pack.ps1 -Steam` on a Windows
+# machine. Neither depot ever contains steam_appid.txt; the check refuses one.
+#
+# The IDs come from partner.steamgames.com once the store entry exists. Not
+# secrets - they are visible in every Steam store URL - so they belong here.
+STEAM_APP_ID    ?=
+STEAM_DEPOT_MAC ?=
+STEAM_DEPOT_WIN ?=
+
+steam-app:
+	$(MAKE) STEAM=1 app
+
+steam-depot:
+	$(MAKE) STEAM=1 notarize
+	packaging/steam/check-depot.sh dist/steam
+
+steam-upload:
+	STEAM_APP_ID='$(STEAM_APP_ID)' STEAM_DEPOT_MAC='$(STEAM_DEPOT_MAC)' \
+	STEAM_DEPOT_WIN='$(STEAM_DEPOT_WIN)' STEAM_USER='$(STEAM_USER)' \
+	STEAM_BRANCH='$(STEAM_BRANCH)' STEAM_PREVIEW='$(STEAM_PREVIEW)' \
+	  packaging/steam/upload.sh
 
 # --- Web (Emscripten / WASM) build ----------------------------------------
 # Builds the browser client. Requires the emsdk toolchain (emcc on PATH) and a
@@ -292,7 +362,7 @@ clean-web:
 	rm -f web/platformz.html web/platformz.js web/platformz.wasm web/platformz.data
 
 .PHONY: all run clean clean-all dist app pack-unsigned sign notarize dist-pack \
-        web webdir clean-web
+        steam-app steam-depot steam-upload web webdir clean-web
 # The handout chain (dist-pack -> notarize -> sign -> app) is not parallel-safe:
 # each step must see the exact bits the previous one produced, and a stale
 # binary inheriting a fresh signature is the failure mode most worth avoiding.

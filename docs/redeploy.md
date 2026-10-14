@@ -39,7 +39,7 @@ so hand out fresh builds with any protocol change.
 
 - Mac: `make dist-pack` -> `dist/PLATFORMZ-mac-arm64.zip` (prerequisites and checks: `package-mac.md`)
 - Windows: `gh run download <run-id> -n platformz-windows` (the merged commit's CI run) -> `PLATFORMZ-UNSIGNED-windows-x64.zip`
-- Steam: nothing to upload yet (no App ID, #95)
+- Steam: `make steam-depot` then `make steam-upload STEAM_USER=<login> STEAM_BRANCH=beta` (setup, Windows depot and checks: `package-steam.md`). Waiting on the App ID, #95
 
 ## Roll back
 
