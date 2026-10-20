@@ -26,7 +26,7 @@ SteamCMD uploads the folders as they are, with no zip. Neither may ever contain
 - `git checkout main && git pull`
 - `make steam-depot` -> `dist/steam/mac/PLATFORMZ.app` - signed, notarized, then checked by `check-depot.sh` (needs Apple's servers, 1-5 min)
 - `make steam-app` -> the same bundle unsigned; this Mac only, and the check refuses it
-- Windows (on a Windows machine with the SDK beside the checkout): `cmake --preset steam && cmake --build --preset steam`, then `pwsh packaging/windows/pack.ps1 -Steam` -> `dist\steam\windows`. Copy that folder to `dist/steam/windows` on the Mac
+- Windows (on a Windows machine, step by step in `build-steam-windows.md`): `cmake --preset steam && cmake --build --preset steam`, then `pwsh packaging/windows/pack.ps1 -Steam` -> `dist\steam\windows`. Copy that folder to `dist/steam/windows` on the Mac
 
 ## Upload
 
