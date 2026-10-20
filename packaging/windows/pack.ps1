@@ -13,6 +13,16 @@
 #   PLATFORMZ-windows-x64.zip            signed, signature verified
 #   PLATFORMZ-UNSIGNED-windows-x64.zip   no signing configured - local/testing only
 #
+# -Steam packages the Steam edition instead (F4, #95), as the FOLDER SteamCMD
+# uploads rather than a zip: dist/steam/windows, with steam_api64.dll beside the
+# exe and never steam_appid.txt. Build it with the steam preset first (it needs
+# the Steamworks SDK beside the checkout, so CI never does this):
+#   cmake --preset steam && cmake --build --preset steam
+#   pwsh packaging/windows/pack.ps1 -Steam
+# Then copy dist/steam/windows to the Mac's dist/steam/ for make steam-upload.
+# Signing is optional there: SmartScreen judges downloads from a browser, and
+# Steam's installs are not that.
+#
 # SIGNING is not set up yet (no certificate; see #94). The hook is one variable:
 # set PLATFORMZ_SIGNTOOL_ARGS to the arguments for `signtool sign`, everything
 # except the file. Both routes a certificate can come by are signtool:
@@ -27,10 +37,15 @@
 
 [CmdletBinding()]
 param(
-    # Where CMake put platformz.exe (and assets\ beside it).
-    [string]$BuildDir = "build/cmake-client/Release",
-    [string]$OutDir   = "dist"
+    # Where CMake put platformz.exe (and assets\ beside it). Default: the
+    # client preset's, or the steam preset's with -Steam.
+    [string]$BuildDir = "",
+    [string]$OutDir   = "dist",
+    [switch]$Steam
 )
+if (-not $BuildDir) {
+    $BuildDir = if ($Steam) { "build/cmake-steam/Release" } else { "build/cmake-client/Release" }
+}
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -57,15 +72,28 @@ function Find-SignTool {
 #MARK: Stage
 $exe    = Join-Path $BuildDir "platformz.exe"
 $assets = Join-Path $BuildDir "assets"
-if (-not (Test-Path $exe))    { Fail "$exe not found - build first: cmake --build --preset client" }
+$preset = if ($Steam) { "steam" } else { "client" }
+if (-not (Test-Path $exe))    { Fail "$exe not found - build first: cmake --build --preset $preset" }
 if (-not (Test-Path $assets)) { Fail "$assets not found - the CMake post-build step copies it beside the exe" }
 
-$stage = Join-Path $OutDir "stage-windows"
-$root  = Join-Path $stage "PLATFORMZ"          # the folder the player unzips
+if ($Steam) {
+    $stage = Join-Path $OutDir "steam\windows"
+    $root  = $stage                            # the depot's root is the install folder
+} else {
+    $stage = Join-Path $OutDir "stage-windows"
+    $root  = Join-Path $stage "PLATFORMZ"      # the folder the player unzips
+}
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $root | Out-Null
 Copy-Item $exe $root
 Copy-Item $assets (Join-Path $root "assets") -Recurse
+if ($Steam) {
+    # Only the library. The build folder also holds steam_appid.txt, which is
+    # development only and must never reach a depot - copied by name so it can't.
+    $steamDll = Join-Path $BuildDir "steam_api64.dll"
+    if (-not (Test-Path $steamDll)) { Fail "$steamDll not found - is this a steam preset build?" }
+    Copy-Item $steamDll $root
+}
 # Same exclusion as the web build and `make app`: macOS litter, never runtime.
 Get-ChildItem $root -Recurse -Force -Filter ".DS_Store" | Remove-Item -Force
 $staged = Join-Path $root "platformz.exe"
@@ -92,8 +120,13 @@ if (-not $deps) { Fail "dumpbin listed no DLLs for platformz.exe - the check can
 $system32 = Join-Path $env:SystemRoot "System32"
 $bad = @()
 foreach ($d in $deps) {
+    # The Steam edition's one exception: Valve's library, which ships beside it.
+    if ($Steam -and $d -eq "steam_api64.dll") { continue }
     $isCrt = $d -match '^(vcruntime|msvcp|ucrtbase|concrt|api-ms-win-crt-)'
     if ($isCrt -or -not (Test-Path (Join-Path $system32 $d))) { $bad += $d }
+}
+if ($Steam -and -not ($deps -contains "steam_api64.dll")) {
+    Fail "platformz.exe does not import steam_api64.dll - this is not the Steam edition"
 }
 if ($bad.Count -gt 0) {
     Fail ("platformz.exe needs DLLs a player may not have: " + ($bad -join ", ") +
@@ -132,6 +165,15 @@ if ($signing) {
         Fail "no signing configured, yet the exe reports '$($sig.Status)' - refusing to guess what it is"
     }
     $zipName = "PLATFORMZ-UNSIGNED-windows-x64.zip"
+}
+
+#MARK: Steam: the folder is the product
+if ($Steam) {
+    if (Get-ChildItem $root -Recurse -Force -Filter "steam_appid.txt") {
+        Fail "steam_appid.txt in $root - development only, it must never ship"
+    }
+    Write-Host "==> $root  (Steam depot content$(if ($signing) { ', signed' } else { ', unsigned' }))"
+    exit 0
 }
 
 #MARK: Zip

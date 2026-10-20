@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the STEAM edition's signature only (make STEAM=1 sign); the
+  website handout is signed with none.
+
+  The hardened runtime, which notarization requires, refuses two things the
+  Steam overlay depends on:
+  - disable-library-validation: by default a hardened app loads only libraries
+    signed by its own team. libsteam_api.dylib is signed by Valve, and so is the
+    overlay library Steam injects.
+  - allow-dyld-environment-variables: Steam injects that overlay through
+    DYLD_INSERT_LIBRARIES when it launches the game, which the hardened runtime
+    otherwise strips.
+  Without them the game still runs from Steam, but with no overlay, and with
+  this binary failing to load libsteam_api.dylib at all.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
