@@ -29,8 +29,14 @@ IX_DEFS := -DIXWEBSOCKET_USE_TLS -DIXWEBSOCKET_USE_SECURE_TRANSPORT
 MACOS_MIN ?=
 MACOS_MIN_FLAG := $(if $(MACOS_MIN),-mmacos-version-min=$(MACOS_MIN))
 
+# raylib's headers, when they must come from somewhere other than Homebrew: the
+# `app` target points this at the raylib it links. It goes FIRST - the first
+# folder holding raylib.h wins, and /opt/homebrew/include holds Homebrew's
+# raylib.h whether or not that is the raylib being linked.
+RAYLIB_INC ?=
 # -I/opt/homebrew/include also resolves nlohmann/json.hpp (brew nlohmann-json).
-CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR) $(MACOS_MIN_FLAG)
+CXXFLAGS := -std=c++17 -O2 $(if $(RAYLIB_INC),-I$(RAYLIB_INC)) \
+            -I/opt/homebrew/include -I$(IX_DIR) $(MACOS_MIN_FLAG)
 # Extra compile flags for one-off/release builds without editing sources. Mainly
 # for baking a server address into a distribution binary (see docs/deploy-vultr.md):
 #   make EXTRA_CXXFLAGS='-DPLATFORMZ_DEFAULT_SERVER_HOST=\"203.0.113.10\"'
@@ -40,8 +46,8 @@ CXXFLAGS := -std=c++17 -O2 -I/opt/homebrew/include -I$(IX_DIR) $(MACOS_MIN_FLAG)
 # assignment to that *same* variable name for the invocation).
 CXXFLAGS += $(EXTRA_CXXFLAGS) $(DIST_CXXFLAGS)
 # How raylib is linked: the dev default is the Homebrew dylib; dist-pack
-# overrides this with the static archive (plus the audio frameworks the dylib
-# would otherwise pull in transitively) so handout builds don't need Homebrew.
+# overrides this with the static archive (plus the frameworks the dylib would
+# otherwise pull in transitively: audio, and QuartzCore for raylib 6's GLFW) so handout builds don't need Homebrew.
 RAYLIB_LINK ?= -lraylib
 LDFLAGS  := -L/opt/homebrew/lib $(RAYLIB_LINK) \
             -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo \
@@ -157,6 +163,7 @@ dist:
 # bottle is compiled with a 15.0 deployment target, which would lock out anyone
 # not on Sequoia. See docs/deploy-vultr.md for the one-time build command.
 RAYLIB_STATIC  := $(HOME)/raylib-macos13/build-mac/raylib/libraylib.a
+RAYLIB_STATIC_INC := $(HOME)/raylib-macos13/src
 APP_NAME       := PLATFORMZ
 APP_ID         := space.platformz.game
 # Also project(VERSION) in CMakeLists.txt, which stamps the Windows exe - keep in step.
@@ -188,8 +195,8 @@ endif
 app:
 	rm -f $(TARGET)
 	rm -rf build/ix          # cached IX objects have no dep on MACOS_MIN
-	$(MAKE) MACOS_MIN=$(APP_MIN_OS) \
-	        RAYLIB_LINK='$(RAYLIB_STATIC) -framework CoreAudio -framework AudioToolbox'
+	$(MAKE) MACOS_MIN=$(APP_MIN_OS) RAYLIB_INC=$(RAYLIB_STATIC_INC) \
+	        RAYLIB_LINK='$(RAYLIB_STATIC) -framework CoreAudio -framework AudioToolbox -framework QuartzCore'
 	rm -rf $(APP_DIR) $(APP_ZIP) $(NOTARY_ZIP)
 	mkdir -p $(APP_DIR)/Contents/MacOS $(APP_DIR)/Contents/Resources
 	cp $(TARGET) $(APP_DIR)/Contents/MacOS/$(notdir $(TARGET))
@@ -301,7 +308,8 @@ steam-upload:
 # --- Web (Emscripten / WASM) build ----------------------------------------
 # Builds the browser client. Requires the emsdk toolchain (emcc on PATH) and a
 # web build of raylib (compiled with emcc for PLATFORM_WEB). Point RAYLIB_WEB_DIR
-# at that raylib checkout (it must contain src/libraylib.a + the raylib headers):
+# at that raylib checkout (it must contain src/libraylib.web.a - raylib 6 names
+# its web library apart from the native one - and the raylib headers):
 #   make web RAYLIB_WEB_DIR=/path/to/raylib
 #
 # No IXWebSocket / Apple frameworks here: the browser backend in net_client.h
@@ -317,15 +325,17 @@ steam-upload:
 EMCC           := emcc
 RAYLIB_WEB_DIR ?= $(HOME)/raylib
 RAYLIB_WEB_INC ?= $(RAYLIB_WEB_DIR)/src
-RAYLIB_WEB_LIB ?= $(RAYLIB_WEB_DIR)/src/libraylib.a
+RAYLIB_WEB_LIB ?= $(RAYLIB_WEB_DIR)/src/libraylib.web.a
 JSON_INC       ?= /opt/homebrew/include
 WEB_OUT        := web/platformz.html
 
-WEB_CXXFLAGS := -std=c++17 -O2 -I$(JSON_INC) -I$(RAYLIB_WEB_INC)
+# raylib's headers before JSON_INC: on a Mac that is /opt/homebrew/include, which
+# holds Homebrew's raylib.h too, and the first folder holding raylib.h wins.
+WEB_CXXFLAGS := -std=c++17 -O2 -I$(RAYLIB_WEB_INC) -I$(JSON_INC)
 # -sASYNCIFY lets the existing blocking while(!WindowShouldClose()) loop yield to
 # the browser. It can be dropped once the loop uses emscripten_set_main_loop().
-# -sEXPORTED_RUNTIME_METHODS=HEAPF32: raylib 5.5's bundled miniaudio reads
-# `Module.HEAPF32.buffer` in its Web Audio callback, but emscripten 6.x no longer
+# -sEXPORTED_RUNTIME_METHODS=HEAPF32: raylib's bundled miniaudio reads
+# `Module.HEAPF32.buffer` in its Web Audio callback (still true in raylib 6.2), but emscripten 6.x no longer
 # attaches HEAPF32 to Module by default - without this export it's undefined and
 # the audio callback throws every frame (silent game). See miniaudio.h ScriptNode.
 # --preload-file assets: assets/ ships WHOLESALE into platformz.data, so keep

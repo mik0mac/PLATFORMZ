@@ -104,7 +104,7 @@ public:
         Sound& s = nextSlot();
 
         float volume = baseVolume;
-        float pan    = 0.5f; // center (non-spatial, or source on top of listener)
+        float pan    = 0.0f; // center (non-spatial, or source on top of listener); raylib 6: -1 L .. +1 R
 
         if (spacial) {
             float dist = Vector3Distance(sourcePos, listenerPos);
@@ -117,7 +117,7 @@ public:
             if (Vector3LengthSqr(toSrc) > 1e-6f) {
                 Vector3 right = Vector3Normalize(Vector3CrossProduct(listenerDirection, {0, 1, 0}));
                 float side = Vector3DotProduct(Vector3Normalize(toSrc), right); // -1 L .. +1 R
-                pan = (Clamp(side, -1.0f, 1.0f) + 1.0f) * 0.5f;
+                pan = Clamp(side, -1.0f, 1.0f); // already raylib 6's scale
             }
             volume *= baseVolume;
         }

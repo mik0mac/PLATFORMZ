@@ -1,6 +1,13 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
+// Every copy of raylib the game is built against - Homebrew's (make, CMake on a
+// Mac), ~/raylib-macos13 (the handouts), ~/raylib (web), the fetched tarball
+// (Windows) - must be the same version, or a behaviour change shows up in one
+// build and not another. A copy left behind fails here instead of quietly
+// building. Moving to a new raylib means moving all of them, then this line.
+static_assert(RAYLIB_VERSION_MAJOR == 6 && RAYLIB_VERSION_MINOR == 2,
+              "PLATFORMZ is built against raylib 6.2 - this copy of raylib is a different version");
 
 #include "gamespace.h"
 #include "shapes.h"
