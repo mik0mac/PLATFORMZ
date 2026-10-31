@@ -49,6 +49,9 @@ entitlements are load-bearing: without disable-library-validation the hardened
 runtime refuses Valve's differently-signed dylib and the game **does not start**.
 Commands: `docs/package-steam.md`.
 
+**Before changing anything Windows-, browser- or Steam-specific, read
+`docs/platform-ports-llm.md`**: what each port needed, why, and the invariants.
+
 Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):
 - raylib built from source at `~/raylib-macos13` with
@@ -60,6 +63,13 @@ both Mike's to do** (the second needs a secret typed in, so never script it):
 Toolchain is **macOS + Homebrew raylib**:
 `g++ -std=c++17 -I/opt/homebrew/include … -L/opt/homebrew/lib -lraylib
 -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo`.
+
+**raylib 6.2, in four copies that must match:** Homebrew's (`make`, CMake on a
+Mac), `~/raylib-macos13` (the handouts), `~/raylib` (web) and the tarball CMake
+fetches (Windows, CI). A `static_assert` at the top of `main.cpp` refuses any
+other version, so a copy left behind fails to compile instead of quietly
+building. raylib 6 changed `SetSoundPan` to -1 (left) .. +1 (right) and made
+`ChangeDirectory` return 0 on success; see #196 for the full assessment.
 
 - `SRCS := main.cpp collisions.cpp net_native.cpp`; all `*.h` are dependencies (wildcard).
 - Editing a header or an existing `.cpp` needs **no** Makefile change.
@@ -354,14 +364,16 @@ on the web but not native (see `docs/multiplayer-testing.md` for the full setup)
   silently leaves the old wasm (`export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14`).
   `./rebuild-all.sh` sets this and force-rebuilds all three binaries.
 - **Audio + `Module.HEAPF32`.** The Makefile passes `-sEXPORTED_RUNTIME_METHODS=HEAPF32`
-  because raylib 5.5's miniaudio reads `Module.HEAPF32.buffer` in its Web Audio
+  because raylib's miniaudio (still in 6.2) reads `Module.HEAPF32.buffer` in its Web Audio
   callback, which emscripten 6.x no longer attaches by default. `shell.html` also
   resumes the suspended AudioContext on the first gesture (browsers start it
   suspended; the title screen can be started with a key, which miniaudio's
   click/touchend-only auto-unlock misses).
 - **Pointer lock.** `shell.html` requests pointer lock explicitly on canvas
-  mousedown (Safari ignores raylib's deferred request); `IsCursorHidden()` gates
-  game input, so without the lock the game is uncontrollable.
+  mousedown (Safari ignores raylib's deferred request); `display::IsMouseCaptured()`
+  gates game input, so without the lock the game is uncontrollable. Use it, not
+  `IsCursorHidden()`: since raylib 6 the web build's pointer lock no longer sets
+  the cursor hidden, so `IsCursorHidden()` stays false there and nothing moves.
 
 ## Known quirks — leave as-is unless asked
 - Rocket gravity and shooter-velocity inheritance are both driven by the OPTIONS

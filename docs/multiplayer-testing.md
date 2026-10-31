@@ -157,7 +157,8 @@ Browser and native players share one match — that's the interesting test.
 Only needed if you changed the client. One-time, build raylib for web:
 
 ```bash
-git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git ~/raylib
+rm -rf ~/raylib    # only if an older version is there
+git clone --depth 1 --branch 6.2 https://github.com/raysan5/raylib.git ~/raylib
 export EMSDK_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14
 make -C ~/raylib/src PLATFORM=PLATFORM_WEB -B
 ```

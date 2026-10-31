@@ -17,14 +17,21 @@
        the element's full box, so every click would land off target. Here the
        canvas's box is exactly the picture, and its backing store stays 1000x700
        - the game never learns the screen changed size. */
+    /* Sized from the STAGE's own box (cqw/cqh, with container-type: size), not
+       the viewport (vw/vh): Safari's fullscreen area can be shorter than 100vh -
+       on a MacBook it leaves the camera notch's strip black - so a vh-sized
+       canvas came out too tall and lost its top and bottom edges. The vw/vh
+       line stays first as the fallback for a browser without container units. */
     #stage:fullscreen         { display: flex; align-items: center;
-                                justify-content: center; background: #000; }
+                                justify-content: center; background: #000;
+                                width: 100%; height: 100%; container-type: size; }
     #stage:-webkit-full-screen { display: flex; align-items: center;
                                 justify-content: center; background: #000;
-                                width: 100%; height: 100%; }
+                                width: 100%; height: 100%; container-type: size; }
     #stage:fullscreen canvas.emscripten,
     #stage:-webkit-full-screen canvas.emscripten {
       width: min(100vw, calc(100vh * 10 / 7)); height: min(100vh, calc(100vw * 7 / 10));
+      width: min(100cqw, calc(100cqh * 10 / 7)); height: min(100cqh, calc(100cqw * 7 / 10));
     }
   </style>
 </head>
@@ -49,10 +56,10 @@
     // Pointer lock: capture the mouse for free-look. raylib's web DisableCursor()
     // uses emscripten's *deferred* pointer-lock request, which Chrome fires on the
     // first click but Safari does not reliably trigger - so the cursor never
-    // captures and the game (which gates input on IsCursorHidden()) stays
+    // captures and the game (which gates input on the pointer being locked) stays
     // uncontrollable. We request it explicitly & synchronously inside the
-    // mousedown gesture, which Safari honors. raylib reads the real
-    // 'pointerlockchange' event, so its IsCursorHidden() state stays in sync no
+    // mousedown gesture, which Safari honors. The game asks the document whether
+    // the pointer is locked (display::IsMouseCaptured), so it stays in sync no
     // matter who initiated the lock.
     (function () {
       var canvas = document.getElementById('canvas');

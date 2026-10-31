@@ -454,7 +454,8 @@ against 13.0 instead — into its own directory, *not* `~/raylib` (that's the
 Emscripten/WebGL1 build `make web` uses):
 
 ```bash
-git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git ~/raylib-macos13
+rm -rf ~/raylib-macos13    # only if an older version is there
+git clone --depth 1 --branch 6.2 https://github.com/raysan5/raylib.git ~/raylib-macos13
 cmake -S ~/raylib-macos13 -B ~/raylib-macos13/build-mac \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
