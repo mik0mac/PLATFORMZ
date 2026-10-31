@@ -367,8 +367,10 @@ on the web but not native (see `docs/multiplayer-testing.md` for the full setup)
   suspended; the title screen can be started with a key, which miniaudio's
   click/touchend-only auto-unlock misses).
 - **Pointer lock.** `shell.html` requests pointer lock explicitly on canvas
-  mousedown (Safari ignores raylib's deferred request); `IsCursorHidden()` gates
-  game input, so without the lock the game is uncontrollable.
+  mousedown (Safari ignores raylib's deferred request); `display::IsMouseCaptured()`
+  gates game input, so without the lock the game is uncontrollable. Use it, not
+  `IsCursorHidden()`: since raylib 6 the web build's pointer lock no longer sets
+  the cursor hidden, so `IsCursorHidden()` stays false there and nothing moves.
 
 ## Known quirks — leave as-is unless asked
 - Rocket gravity and shooter-velocity inheritance are both driven by the OPTIONS

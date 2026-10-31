@@ -49,6 +49,9 @@ EM_JS(void, PlatformzExitFullscreen, (), {
 EM_JS(void, PlatformzSetFullscreenKeyOk, (int ok), {
     if (window.Module) Module.fullscreenKeyOk = !!ok;
 });
+EM_JS(int, PlatformzPointerLocked, (), {
+    return (document.pointerLockElement || document.webkitPointerLockElement) ? 1 : 0;
+});
 #endif
 
 namespace display {
@@ -76,6 +79,15 @@ inline void HandleEscapeKey() {      // usually the browser has already left
 }
 inline void BeginFrame() { BeginDrawing(); }
 inline void EndFrame()   { EndDrawing(); }
+
+// Is the mouse captured for mouse-look - the gate on every game control? Asked
+// of the browser itself. raylib 5.5's web build answered this through
+// IsCursorHidden(), which it set from the pointer-lock event; raylib 6 records
+// the lock in a separate flag it does not expose, and IsCursorHidden() stays
+// false while the pointer is locked - so a match started and nothing moved.
+// The browser's own answer also covers locks shell.html takes and the browser
+// releases (Esc), which raylib only ever learned about secondhand.
+inline bool IsMouseCaptured() { return PlatformzPointerLocked() != 0; }
 
 #else
 
@@ -201,6 +213,10 @@ inline void EndFrame() {
         EndBlendMode();
     EndDrawing();
 }
+
+// Is the mouse captured for mouse-look? On the desktop DisableCursor() sets the
+// cursor hidden as well as locked, in raylib 6 as in 5.5. (The web differs: above.)
+inline bool IsMouseCaptured() { return IsCursorHidden(); }
 
 #endif
 

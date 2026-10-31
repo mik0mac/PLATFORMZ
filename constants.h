@@ -511,6 +511,13 @@ const float STARFIELD_BACKDROP_YAW_SPEED = 1.5f; // deg/s camera drift on the 2D
 const Color STARFIELD_COLOR_COOL = {200, 215, 255, 255}; // per-star color lerps between these two
 const Color STARFIELD_COLOR_WARM = {255, 240, 215, 255};
 
+//MARK: Web client
+// A browser locks the mouse only on a click (or key) the player just made, so a
+// match can start with the controls dead until the next click. After this many
+// seconds of that, the screen says CLICK TO PLAY (main.cpp). Long enough that
+// someone who clicked during the countdown - captured a moment later - never sees it.
+const float WEB_CLICK_TO_PLAY_DELAY = 2.0f;
+
 //MARK: ID-related Constants
 const uint32_t ID_NONE = 0; // uninitialized/invalid sentinel
 
