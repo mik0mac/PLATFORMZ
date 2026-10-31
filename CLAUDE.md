@@ -49,6 +49,9 @@ entitlements are load-bearing: without disable-library-validation the hardened
 runtime refuses Valve's differently-signed dylib and the game **does not start**.
 Commands: `docs/package-steam.md`.
 
+**Before changing anything Windows-, browser- or Steam-specific, read
+`docs/platform-ports-llm.md`**: what each port needed, why, and the invariants.
+
 Two things the Mac handout build needs that a dev build doesn't, both **one-time and
 both Mike's to do** (the second needs a secret typed in, so never script it):
 - raylib built from source at `~/raylib-macos13` with
