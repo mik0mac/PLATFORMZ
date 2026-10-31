@@ -60,7 +60,7 @@ EM_JS(int, PlatformzTakePaste, (char* out, int cap), {
 // moves to background windows, so nothing there needs this.
 inline void UiSyncClickPosition() {
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-    if (IsCursorHidden()) return;
+    if (IsCursorHidden()) return; // desktop only, so raylib's own flag is right here
     if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) return;
     void* win = GetWindowHandle(); // the NSWindow on macOS
     if (!win) return;

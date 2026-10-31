@@ -95,17 +95,20 @@ set(PLATFORMZ_DEFAULT_SERVER_PORT "" CACHE STRING "Server port baked into the cl
 
 #MARK: Client
 if(PLATFORMZ_BUILD_CLIENT)
-  # raylib 5.5. Homebrew's on a Mac; anywhere it is not installed (Windows, a
+  # raylib 6.2. Homebrew's on a Mac; anywhere it is not installed (Windows, a
   # clean Linux box) it is fetched and built from the same tag. Homebrew's
   # config names the target `raylib`, and so does raylib's own CMake build.
-  find_package(raylib 5.5 QUIET)
+  # EXACT: raylib's version file accepts any NEWER raylib, so without it a
+  # Homebrew upgrade would quietly move this build ahead of every other copy
+  # (the handout, web and Windows builds); with it, a mismatch fetches 6.2.
+  find_package(raylib 6.2 EXACT QUIET)
   if(NOT raylib_FOUND)
-    message(STATUS "raylib: not installed, fetching 5.5")
+    message(STATUS "raylib: 6.2 not installed, fetching it")
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_GAMES    OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(raylib
-      URL https://github.com/raysan5/raylib/archive/refs/tags/5.5.tar.gz
-      URL_HASH SHA256=aea98ecf5bc5c5e0b789a76de0083a21a70457050ea4cc2aec7566935f5e258e
+      URL https://github.com/raysan5/raylib/archive/refs/tags/6.2.tar.gz
+      URL_HASH SHA256=df7a13129b1bec9e73a6962efff170beba310ee6eab8f94cd000b7316b4db5ee
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_MakeAvailable(raylib)
   endif()

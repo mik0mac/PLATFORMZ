@@ -1,6 +1,13 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
+// Every copy of raylib the game is built against - Homebrew's (make, CMake on a
+// Mac), ~/raylib-macos13 (the handouts), ~/raylib (web), the fetched tarball
+// (Windows) - must be the same version, or a behaviour change shows up in one
+// build and not another. A copy left behind fails here instead of quietly
+// building. Moving to a new raylib means moving all of them, then this line.
+static_assert(RAYLIB_VERSION_MAJOR == 6 && RAYLIB_VERSION_MINOR == 2,
+              "PLATFORMZ is built against raylib 6.2 - this copy of raylib is a different version");
 
 #include "gamespace.h"
 #include "shapes.h"
@@ -688,6 +695,8 @@ int main(int argc, char** argv) {
         std::string endedLine;
     } gameOverShot;
     bool  paused        = false;           // PLAYING, cursor freed, scores shown. LOCAL freezes the sim; online it is this client's screen only (#164)
+    bool  wasCaptured   = false;           // last frame's display::IsMouseCaptured(), to catch the lock arriving
+    float uncapturedFor = 0.0f;            // seconds PLAYING without the mouse captured (web: CLICK TO PLAY)
     float countdownRemaining = 0.0f; // local mode: seconds left in the pre-match "GAME STARTING IN..." countdown (world built but frozen)
 
     //MARK: Perf overlay
@@ -1740,8 +1749,27 @@ int main(int argc, char** argv) {
         // so a click during the countdown must not drop the lock. A modal on top
         // of a match - CONTROLS during the countdown - still hands the mouse back.
         const bool playing = screen == GameScreen::PLAYING || screen == GameScreen::COUNTDOWN;
-        PlatformzSetUiOwnsMouse(!playing
-                                || shell.showControls || shell.showOptions || shell.showScores);
+        const bool modalOpen = shell.showControls || shell.showOptions || shell.showScores;
+        PlatformzSetUiOwnsMouse(!playing || modalOpen);
+
+        // The moment the mouse becomes captured, swallow the look jump and the
+        // click. On the desktop DisableCursor() captures at once and its callers
+        // already do this; in a browser the lock lands later, on a click, and
+        // only when the browser decides - a page may lock the pointer only right
+        // after the player clicked or pressed a key, so the DisableCursor() at the
+        // end of the countdown, seconds after the last click, waits for the next
+        // one. That click must take the mouse, not fire a rocket.
+        const bool captured = display::IsMouseCaptured();
+        if (captured && !wasCaptured) {
+            consumeLookFrames = std::max(consumeLookFrames, 2);
+            consumeFirstFire  = true;
+        }
+        wasCaptured = captured;
+        // How long a match has run with the controls dead for want of that click.
+        // Not while paused or behind a modal: those free the mouse on purpose and
+        // say so themselves.
+        if (screen == GameScreen::PLAYING && !paused && !modalOpen && !captured) uncapturedFor += dt;
+        else                                                                       uncapturedFor  = 0.0f;
 
         // MARK: AUDIO VOLUME
         // game volume adjustment, in MASTER_VOLUME_STEP_DB (3 dB) steps so every
@@ -2512,7 +2540,7 @@ int main(int argc, char** argv) {
             // would be unusable - so we accumulate yaw/pitch from the mouse here
             // (same math as Player::updateLook) and send the absolute values.
             in = PollLocalInput();
-            if (!IsCursorHidden()) {
+            if (!display::IsMouseCaptured()) {
                 in = PlayerInput{}; // cursor free (Esc, or window unfocused): no look/move/fire
             } else {
                 // First frames the mouse is actually captured: swallow the cursor-
@@ -2663,7 +2691,7 @@ int main(int argc, char** argv) {
             // Gather this frame's intent into a source-agnostic struct, then
             // apply it - the same struct the networked server applies remotely.
             in = PollLocalInput();
-            if (!IsCursorHidden()) {
+            if (!display::IsMouseCaptured()) {
                 in = PlayerInput{}; // cursor free (Esc, or window unfocused): no look/move/fire
             } else {
                 // Swallow the cursor-centering jump + match-start click on the first
@@ -3000,6 +3028,19 @@ int main(int argc, char** argv) {
             messageQueue.limit(MSG_MAX_ON_SCREEN);
             DrawMessageQueue(messageQueue, screenWidth, screenHeight);
             messageQueue.update(dt);
+
+            //MARK: CLICK TO PLAY
+            // Web only, where the mouse can't be captured without a click (see
+            // wasCaptured). The first WEB_CLICK_TO_PLAY_DELAY seconds are left
+            // alone, because a player who clicked during the countdown is captured
+            // a moment later and should never see it. The world stays visible: online
+            // it is live, and the body is in it.
+#if defined(__EMSCRIPTEN__)
+            if (uncapturedFor > WEB_CLICK_TO_PLAY_DELAY) {
+                DrawRectangle(0, screenHeight / 2 - 50, screenWidth, 100, Fade(BLACK, 0.6f));
+                DrawCentered("CLICK TO PLAY", screenHeight / 2 - 30, 60, {0, 255, 200, 255});
+            }
+#endif
 
             //MARK: PAUSE OVERLAY (#164)
             // Last thing before the frame ends, so it covers the world AND the
