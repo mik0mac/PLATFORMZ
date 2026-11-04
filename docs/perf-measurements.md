@@ -232,6 +232,11 @@ case `PLATFORMZ_MAX_ACTIVE` (E2) exists to cap, and this run is the first
 evidence for choosing a number for it rather than guessing one. **~6 live matches
 fits 2 TB/month**; pick lower if anything else shares the plan.
 
+> **Update 2026-11-01: the box's plan is 1 TB/month, not 2.** Every quota figure
+> on this page halves: ~1.2 permanently-full matches, ~385 KB/s sustained, and
+> ~3 live matches where this says ~6. `docs/deploy-vultr.md` now starts
+> `PLATFORMZ_MAX_ACTIVE` at 1.
+
 Two smaller things the run surfaced:
 
 - **MEDIUM welcomes chunk.** `netbin.h`'s comment says "in practice the LARGE-map
@@ -253,3 +258,17 @@ Two smaller things the run surfaced:
    out of the tick budget.
 3. `/proc/net/dev` deltas for a real egress figure including IP/UDP overhead,
    which the server's own byte count excludes.
+
+## Results — 2026-11-01, server memory under load
+
+Measured on Mike's Mac with `server/loadtest` (8 clients per room; 7 of the 12
+requested rooms were created each run), peak resident memory of `gameserver`:
+
+| State | RSS |
+|---|---|
+| idle | 2.5 MB |
+| 7 full MEDIUM matches | 5.6 MB |
+| 7 full XL matches | 8.0 MB |
+
+Doubling the XL figure for all 12 rooms is ~15 MB against the box's 1 GB.
+**Memory is not a constraint**; transfer stays the only one that binds.

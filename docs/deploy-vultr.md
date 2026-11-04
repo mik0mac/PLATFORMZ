@@ -253,7 +253,8 @@ PLATFORMZ_MAX_ROOMS_PER_ADDR=8
 # costs ~310 KB/s. Cap how many may run at once. A start that exceeds it is
 # HELD - the room waits in its lobby and begins when a live match ends - so
 # nobody's button press is lost and the client needs no new error to explain.
-PLATFORMZ_MAX_ACTIVE=6
+# 1 is the starting point for the 1 TB plan; raise it once the graph shows room.
+PLATFORMZ_MAX_ACTIVE=1
 ```
 
 Both go in `/etc/platformz.env` beside the key. `GET /status` reports
@@ -311,8 +312,8 @@ against `netbin.h` on every push, but the endpoint is how you check the box.
 
 `egressBytes` is the one to watch over time. Divide the delta by the elapsed
 seconds and compare against the ~325 KB/s a full match costs
-([`perf-measurements.md`](perf-measurements.md)); against a 2 TB/month plan the
-budget is about **770 KB/s sustained**, so `active` is the number that decides
+([`perf-measurements.md`](perf-measurements.md)); against the box's 1 TB/month plan
+the budget is about **385 KB/s sustained** - barely more than one full match, so `active` is the number that decides
 whether you are inside it:
 
 ```bash
@@ -380,13 +381,16 @@ Measured, not estimated ([`perf-measurements.md`](perf-measurements.md)): a full
 8-player match costs **~325 KB/s** and about **0.6 ms** of tick.
 
 **CPU is not the constraint. Transfer is, by roughly 7×.** Twelve simultaneously
-full matches would be ~10 TB/month against the $6 plan's 2 TB, while the tick
-budget would still be nearly empty. So:
+full matches would be ~10 TB/month against the plan's 1 TB, while the tick
+budget would still be nearly empty. Memory is not a constraint either: seven
+full XL matches peaked at 8 MB of the box's 1 GB. So:
 
 - **12 rooms is fine** — most sit in a lobby costing almost nothing.
-- **~6 simultaneously *playing* matches** is what 2 TB/month actually pays for.
+- **One full match, running around the clock, is ~800 GB/month** — most of the
+  1 TB. Two would go over. Real play comes and goes, so a cap of 1–2 is the range
+  to start in, not a hard ceiling.
 
-`PLATFORMZ_MAX_ACTIVE=6` caps that, and a start beyond the cap is **held** — the
+`PLATFORMZ_MAX_ACTIVE=1` caps that, and a start beyond the cap is **held** — the
 room waits in its lobby and begins when a live match ends, so nobody's button
 press is lost. It ships **off**, because the right number depends on your plan
 and on what else shares it. Watch `active` and `egressBytes` on `/status` for a

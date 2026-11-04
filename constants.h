@@ -156,8 +156,8 @@ const double MATCH_MAX_AGE_SEC = 2.0 * 60.0 * 60.0;
 //
 // Measured on the box 2026-09-05 (docs/perf-measurements.md): a full 8-player
 // MEDIUM match costs ~0.6 ms of tick, so a 10 ms budget fits ~16 - but it also
-// costs ~310 KB/s, and against a 2 TB/month plan that is only ~2.4 PERMANENTLY
-// full matches. CPU is not the limit here; transfer is, by roughly 7x.
+// costs ~310 KB/s, and against the box's 1 TB/month plan that is only ~1.2
+// PERMANENTLY full matches. CPU is not the limit here; transfer is, by over 10x.
 //
 // 12 sits comfortably inside the CPU headroom while leaving the operator's real
 // constraint visible rather than pretending it does not exist. Watch the transfer
