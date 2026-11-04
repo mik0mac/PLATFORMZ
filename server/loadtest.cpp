@@ -535,7 +535,7 @@ static int Load(const Opts& o) {
               << (double)bytes / held / 1024.0 / std::max(1, madeRooms) << " KB/s per match\n";
     const double monthlyTB = (double)bytes / held * 2592000.0 / 1e12;
     std::cout << "  extrapolated    " << std::setprecision(2) << monthlyTB
-              << " TB/month at this load (the $6 plan allows 2)\n";
+              << " TB/month at this load (the plan allows 1)\n";
 
     uint64_t chunks = 0, refusals = 0;
     for (const Client& c : cs) { chunks += c.chunks; refusals += c.refusals.size(); }

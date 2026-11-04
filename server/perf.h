@@ -9,7 +9,7 @@
 //   CPU     - how long a tick takes, split so the expensive part is identifiable
 //   EGRESS  - bytes on the wire, because 8 clients x 60 Hz x ~830 B is ~400 KB/s
 //             per full match, and twenty of those is ~20 TB/month against a plan
-//             that includes 2 TB
+//             that includes 1 TB
 //
 // OFF BY DEFAULT. Set PLATFORMZ_PERF=1 to enable; the sampling is cheap but the
 // point is that a production server logs nothing extra unless asked. Timing calls
