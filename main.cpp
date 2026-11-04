@@ -409,9 +409,9 @@ int main(int argc, char** argv) {
         // filename, volume, fadeInDuration, fadeOutDuration, loop, loopStart, loopEnd (-1.0f = end of file), num_of_loops (-1 = infinite)
         MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.0f, true, 0.0f, -1.0f, -1),         // MUSIC_TITLE
         MusicCue("assets/music/countdown.ogg", DEFAULT_MUSIC_VOLUME, 0.0f, 4.0f, true, 0.0f, -1.0f, -1),     // MUSIC_COUNTDOWN
-        MusicCue("assets/music/gameplay.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1),     // MUSIC_GAMEPLAY
-        MusicCue("assets/music/placeholder1.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1), // MUSIC_PLACEHOLDER1
-        MusicCue("assets/music/placeholder2.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1), // MUSIC_PLACEHOLDER2
+        MusicCue("assets/music/PLATFORMZ_01_Geoff's-Theme.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1),     // MUSIC_GAMEPLAY
+        MusicCue("assets/music/PLATFORMZ_02_Lasers-Are-Better-with-a-Z.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1), // MUSIC_PLACEHOLDER1
+        MusicCue("assets/music/PLATFORMZ_03_RoyBOT-Attacks!.ogg", DEFAULT_MUSIC_VOLUME, 0.25f, 1.0f, true, 0.0f, -1.0f, -1), // MUSIC_PLACEHOLDER2
         MusicCue("assets/music/gameover.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.5f, true, 0.0f, -1.0f, -1)       // MUSIC_GAMEOVER
     };
     // load all cues
