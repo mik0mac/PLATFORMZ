@@ -436,15 +436,39 @@ const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
 // EASE 4 crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
 const float EXPLOSION_SHOCK_REACH = 1.2f;  // final shockwave radius, as a multiple of the damage radius
 const float EXPLOSION_SHOCK_EASE = 1.0f;   // ease-out power: higher = faster start, longer coast
-const int   EXPLOSION_DOT_COUNT = 360;     // streaks filling a blast of the DEFAULT radius (EXPLOSION_DAMAGE_RADIUS)
+const int   EXPLOSION_DOT_COUNT = 1440;    // streaks filling a blast of the DEFAULT radius (EXPLOSION_DAMAGE_RADIUS)
 // The streaks fill the whole sphere, and their number scales with its size so a
 // bigger blast reads as bigger: count = DOT_COUNT * (R / EXPLOSION_DAMAGE_RADIUS)^POWER.
 // POWER 3 keeps the density per volume constant; 2 grows more gently.
 const float EXPLOSION_DOT_SIZE_POWER = 2.0f;
 const int   EXPLOSION_DOT_MIN = 60;        // floor, so a tiny blast is still a cloud
-const int   EXPLOSION_DOT_MAX = 3000;      // ceiling (the slider's 4x radius at POWER 3 would ask for 64x)
+// Ceiling, and the size of the GPU's streak buffer (shapes.h ShockDots: 6
+// vertices x 28 B per streak, so 20000 is ~3.4 MB, uploaded once). The slider's
+// 4x radius at POWER 2 asks for 16x the default count.
+const int   EXPLOSION_DOT_MAX = 20000;
+const int   EXPLOSION_DOT_CPU_MAX = 3000;  // cap for the CPU fallback (DrawShockBurstLines), used only if the GPU shader fails
+// Streak thickness in screen pixels (also the size of a slowed-down dot), at
+// WIDTH_REF_DIST from the eye; it scales with perspective - nearer is thicker -
+// within MIN..MAX, so near and far sides of a blast read at different depths.
+const float EXPLOSION_DOT_WIDTH_PX = 2.0f;
+const float EXPLOSION_DOT_WIDTH_REF_DIST = 40.0f; // units
+const float EXPLOSION_DOT_WIDTH_MIN_PX = 1.0f;
+const float EXPLOSION_DOT_WIDTH_MAX_PX = 6.0f;
+// How the streaks spread from centre to surface: 3 = evenly through the volume
+// (reads as a flat disc); higher bunches them toward the surface, a shell with
+// a bright rim that reads as round.
+const float EXPLOSION_DOT_RADIAL_POWER = 8.0f;
+// Peak alpha of a streak, 0..1. They blend ADDITIVELY, so where many line up
+// (looking through the middle of a dense blast) they add toward white; lower
+// this as EXPLOSION_DOT_COUNT goes up to keep the shooter's colour.
+const float EXPLOSION_DOT_ALPHA = 1.0f;
 const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-streak speed variation (+/-), so the shell thickens into a cloud
-const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a fraction of the near side's
+const float EXPLOSION_DOT_BACK_ALPHA = 0.15f; // far-side streak alpha, as a fraction of the near side's (was 0.4; lower = front pops forward)
+// Fake lighting on the streak ball (shapes.h ShockLight/ShockShade): the lit
+// side full brightness, the shadow side SHADE_MIN of it. The light is world up,
+// leaned toward the viewer by LIGHT_TOWARD_EYE (0 = straight up, 1 = 45 degrees).
+const float EXPLOSION_DOT_SHADE_MIN = 0.3f;
+const float EXPLOSION_DOT_LIGHT_TOWARD_EYE = 0.6f;
 // Where the streak shell starts, as a multiple of the damage radius: 0 = from
 // the blast centre, 1 = born on the damage radius and travelling outward from
 // it toward REACH (the per-streak spread applies to the travel only, so the
@@ -459,11 +483,11 @@ const float EXPLOSION_STREAK_TIME = 0.04f; // streak length = this many seconds 
 // A platform is mostly translucent fill, which the blast light barely tints, so
 // a rocket hitting one needs its own feedback. Strength = time fade x proximity.
 const float PLATFORM_BLAST_FLASH_MIN = 0.35f;      // proximity floor, so a platform just inside the edge still flashes visibly
-const unsigned char PLATFORM_BLAST_FILL_ALPHA = 150; // fill alpha at full flash (normal fill is 40)
+const unsigned char PLATFORM_BLAST_FILL_ALPHA = 80;  // fill alpha at full flash (normal fill is 40; was 150, toned down so the blast streaks lead)
 // Blast light: geometry inside an active blast glows its colour, fading with t.
 // BLAST_LIGHT_MAX must match the array size in main.cpp's world shader.
 const int   BLAST_LIGHT_MAX = 8;           // blasts lit at once (the strongest win)
-const float BLAST_LIGHT_STRENGTH = 0.9f;   // additive glow at full strength, 0..1+
+const float BLAST_LIGHT_STRENGTH = 0.5f;   // additive glow at full strength, 0..1+ (was 0.9, toned down so the blast streaks lead)
 const float BLAST_LIGHT_COLOR[3] = {1.0f, 0.55f, 0.1f}; // RGB 0..1, the explosion orange
 
 //MARK: Fog Constants
