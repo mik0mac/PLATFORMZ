@@ -2862,7 +2862,7 @@ int main(int argc, char** argv) {
                     SetShaderValueV(worldShader, blastGlowLoc, blastGlow, SHADER_UNIFORM_FLOAT, BLAST_LIGHT_MAX);
                     BeginShaderMode(worldShader);
                 }
-                gameSpace.draw(localIndex, sceneCam.position); // skip drawing our own body (first-person)
+                gameSpace.draw(localIndex, sceneCam.position, {(float)sceneTarget.texture.width, (float)sceneTarget.texture.height}); // skip drawing our own body (first-person)
                 if (worldShaderOK) EndShaderMode();
             EndMode3D();
         EndTextureMode();

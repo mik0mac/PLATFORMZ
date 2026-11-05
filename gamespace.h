@@ -404,6 +404,23 @@ public:
             [](const Spark& spark) { return !spark.isActive; }), sparks.end());
     }
 
+    // The shooter's colour, so a blast says whose it was. A local sim knows
+    // the owner outright; a networked client does not - explosions carry no
+    // owner on the wire - but the FX_EXPLOSION sound the server emits in the
+    // same tick does, at the same (identically quantized) position. A blast
+    // first seen later than that tick (a lost packet), or with no owner, keeps
+    // the explosion orange.
+    Color shockBurstColor(const Explosion& e) const {
+        uint32_t owner = e.ownerId;
+        for (size_t i = 0; owner == 0 && i < audioEvents.size(); ++i) {
+            const NetAudioEvent& ev = audioEvents[i];
+            if (ev.fx == FX_EXPLOSION && Vector3DistanceSqr(ev.pos, e.position) < 0.01f) owner = ev.owner;
+        }
+        for (const Player& p : players)
+            if (owner != 0 && p.id == owner) return p.color_outline;
+        return e.color_outline;
+    }
+
     // Age the streak shells and spawn one for each explosion not seen last
     // frame. Explosions carry no id and are rebuilt from every network packet,
     // but they never move, so "new" means "no explosion was here last frame".
@@ -427,7 +444,7 @@ public:
             ShockBurst b;
             b.position  = e.position;
             b.maxRadius = e.maxRadius;
-            b.color     = e.color_outline;
+            b.color     = shockBurstColor(e);
             b.life      = explosionLife * EXPLOSION_SHOCK_LIFE_SCALE;
             b.age       = Clamp(e.radius / e.maxRadius, 0.0f, 1.0f) * explosionLife;
             shockBursts.push_back(b);
@@ -548,16 +565,18 @@ public:
         return best;
     }
 
-    void draw(int localPlayerIndex, Vector3 eye) {
+    void draw(int localPlayerIndex, Vector3 eye, Vector2 viewPx) {
+        // Explosion VFX stop at the walls: a blast against one shouldn't draw
+        // its whole sphere out past the arena. Open space (walls off) has no edge.
+        float clipHalf = wallsEnabled ? walls.halfSize : 0.0f;
         // ---- Pass 1: opaque wireframes (write depth) ----
         if (wallsEnabled) DrawWalls(walls);
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE, platformBlastFlash(platform));
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_WIRE);
-        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE, eye);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_WIRE, eye, clipHalf);
         for (Spark& spark : sparks)            DrawSpark(spark); // wire-only lines
-        for (ShockBurst& burst : shockBursts)  DrawShockBurst(burst, eye); // wire-only streaks
 
         // ---- Pass 2: translucent fills (no depth write), one flush pair ----
         BeginTranslucentFill();
@@ -565,8 +584,15 @@ public:
         drawPlayersPass(localPlayerIndex, PASS_FILL);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_FILL, asteroidBoundaryFade(asteroid));
         for (Rocket& rocket : rockets)         DrawRocket(rocket, PASS_FILL);
-        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL, eye);
+        for (Explosion& explosion : explosions) DrawExplosion(explosion, PASS_FILL, eye, clipHalf);
         EndTranslucentFill();
+
+        // ---- Pass 3: blast streaks, on top ----
+        // After the fills, so a flashed platform can't wash over them, and
+        // additive, so they add light to the flash instead of sitting under it.
+        BeginBlendMode(BLEND_ADDITIVE);
+        DrawShockBursts(shockBursts, eye, viewPx, clipHalf);
+        EndBlendMode();
     }
 #endif // PLATFORMZ_SERVER
 
