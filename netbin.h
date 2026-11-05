@@ -41,10 +41,12 @@ namespace nb {
 // room name and preset joined it, 0x06 by the retired "full" rejection (see
 // below), and a stale client in the wild still speaks them. Reusing one would
 // make a genuine mismatch decode as valid.
-// 0x0D, not 0x0C: 0x0C is WELCOME's. 0x0B is burned by the layout before the
-// room's music cue (#174) joined the header.
-static const uint8_t STATE_BIN_VERSION   = 0x0D; // per-tick state packet (bumped: u8 music cue after the epoch)
-// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B/0x0D
+// 0x0E: explosions became one-shot announcements (id, owner, age) instead of
+// a radius the server counted up for the blast's whole visual life; the VFX are
+// the client's now. 0x0D is burned by the layout before that, 0x0B by the one
+// before the room's music cue (#174) joined the header, 0x0C is WELCOME's.
+static const uint8_t STATE_BIN_VERSION   = 0x0E; // per-tick state packet (bumped: explosions are announcements)
+// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B/0x0D/0x0E
 // are taken by the tags below, by STATE, and by this packet's own past. Bumped
 // from 0x02 when the welcome grew the match code and kind, and again from 0x0A
 // when it grew the room's NAME and PRESET - a client that predates either reads
@@ -101,7 +103,8 @@ static const size_t STATE_OVERHEAD  = 36;  // version/tick/seq/phase/music/optio
 static const size_t PLAYER_BYTES    = 37;  // 29 fixed (quantized, incl. the OOB countdown byte) + a typical name (1 + ~6) + 1 slack
 static const size_t ASTEROID_BYTES  = 19;  // id + qpos + qvel + qsize + health + qflash
 // Room reserved for the variable-length sections: in-flight rockets (16 B each),
-// explosions (8 B), audio events (12 B), kill-feed messages.
+// explosions (9 B, and only for EXPLOSION_NET_WINDOW after each detonates),
+// audio events (12 B), kill-feed messages.
 //
 // This was 65 B - about four rockets - which was fine for the 2-player roster this
 // started as. Measured on the box at 8 players (#100) the real figure was ~617 B,
@@ -268,7 +271,7 @@ inline float qAngleToRadians(uint16_t q) {
 
 // Generic bounded-scalar: uint8 over [0, max]. Used for every small 0..known-
 // max field (health/fuel/ammo already fit uint8 directly; flash timers,
-// spectating countdowns, asteroid size, explosion radius, and audio volume
+// spectating countdowns, asteroid size, explosion age, and audio volume
 // scale need a max-value scale).
 inline void putQFrac(std::string& b, float v, float maxValue) {
     if (v < 0.0f) v = 0.0f;

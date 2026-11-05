@@ -10,7 +10,7 @@
 // shape is seeded from its startingPosition (see DrawAsteroidShape in shapes.h),
 // which is NOT in the packet - so we set it once when the object first appears
 // and only update the networked fields (position/velocity/health/...) thereafter.
-// Explosions carry no id and are ephemeral visual effects, so they're rebuilt
+// Explosions are short-lived announcements (id, owner, age), so they're rebuilt
 // each packet.
 
 #pragma once
@@ -695,10 +695,11 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             [&](const Rocket& rk) { return present.find(rk.id) == present.end(); }), rockets.end());
     }
 
-    // Explosions - ephemeral, rebuilt each packet. damageRadius isn't on the
-    // wire (clients don't deal damage), but the blast VISUAL must match the
-    // server's EXPLOSION RADIUS option - scale it from the mirrored gameSpace
-    // value (applied from the options echo in main.cpp).
+    // Explosions - announcements, rebuilt each packet: the server sends each
+    // one for its first EXPLOSION_NET_WINDOW only. GameSpace::updateBlasts
+    // turns each new one (by id) into the client's own BlastFx. The drawn size
+    // follows the mirrored EXPLOSION RADIUS option (applied from the options
+    // echo in main.cpp); clients never deal damage, so it's marked applied.
     {
         auto& explosions = gs.getExplosions();
         explosions.clear();
@@ -706,10 +707,11 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
         for (int k = 0; k < count; ++k) {
             Explosion e;
             e.position = { r.qPos(), r.qPos(), r.qPos() };
-            e.radius   = r.qFrac(EXPLOSION_RADIUS_ENCODE_MAX);
-            e.isActive = r.u8() != 0;
-            e.maxRadius     *= gs.explosionRadiusScale;
-            e.expansionRate *= gs.explosionRadiusScale;
+            e.id       = r.u8();
+            e.ownerId  = r.u8();
+            e.age      = r.qFrac(EXPLOSION_NET_WINDOW);
+            e.vfxRadius *= gs.explosionRadiusScale;
+            e.hasAppliedDamage = true;
             explosions.push_back(e);
         }
     }
@@ -1017,18 +1019,18 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
             });
     }
 
-    // Explosions - no id, ephemeral: rebuild each packet. Scale the blast
-    // visual by the mirrored EXPLOSION RADIUS option (see the binary decode).
+    // Explosions - announcements, rebuilt each packet (see the binary decode).
     if (j.contains("explosions")) {
         auto& explosions = gs.getExplosions();
         explosions.clear();
         for (const auto& jo : j["explosions"]) {
             Explosion e;
             e.position = vec3(jo, "px", "py", "pz");
-            e.radius   = jo.value("r", 0.0f);
-            e.isActive = jo.value("active", true);
-            e.maxRadius     *= gs.explosionRadiusScale;
-            e.expansionRate *= gs.explosionRadiusScale;
+            e.id       = jo.value("id", 0u);
+            e.ownerId  = jo.value("own", 0u);
+            e.age      = jo.value("age", 0.0f);
+            e.vfxRadius *= gs.explosionRadiusScale;
+            e.hasAppliedDamage = true;
             explosions.push_back(e);
         }
     }

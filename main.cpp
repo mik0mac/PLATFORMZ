@@ -2625,7 +2625,7 @@ int main(int argc, char** argv) {
             // Tick the bursts: the server owns every other object, but sparks are
             // a local-only effect, so the client drifts/fades/retires them itself.
             gameSpace.updateSparks(dt);
-            gameSpace.updateShockBursts(dt); // streak shells for newly seen explosions
+            gameSpace.updateBlasts(dt); // blast VFX for newly seen explosions
 
             std::vector<Player>& players = gameSpace.getPlayers();
             if (localIndex >= 0 && localIndex < (int)players.size()) {
@@ -2720,7 +2720,7 @@ int main(int argc, char** argv) {
                 gameSpace.updatePositions(simDt);
                 RunCollisionChecks(gameSpace, collisionGrid);   // detection + response
                 gameSpace.updateActiveObjects();                // erase destroyed/finished
-                gameSpace.updateShockBursts(simDt);             // streak shells (visual, own clock)
+                gameSpace.updateBlasts(simDt);                  // blast VFX (visual, own clock)
 
                 // Reticles follow the player's FINAL (post-collision) position;
                 // smoothed for non-local players, snapped for the local one.
@@ -2840,21 +2840,21 @@ int main(int argc, char** argv) {
                 // off inside - everything after paints straight over them.
                 DrawStarfield(sceneCam.position, (float)GetTime());
                 if (worldShaderOK) {
-                    // Blast light: the newest BLAST_LIGHT_MAX explosions (pushed in
-                    // spawn order, locally and in every state packet), glow fading
-                    // with the same t = radius / maxRadius clock DrawExplosion uses.
+                    // Blast light: the newest BLAST_LIGHT_MAX blasts still lit
+                    // (spawned in order, so newest last), glow fading with the
+                    // same t DrawBlastRing uses.
                     float blast[BLAST_LIGHT_MAX * 4] = {};
                     float blastGlow[BLAST_LIGHT_MAX] = {};
-                    const auto& explosions = gameSpace.getExplosions();
+                    const auto& blasts = gameSpace.getBlasts();
                     int n = 0;
-                    for (int i = (int)explosions.size() - 1; i >= 0 && n < BLAST_LIGHT_MAX; --i) {
-                        const Explosion& e = explosions[i];
-                        if (e.maxRadius <= 0.0f) continue;
-                        float t = Clamp(e.radius / e.maxRadius, 0.0f, 1.0f);
-                        blast[n * 4 + 0] = e.position.x;
-                        blast[n * 4 + 1] = e.position.y;
-                        blast[n * 4 + 2] = e.position.z;
-                        blast[n * 4 + 3] = e.maxRadius;
+                    for (int i = (int)blasts.size() - 1; i >= 0 && n < BLAST_LIGHT_MAX; --i) {
+                        const BlastFx& b = blasts[i];
+                        float t = b.t();
+                        if (b.radius <= 0.0f || t >= 1.0f) continue;
+                        blast[n * 4 + 0] = b.position.x;
+                        blast[n * 4 + 1] = b.position.y;
+                        blast[n * 4 + 2] = b.position.z;
+                        blast[n * 4 + 3] = b.radius;
                         blastGlow[n] = (1.0f - t) * (1.0f - t);
                         ++n;
                     }
@@ -2987,11 +2987,11 @@ int main(int argc, char** argv) {
 
                 const char* l1 = TextFormat("FPS %.0f | avg %.2f ms | p95 %.2f | max %.2f",
                     1.0f / fmaxf(avg, 1e-6f), avg * 1000.0f, p95 * 1000.0f, mx * 1000.0f);
-                const char* l2 = TextFormat("half %.0f | plat %d | roid %d | rock %d | spark %d | expl %d",
+                const char* l2 = TextFormat("half %.0f | plat %d | roid %d | rock %d | spark %d | blast %d",
                     gameSpace.getWalls().halfSize,
                     (int)gameSpace.getPlatforms().size(), (int)gameSpace.getAsteroids().size(),
                     (int)gameSpace.getRockets().size(), (int)gameSpace.getSparks().size(),
-                    (int)gameSpace.getExplosions().size());
+                    (int)gameSpace.getBlasts().size());
                 DrawText(l1, screenWidth - MeasureText(l1, 14) - 10, 10, 14, RAYWHITE);
                 DrawText(l2, screenWidth - MeasureText(l2, 14) - 10, 28, 14, GRAY);
 
