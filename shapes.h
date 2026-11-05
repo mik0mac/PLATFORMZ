@@ -678,12 +678,10 @@ inline void DrawBlastDotLines(const BlastFx& burst, Vector3 eye, float clipHalf)
 // shader does the per-streak maths above. The CPU's cost no longer depends on
 // the streak count, which is what lets EXPLOSION_DOT_COUNT be large.
 //
-// Each streak is a quad (two triangles, 6 vertices, no index buffer): its head
-// and tail projected to the screen, widened by EXPLOSION_DOT_WIDTH_PX at right
-// angles to the streak and capped by half that at each end, so a streak that
-// has slowed to almost nothing is still a visible square dot. Width follows
-// perspective (EXPLOSION_DOT_WIDTH_REF_DIST) - the near side of a ball chunky,
-// the far side fine - but is clamped in pixels, so a far blast stays legible.
+// Each streak is a real GL line - two vertices, head and tail - so it looks
+// exactly like the DrawLine3D streaks this replaced (and DrawBlastDotLines,
+// the fallback): one pixel wide, its length in world units, so it shrinks
+// with distance.
 //
 // Same two GLSL dialects as main.cpp's world shader. The direction rides in
 // `vertexPosition` on purpose: raylib binds that name to attribute 0, and
@@ -692,23 +690,38 @@ inline void DrawBlastDotLines(const BlastFx& burst, Vector3 eye, float clipHalf)
 // the streaks keep the shooter's colour instead of being tinted orange. The
 // fragment shader discards anything outside the arena cube, per pixel, so a
 // streak crossing a wall is cut exactly at it.
+
+// rlgl only draws a vertex array as triangles (rlDrawVertexArray), so a line
+// list needs the plain GL call. glDrawArrays is a GL 1.1 entry point, exported
+// by every platform's GL library (OpenGL.framework, opengl32, Emscripten's
+// WebGL), so it is declared here rather than pulling a platform GL header into
+// a translation unit that includes raylib.h. __stdcall is GL's calling
+// convention on Windows (a no-op on x64, which is all CI builds).
+#if defined(_WIN32)
+#define PLATFORMZ_GLAPI __stdcall
+#else
+#define PLATFORMZ_GLAPI
+#endif
+extern "C" void PLATFORMZ_GLAPI glDrawArrays(unsigned int mode, int first, int count);
+inline constexpr unsigned int PLATFORMZ_GL_LINES = 0x0001;
+
 struct ShockDotsGpu {
     bool tried = false, ok = false;
     Shader shader{};
     unsigned int vao = 0, vbo = 0;
     int locParam = -1;
     int uMvp = -1, uSpin = -1, uCenter = -1, uShell = -1, uEye = -1, uInside = -1;
-    int uView = -1, uWidth = -1, uBack = -1, uColor = -1, uFog = -1, uArena = -1, uWidthRef = -1;
+    int uBack = -1, uColor = -1, uFog = -1, uArena = -1;
     int uDamageR = -1, uHotPower = -1, uHotColor = -1;
 };
 
-inline constexpr int SHOCK_DOT_FLOATS = 7; // dir xyz, frac, speed, along, side
+inline constexpr int SHOCK_DOT_FLOATS = 6; // dir xyz, frac, speed, along
 inline constexpr int SHOCK_DOT_STRIDE = SHOCK_DOT_FLOATS * (int)sizeof(float);
 
 inline void ShockDotsBindAttribs(const ShockDotsGpu& g) {
     rlSetVertexAttribute(0, 3, RL_FLOAT, false, SHOCK_DOT_STRIDE, 0);
     rlEnableVertexAttribute(0);
-    rlSetVertexAttribute((unsigned int)g.locParam, 4, RL_FLOAT, false, SHOCK_DOT_STRIDE, 3 * (int)sizeof(float));
+    rlSetVertexAttribute((unsigned int)g.locParam, 3, RL_FLOAT, false, SHOCK_DOT_STRIDE, 3 * (int)sizeof(float));
     rlEnableVertexAttribute((unsigned int)g.locParam);
 }
 
@@ -745,7 +758,7 @@ inline ShockDotsGpu& ShockDots() {
 #endif
     std::string vs = std::string(vHead) +
         "IN vec3 vertexPosition;\n"  // the streak's unit direction (before spin)
-        "IN vec4 dotParam;\n"        // frac, speed, along (0 head / 1 tail), side (-1 / +1)
+        "IN vec3 dotParam;\n"        // frac, speed, along (0 head / 1 tail)
         "uniform mat4 mvp;\n"
         "uniform mat4 spin;\n"
         "uniform vec3 center;\n"
@@ -753,9 +766,6 @@ inline ShockDotsGpu& ShockDots() {
         "uniform vec4 shell;\n"      // startR, shockR, lenScale, min length
         "uniform vec3 eye;\n"
         "uniform float inside;\n"
-        "uniform vec2 viewPx;\n"
-        "uniform vec3 widthPx;\n"    // width at widthRef, min, max (pixels)
-        "uniform float widthRef;\n"  // distance (units) at which a streak is widthPx.x wide
         "uniform float backAlpha;\n"
         "uniform float hotPower;\n"  // heat falloff (ShockHeat)
         "OUT float vAlpha;\n"
@@ -777,23 +787,7 @@ inline ShockDotsGpu& ShockDots() {
         "    vWorld = mix(head, tail, dotParam.z);\n"
         // Per end, so each streak cools along its length (inner end hotter).
         "    vHeat = pow(1.0 - clamp(length(vWorld - center) / max(damageR, 0.001), 0.0, 1.0), hotPower);\n"
-        "    vec4 h = mvp * vec4(head, 1.0);\n"
-        "    vec4 t = mvp * vec4(tail, 1.0);\n"
-        // Behind (or at) the eye: drop the whole streak - every vertex of it
-        // takes this branch, so it is clipped as a unit, never half-projected.
-        "    if (h.w < 0.05 || t.w < 0.05) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }\n"
-        "    vec2 halfPx = viewPx * 0.5;\n"
-        // Perspective width: near streaks thicker, far ones finer (h.w is the
-        // head's distance along the view). One width per streak, so it stays a quad.
-        "    float w = clamp(widthPx.x * widthRef / h.w, widthPx.y, widthPx.z);\n"
-        "    vec2 d = (h.xy / h.w - t.xy / t.w) * halfPx;\n" // head - tail, in pixels
-        "    float L = length(d);\n"
-        "    vec2 ax = L > 0.001 ? d / L : vec2(1.0, 0.0);\n"
-        "    vec2 nrm = vec2(-ax.y, ax.x);\n"
-        "    vec4 p = mix(h, t, dotParam.z);\n"
-        "    vec2 off = (nrm * dotParam.w + ax * (1.0 - 2.0 * dotParam.z)) * (0.5 * w);\n"
-        "    p.xy += off / halfPx * p.w;\n"
-        "    gl_Position = p;\n"
+        "    gl_Position = mvp * vec4(vWorld, 1.0);\n"
         "}\n";
     std::string fs = std::string(fHead) +
         "IN float vAlpha;\n"
@@ -819,9 +813,6 @@ inline ShockDotsGpu& ShockDots() {
     g.uShell  = GetShaderLocation(g.shader, "shell");
     g.uEye    = GetShaderLocation(g.shader, "eye");
     g.uInside = GetShaderLocation(g.shader, "inside");
-    g.uView   = GetShaderLocation(g.shader, "viewPx");
-    g.uWidth  = GetShaderLocation(g.shader, "widthPx");
-    g.uWidthRef = GetShaderLocation(g.shader, "widthRef");
     g.uDamageR  = GetShaderLocation(g.shader, "damageR");
     g.uHotPower = GetShaderLocation(g.shader, "hotPower");
     g.uHotColor = GetShaderLocation(g.shader, "hotColor");
@@ -830,14 +821,13 @@ inline ShockDotsGpu& ShockDots() {
     g.uFog    = GetShaderLocation(g.shader, "fogParams");
     g.uArena  = GetShaderLocation(g.shader, "arenaHalf");
 
-    // Six vertices per streak: (along, side) corners of its quad.
-    static const float corner[6][2] = {{0, -1}, {0, 1}, {1, 1}, {0, -1}, {1, 1}, {1, -1}};
+    // Two vertices per streak: head (along 0) and tail (along 1).
     const std::vector<ExplosionDot>& pts = ExplosionDotPoints();
     std::vector<float> buf;
-    buf.reserve(pts.size() * 6 * SHOCK_DOT_FLOATS);
+    buf.reserve(pts.size() * 2 * SHOCK_DOT_FLOATS);
     for (const ExplosionDot& d : pts)
-        for (const auto& c : corner)
-            buf.insert(buf.end(), {d.dir.x, d.dir.y, d.dir.z, d.frac, d.speed, c[0], c[1]});
+        for (float along : {0.0f, 1.0f})
+            buf.insert(buf.end(), {d.dir.x, d.dir.y, d.dir.z, d.frac, d.speed, along});
 
     g.vao = rlLoadVertexArray(); // 0 where VAOs aren't supported (some WebGL1)
     bool vao = rlEnableVertexArray(g.vao);
@@ -849,11 +839,9 @@ inline ShockDotsGpu& ShockDots() {
     return g;
 }
 
-// Draw every streak shell. viewPx is the size of the target being drawn to,
-// so the streak width comes out in real pixels; clipHalf is the arena cube's
-// half-size (0 = walls off, no clip).
-inline void DrawBlastDots(const std::vector<BlastFx>& bursts, Vector3 eye, Vector2 viewPx,
-                            float clipHalf) {
+// Draw every streak shell. clipHalf is the arena cube's half-size (0 = walls
+// off, no clip).
+inline void DrawBlastDots(const std::vector<BlastFx>& bursts, Vector3 eye, float clipHalf) {
     if (bursts.empty()) return;
     ShockDotsGpu& g = ShockDots();
     if (!g.ok) {
@@ -864,15 +852,10 @@ inline void DrawBlastDots(const std::vector<BlastFx>& bursts, Vector3 eye, Vecto
     rlEnableShader(g.shader.id);
     Matrix mvp = MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection());
     rlSetUniformMatrix(g.uMvp, mvp);
-    float view[2] = {viewPx.x, viewPx.y};
     float eyeV[3] = {eye.x, eye.y, eye.z};
-    float width[3] = {EXPLOSION_DOT_WIDTH_PX, EXPLOSION_DOT_WIDTH_MIN_PX, EXPLOSION_DOT_WIDTH_MAX_PX};
-    float widthRef = EXPLOSION_DOT_WIDTH_REF_DIST, back = EXPLOSION_DOT_BACK_ALPHA;
+    float back = EXPLOSION_DOT_BACK_ALPHA;
     float fog[3] = {FOG_START, FOG_END, FOG_MAX};
-    rlSetUniform(g.uView, view, RL_SHADER_UNIFORM_VEC2, 1);
     rlSetUniform(g.uEye, eyeV, RL_SHADER_UNIFORM_VEC3, 1);
-    rlSetUniform(g.uWidth, width, RL_SHADER_UNIFORM_VEC3, 1);
-    rlSetUniform(g.uWidthRef, &widthRef, RL_SHADER_UNIFORM_FLOAT, 1);
     rlSetUniform(g.uBack, &back, RL_SHADER_UNIFORM_FLOAT, 1);
     rlSetUniform(g.uFog, fog, RL_SHADER_UNIFORM_VEC3, 1);
     rlSetUniform(g.uArena, &clipHalf, RL_SHADER_UNIFORM_FLOAT, 1);
@@ -885,10 +868,8 @@ inline void DrawBlastDots(const std::vector<BlastFx>& bursts, Vector3 eye, Vecto
     bool vao = rlEnableVertexArray(g.vao);
     if (!vao) { rlEnableVertexBuffer(g.vbo); ShockDotsBindAttribs(g); }
     // Additive light doesn't need depth order, and shouldn't hide other
-    // streaks; it still TESTS depth, so a platform in front covers them. Quads
-    // face either way depending on the streak's screen direction - no culling.
+    // streaks; it still TESTS depth, so a platform in front covers them.
     rlDisableDepthMask();
-    rlDisableBackfaceCulling();
     for (const BlastFx& b : bursts) {
         ShockShell s;
         if (!ShockShellFor(b, eye, s)) continue;
@@ -902,9 +883,8 @@ inline void DrawBlastDots(const std::vector<BlastFx>& bursts, Vector3 eye, Vecto
         rlSetUniform(g.uShell, shell, RL_SHADER_UNIFORM_VEC4, 1);
         rlSetUniform(g.uInside, &inside, RL_SHADER_UNIFORM_FLOAT, 1);
         rlSetUniform(g.uColor, color, RL_SHADER_UNIFORM_VEC4, 1);
-        rlDrawVertexArray(0, ExplosionDotCount(b.radius) * 6);
+        glDrawArrays(PLATFORMZ_GL_LINES, 0, ExplosionDotCount(b.radius) * 2);
     }
-    rlEnableBackfaceCulling();
     rlEnableDepthMask();
     if (vao) rlDisableVertexArray();
     else {

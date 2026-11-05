@@ -447,18 +447,11 @@ const int   EXPLOSION_DOT_COUNT = 1440;    // streaks filling a blast of the DEF
 // POWER 3 keeps the density per volume constant; 2 grows more gently.
 const float EXPLOSION_DOT_SIZE_POWER = 2.0f;
 const int   EXPLOSION_DOT_MIN = 60;        // floor, so a tiny blast is still a cloud
-// Ceiling, and the size of the GPU's streak buffer (shapes.h ShockDots: 6
-// vertices x 28 B per streak, so 20000 is ~3.4 MB, uploaded once). The slider's
+// Ceiling, and the size of the GPU's streak buffer (shapes.h ShockDots: 2
+// vertices x 24 B per streak, so 20000 is ~0.96 MB, uploaded once). The slider's
 // 4x radius at POWER 2 asks for 16x the default count.
 const int   EXPLOSION_DOT_MAX = 20000;
 const int   EXPLOSION_DOT_CPU_MAX = 3000;  // cap for the CPU fallback (DrawBlastDotLines), used only if the GPU shader fails
-// Streak thickness in screen pixels (also the size of a slowed-down dot), at
-// WIDTH_REF_DIST from the eye; it scales with perspective - nearer is thicker -
-// within MIN..MAX, so near and far sides of a blast read at different depths.
-const float EXPLOSION_DOT_WIDTH_PX = 2.0f;
-const float EXPLOSION_DOT_WIDTH_REF_DIST = 40.0f; // units
-const float EXPLOSION_DOT_WIDTH_MIN_PX = 1.0f;
-const float EXPLOSION_DOT_WIDTH_MAX_PX = 6.0f;
 // How the streaks spread from centre to surface: 3 = evenly through the volume;
 // higher bunches them toward the surface (a shell with a bright rim); lower
 // packs the centre and thins the edges. 1 = evenly by RADIUS, so the density

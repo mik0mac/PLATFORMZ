@@ -550,7 +550,7 @@ public:
         return best;
     }
 
-    void draw(int localPlayerIndex, Vector3 eye, Vector2 viewPx) {
+    void draw(int localPlayerIndex, Vector3 eye) {
         // Explosion VFX stop at the walls: a blast against one shouldn't draw
         // its whole sphere out past the arena. Open space (walls off) has no edge.
         float clipHalf = wallsEnabled ? walls.halfSize : 0.0f;
@@ -575,7 +575,7 @@ public:
         // After the fills, so a flashed platform can't wash over them, and
         // additive, so they add light to the flash instead of sitting under it.
         BeginBlendMode(BLEND_ADDITIVE);
-        DrawBlastDots(blasts, eye, viewPx, clipHalf);
+        DrawBlastDots(blasts, eye, clipHalf);
         EndBlendMode();
     }
 #endif // PLATFORMZ_SERVER
