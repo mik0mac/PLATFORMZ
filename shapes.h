@@ -5,6 +5,8 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include <vector>
+#include <string>
+#include <algorithm>
 #include <cmath>
 
 #include "elements.h"
@@ -60,8 +62,67 @@ inline void DrawShadedSphere(Vector3 position, float radius, Color wireColor, Co
 
 // Draws a vector-grid pattern across all 6 faces of a large bounding cube,
 // used for the play-space boundary walls (Walls::halfSize / color_outline).
-inline void DrawGridRoom(float halfSize, float spacing, Color col) {
+// The blast glow on the wall lines, for EXPLOSION_LIGHT_WALL_LINES. A line
+// lights only where it passes INSIDE a blast's sphere, and evenly along that
+// piece: its brightness is set by how close the line comes to the blast
+// centre (the same sum as main.cpp's world shader, with the line's closest
+// point standing in for the pixel), so a blast shows as lit line pieces, not
+// a round patch fading out from the centre.
+//
+// The line a->b is cut at every point where it enters or leaves a sphere, and
+// each piece drawn with the blasts whose sphere holds its midpoint.
+inline void DrawWallLineGlow(Vector3 a, Vector3 b, Color col, const std::vector<BlastFx>& blasts) {
+    Vector3 ab = Vector3Subtract(b, a);
+    float len2 = Vector3DotProduct(ab, ab);
+    if (len2 <= 0.0f) return;
+    struct Hit { float s0, s1, g; }; // the piece inside one blast (0..1 along the line), and its glow
+    Hit hits[EXPLOSION_LIGHT_MAX];
+    float cuts[2 * EXPLOSION_LIGHT_MAX + 2];
+    int nHits = 0, nCuts = 0;
+    cuts[nCuts++] = 0.0f;
+    cuts[nCuts++] = 1.0f;
+    for (const BlastFx& blast : blasts) {
+        float r = blast.radius;
+        if (r <= 0.0f || blast.t() >= 1.0f || nHits == EXPLOSION_LIGHT_MAX) continue;
+        float sc = Vector3DotProduct(Vector3Subtract(blast.position, a), ab) / len2; // closest point, unclamped
+        float d = Vector3Distance(blast.position, Vector3Add(a, Vector3Scale(ab, sc)));
+        if (d >= r) continue;
+        float half = sqrtf(r * r - d * d) / sqrtf(len2); // half the chord, as a fraction of the line
+        float s0 = fmaxf(sc - half, 0.0f), s1 = fminf(sc + half, 1.0f);
+        if (s0 >= s1) continue;
+        float edge = (1.0f - EXPLOSION_LIGHT_EDGE_SOFT) * r;
+        float soft = d <= edge ? 1.0f : 1.0f - (d - edge) / fmaxf(r - edge, 1e-4f);
+        hits[nHits++] = {s0, s1, blast.worldFlash() * soft * (1.0f - EXPLOSION_LIGHT_EDGE_DIM * d / r)};
+        cuts[nCuts++] = s0;
+        cuts[nCuts++] = s1;
+    }
+    if (nHits == 0) { DrawLine3D(a, b, col); return; }
+    std::sort(cuts, cuts + nCuts);
+    for (int i = 0; i + 1 < nCuts; ++i) {
+        float s0 = cuts[i], s1 = cuts[i + 1];
+        if (s1 - s0 < 1e-5f) continue;
+        float mid = 0.5f * (s0 + s1), g = 0.0f;
+        for (int h = 0; h < nHits; ++h)
+            if (mid > hits[h].s0 && mid < hits[h].s1) g += hits[h].g;
+        Color c = col;
+        if (g > 0.0f) {
+            g = fminf(g, 1.0f) * EXPLOSION_LIGHT_STRENGTH;
+            auto add = [g](unsigned char v, float light) { return (unsigned char)fminf(255.0f, v + 255.0f * light * g); };
+            c = {add(col.r, EXPLOSION_LIGHT_COLOR[0]), add(col.g, EXPLOSION_LIGHT_COLOR[1]),
+                 add(col.b, EXPLOSION_LIGHT_COLOR[2]), col.a};
+        }
+        DrawLine3D(Vector3Add(a, Vector3Scale(ab, s0)), Vector3Add(a, Vector3Scale(ab, s1)), c);
+    }
+}
+
+// blasts: non-null lights the lines with DrawWallLineGlow (EXPLOSION_LIGHT_WALL_LINES).
+inline void DrawGridRoom(float halfSize, float spacing, Color col,
+                         const std::vector<BlastFx>* blasts = nullptr) {
     int lines = (int)(halfSize / spacing);
+    auto DrawLine3D = [&](Vector3 a, Vector3 b, Color c) {
+        if (blasts && !blasts->empty()) DrawWallLineGlow(a, b, c, *blasts);
+        else ::DrawLine3D(a, b, c);
+    };
 
     for (int i = -lines; i <= lines; i++) {
         float p = i * spacing;
@@ -89,13 +150,14 @@ inline void DrawGridRoom(float halfSize, float spacing, Color col) {
 // One function per game-object type, each reading only the fields it needs
 // from the corresponding class in elements.h.
 
-inline void DrawWalls(const Walls& walls) {
+inline void DrawWalls(const Walls& walls, const std::vector<BlastFx>& blasts) {
     // Spacing scales with map size (gridSpacing is the floor / small-map look),
     // capping the grid's line count no matter how big the arena gets. Derived
     // here at the draw site because the networked client sets walls.halfSize
     // straight from the welcome packet, never through configureMap.
     float spacing = fmaxf(walls.gridSpacing, walls.halfSize / WALL_GRID_REF_HALF_SIZE);
-    DrawGridRoom(walls.halfSize, spacing, walls.color_outline);
+    DrawGridRoom(walls.halfSize, spacing, walls.color_outline,
+                 EXPLOSION_LIGHT_WALL_LINES ? &blasts : nullptr);
 }
 
 // flash (0..1, GameSpace::platformBlastFlash): an explosion's damage radius
@@ -104,9 +166,9 @@ inline void DrawPlatform(const Platform& platform, DrawPass pass, float flash = 
     Color outline = platform.color_outline;
     Color fill = platform.color_fill;
     if (flash > 0.0f) {
-        Color hot = {255, 170, 60, 255};
+        Color hot = EXPLOSION_PLATFORM_COLOR;
         outline = ColorLerp(outline, hot, flash);
-        hot.a = PLATFORM_BLAST_FILL_ALPHA;
+        hot.a = EXPLOSION_PLATFORM_FILL_ALPHA;
         fill = ColorLerp(fill, hot, flash);
     }
     DrawShadedWireBox(platform.position, platform.size.x, platform.size.y, platform.size.z, 0.0f, outline, fill, pass);
@@ -489,7 +551,16 @@ inline void DrawRocket(const Rocket& rocket, DrawPass pass) {
 
 // A circle facing the eye: lies in the plane through `center` perpendicular to
 // the view direction, so it always reads as a clean round vector ring.
-inline void DrawBillboardCircle(Vector3 center, float radius, Vector3 eye, int segments, Color col) {
+// Is p inside the arena cube of half-size `half`? half <= 0 means no cube
+// (walls off - open space), so everything is inside.
+inline bool InsideArena(Vector3 p, float half) {
+    return half <= 0.0f || (fabsf(p.x) <= half && fabsf(p.y) <= half && fabsf(p.z) <= half);
+}
+
+// clipHalf > 0 drops the segments that fall outside that arena cube (by their
+// midpoint - fine at ring resolution).
+inline void DrawBillboardCircle(Vector3 center, float radius, Vector3 eye, int segments, Color col,
+                                float clipHalf = 0.0f) {
     Vector3 fwd = Vector3Normalize(Vector3Subtract(center, eye));
     Vector3 up = (fabsf(fwd.y) > 0.99f) ? Vector3{1, 0, 0} : Vector3{0, 1, 0};
     Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
@@ -499,7 +570,7 @@ inline void DrawBillboardCircle(Vector3 center, float radius, Vector3 eye, int s
         float a = 2.0f * PI * (float)i / (float)segments;
         Vector3 p = Vector3Add(center, Vector3Add(Vector3Scale(right, cosf(a) * radius),
                                                   Vector3Scale(up,    sinf(a) * radius)));
-        DrawLine3D(prev, p, col);
+        if (InsideArena(Vector3Lerp(prev, p, 0.5f), clipHalf)) DrawLine3D(prev, p, col);
         prev = p;
     }
 }
@@ -508,18 +579,20 @@ inline void DrawBillboardCircle(Vector3 center, float radius, Vector3 eye, int s
 // circle r*r/d toward the eye, of radius r*sqrt(1 - r*r/d*d). Drawing that ring
 // means it lines up exactly with what is inside the sphere at any range. No
 // outline exists from inside the sphere, so it draws nothing there.
-inline void DrawSphereSilhouette(Vector3 center, float r, Vector3 eye, Color col) {
+inline void DrawSphereSilhouette(Vector3 center, float r, Vector3 eye, Color col, float clipHalf = 0.0f) {
     Vector3 toEye = Vector3Subtract(eye, center);
     float d = Vector3Length(toEye);
     if (d <= r) return;
     Vector3 c = Vector3Add(center, Vector3Scale(toEye, (r * r / d) / d));
-    DrawBillboardCircle(c, r * sqrtf(1.0f - (r * r) / (d * d)), eye, EXPLOSION_RING_SEGMENTS, col);
+    DrawBillboardCircle(c, r * sqrtf(1.0f - (r * r) / (d * d)), eye, EXPLOSION_RING_SEGMENTS, col, clipHalf);
 }
 
-// Points evenly filling the unit ball, built once: a Halton sequence (bases 2,
-// 3, 5), so ANY prefix of it is still evenly spread - which is what lets the
-// count follow the blast's size. Each point: unit direction, radial fraction
-// (cube root, for an even spread by volume), and a speed factor 1 +/- DOT_SPREAD.
+// Points filling the unit ball, built once: a Halton sequence (bases 2, 3, 5),
+// so ANY prefix of it is still evenly spread - which is what lets the count
+// follow the blast's size. Each point: unit direction, radial fraction, and a
+// speed factor 1 +/- DOT_SPREAD. The radial fraction is u^(1/RADIAL_POWER):
+// 3 (the cube root) spreads them evenly by volume; higher bunches them toward
+// the surface (a shell), lower packs the centre and thins the edges.
 struct ExplosionDot { Vector3 dir; float frac; float speed; };
 
 inline float Halton(int i, int base) {
@@ -537,7 +610,7 @@ inline const std::vector<ExplosionDot>& ExplosionDotPoints() {
             float a = 2.0f * PI * Halton(i, 3);
             float r = sqrtf(fmaxf(0.0f, 1.0f - z * z));
             float h = fmodf(sinf((float)i * 12.9898f) * 43758.5453f, 1.0f); // -1..1
-            v.push_back({{r * cosf(a), z, r * sinf(a)}, cbrtf(Halton(i, 5)),
+            v.push_back({{r * cosf(a), z, r * sinf(a)}, powf(Halton(i, 5), 1.0f / EXPLOSION_DOT_RADIAL_POWER),
                          1.0f + EXPLOSION_DOT_SPREAD * h});
         }
         return v;
@@ -551,16 +624,15 @@ inline int ExplosionDotCount(float R) {
     return (int)Clamp(n, (float)EXPLOSION_DOT_MIN, (float)EXPLOSION_DOT_MAX);
 }
 
-inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye) {
+// clipHalf: the arena cube's half-size (0 = walls off). A blast against a wall
+// is cut off at it rather than drawing its whole sphere out past the boundary.
+inline void DrawBlastRing(const BlastFx& blast, Vector3 eye, float clipHalf = 0.0f) {
     // Splash damage lands in full on the first frame, out to the whole radius
-    // (ApplyExplosionSplashDamage). explosion.radius still grows 0 -> maxRadius,
-    // but here it is only the clock t (synced over the network for free). Wire
-    // only - the damage zone's interior is lit by the blast light in main.cpp's
-    // world shader, and platforms in it flash (DrawPlatform).
-    if (pass == PASS_FILL) return;
-    float t = explosion.maxRadius > 0.0f ? (explosion.radius / explosion.maxRadius) : 1.0f;
-    t = Clamp(t, 0.0f, 1.0f);
-    float R = explosion.maxRadius;
+    // (ApplyExplosionSplashDamage). Wire only - the damage zone's interior is
+    // lit by the blast light in main.cpp's world shader, and platforms in it
+    // flash (DrawPlatform).
+    float t = blast.t();
+    float R = blast.radius;
     Color flash = {255, 240, 210, 255};
 
     // Zone ring: the damage radius's outline, there from frame 0 because that is
@@ -568,63 +640,335 @@ inline void DrawExplosion(const Explosion& explosion, DrawPass pass, Vector3 eye
     // blast doesn't leave a hard border behind.
     if (t < EXPLOSION_RING_FADE_T) {
         float k = 1.0f - t / EXPLOSION_RING_FADE_T;
-        Color ring = ColorLerp(flash, explosion.color_outline, Clamp(t / EXPLOSION_FLASH_T, 0.0f, 1.0f));
+        Color ring = ColorLerp(flash, EXPLOSION_COLOR, Clamp(t / EXPLOSION_RING_WHITE_T, 0.0f, 1.0f));
         ring.a = (unsigned char)(255 * k * k);
-        DrawSphereSilhouette(explosion.position, R, eye, ring);
+        DrawSphereSilhouette(blast.position, R, eye, ring, clipHalf);
     }
 }
 
-// The explosion's streak shell (ShockBurst, elements.h), on its own clock so it
-// can outlive the explosion (EXPLOSION_SHOCK_LIFE_SCALE).
-inline void DrawShockBurst(const ShockBurst& burst, Vector3 eye) {
-    // Shockwave: a 3D ball of spark streaks, filling the sphere, that rushes out,
-    // decelerates, and carries on past the damage radius, thickening into a cloud and cooling from
-    // white to orange as it fades. Each streak trails back toward the centre along
-    // its own direction, like DrawSpark, and its length follows its current speed:
-    // long while the shell races out, spark-sized once it coasts. The far side of
-    // the shell draws dimmer; unlike a silhouette ring it stays visible from inside.
-    // The shell starts at R * STREAK_START and travels the rest of the way to
-    // R * REACH; STREAK_START 0 is the original from-the-centre burst.
-    float t = burst.t();
-    float R = burst.maxRadius;
-    Vector3 p0 = burst.position;
-    Color flash = {255, 240, 210, 255};
-    float startR = R * EXPLOSION_STREAK_START;
-    float travel = R * fmaxf(EXPLOSION_SHOCK_REACH - EXPLOSION_STREAK_START, 0.0f);
-    float shockR = startR + travel * (1.0f - powf(1.0f - t, EXPLOSION_SHOCK_EASE));
-    if (shockR <= 0.0f) return;
-    Color shock = ColorLerp(flash, burst.color, t);
-    float alpha = 255.0f * powf(1.0f - t, 1.5f);
-    // d(shockR)/dt in units/sec: the curve's slope over t, over the burst's life.
-    float life = burst.life;
-    float shockSpeed = travel * EXPLOSION_SHOCK_EASE
-                     * powf(1.0f - t, EXPLOSION_SHOCK_EASE - 1.0f) / life;
+// The explosion's streak dots (BlastFx, elements.h), on dotT - their own
+// lifetime (EXPLOSION_DOT_LIFETIME), so they can outlast the ring and flash.
+//
+// Shockwave: a 3D ball of spark streaks, filling the sphere, that rushes out,
+// decelerates, and carries on past the damage radius, thickening into a cloud
+// as it fades. The streaks are the shooter's colour from the first frame (no
+// white-hot flash - the platforms already flash), so they stand apart from
+// the orange glow; gameSpace.draw() blends them additively, on top. Each streak
+// trails back toward the centre along its own direction, like DrawSpark, and its
+// length follows its current speed: long while the shell races out, spark-sized
+// once it coasts. The far side of the shell draws dimmer; unlike a silhouette
+// ring it stays visible from inside. The shell starts at R * DOT_START and
+// drifts outward for the dots' whole life (DOT_SPEED slowing to DOT_COAST);
+// DOT_START 0 is the original from-the-centre burst.
+//
+// Everything per BLAST is worked out once here; everything per STREAK is the
+// same few lines of maths, run either on the GPU (ShockDotsGpu, below) or, if
+// that shader won't build, on the CPU (DrawBlastDotLines).
+struct ShockShell {
+    float startR, shockR;
+    float lenScale;   // shockSpeed * DOT_STREAK_TIME: a streak's length per (speed * frac)
+    float alpha;      // 0..1, the whole shell's fade
+    Matrix spin;
+    bool inside;      // eye within the shell: no far-side dimming
+};
 
+// Heat: white-hot (EXPLOSION_DOT_HOT_COLOR) at the point of impact, cooling to
+// the shooter's colour at the edge of the damage radius R, and staying that
+// colour past it. EXPLOSION_DOT_HOT_POWER shapes the falloff (1 = linear,
+// higher = a tighter hot core). Returns 0 (player colour) .. 1 (hottest).
+inline float ShockHeat(float distFromCenter, float R) {
+    if (R <= 0.0f) return 0.0f;
+    return powf(1.0f - Clamp(distFromCenter / R, 0.0f, 1.0f), EXPLOSION_DOT_HOT_POWER);
+}
+
+inline bool ShockShellFor(const BlastFx& burst, Vector3 eye, ShockShell& s) {
+    float t = burst.dotT();
+    float R = burst.radius;
+    Vector3 p0 = burst.position;
+    s.startR = R * EXPLOSION_DOT_START;
+    // Outward speed decays from SPEED toward COAST (never below it):
+    // speed = R * (COAST + (SPEED - COAST) * e^(-DRAG * age)); shockR is its integral.
+    float age = burst.age;
+    float burstPart = EXPLOSION_DOT_SPEED - EXPLOSION_DOT_COAST;
+    float decay = expf(-EXPLOSION_DOT_DRAG * age);
+    float settled = EXPLOSION_DOT_DRAG > 0.0f ? (1.0f - decay) / EXPLOSION_DOT_DRAG : age;
+    s.shockR = s.startR + R * (EXPLOSION_DOT_COAST * age + burstPart * settled);
+    if (s.shockR <= 0.0f) return false;
+    // Full alpha while the flash fades to the shooter's colour, then fading out
+    // over the rest of the dots' life. A dot life no longer than the flash
+    // keeps the old fade over the whole of it.
+    float fadeSpan = EXPLOSION_DOT_LIFETIME - EXPLOSION_FLASH_LIFETIME;
+    float fadeT = fadeSpan > 0.0f ? Clamp((burst.age - EXPLOSION_FLASH_LIFETIME) / fadeSpan, 0.0f, 1.0f) : t;
+    s.alpha = EXPLOSION_DOT_ALPHA * powf(1.0f - fadeT, 1.5f);
+    // d(shockR)/dt in units/sec, for the streak length.
+    float shockSpeed = R * (EXPLOSION_DOT_COAST + burstPart * (EXPLOSION_DOT_DRAG > 0.0f ? decay : 1.0f));
+    s.lenScale = shockSpeed * EXPLOSION_DOT_STREAK_TIME;
     // Rotate the pattern per blast, hashed from its position: two blasts don't
     // share one, and every client draws the same (no extra synced state).
-    Matrix spin = MatrixRotateXYZ({p0.x * 1.7f + p0.z * 0.3f, p0.y * 2.3f + p0.x * 0.5f, p0.z * 1.1f + p0.y * 0.7f});
-    bool inside = Vector3Distance(eye, p0) <= shockR;
+    s.spin = MatrixRotateXYZ({p0.x * 1.7f + p0.z * 0.3f, p0.y * 2.3f + p0.x * 0.5f, p0.z * 1.1f + p0.y * 0.7f});
+    s.inside = Vector3Distance(eye, p0) <= s.shockR;
+    return true;
+}
 
+// The CPU path: one 1-pixel DrawLine3D per streak. Only used when the GPU
+// shader failed to build, so it is capped well below EXPLOSION_DOT_MAX.
+// The dots' colour: the flash orange at first, the same for everyone, fading
+// to the shooter's colour as the flash fades.
+inline Color BlastDotColor(const BlastFx& blast) {
+    Color flash = {(unsigned char)(255.0f * EXPLOSION_LIGHT_COLOR[0]), (unsigned char)(255.0f * EXPLOSION_LIGHT_COLOR[1]),
+                   (unsigned char)(255.0f * EXPLOSION_LIGHT_COLOR[2]), 255};
+    return ColorLerp(blast.color, flash, blast.flashFade());
+}
+
+inline void DrawBlastDotLines(const BlastFx& burst, Vector3 eye, float clipHalf) {
+    ShockShell s;
+    if (!ShockShellFor(burst, eye, s)) return;
     const std::vector<ExplosionDot>& pts = ExplosionDotPoints();
-    int count = ExplosionDotCount(R);
+    int count = std::min(ExplosionDotCount(burst.radius), EXPLOSION_DOT_CPU_MAX);
     for (int i = 0; i < count; ++i) {
         const ExplosionDot& d = pts[i];
-        Vector3 dir = Vector3Transform(d.dir, spin);
+        Vector3 dir = Vector3Transform(d.dir, s.spin);
         // The whole ball expands: each streak sits at its fraction of its own
         // (spread) shell radius, so inner streaks move slower, like a real blast.
-        float shell = startR + (shockR - startR) * d.speed;
+        float shell = s.startR + (s.shockR - s.startR) * d.speed;
         float dist = shell * d.frac;
-        Vector3 p = Vector3Add(p0, Vector3Scale(dir, dist));
-        float len = Clamp(shockSpeed * d.speed * d.frac * EXPLOSION_STREAK_TIME,
+        Vector3 p = Vector3Add(burst.position, Vector3Scale(dir, dist));
+        if (!InsideArena(p, clipHalf)) continue;
+        float len = Clamp(s.lenScale * d.speed * d.frac,
                           SPARK_STREAK_LENGTH, fmaxf(dist, SPARK_STREAK_LENGTH));
-        Color c = shock;
         float k = 1.0f;
-        if (!inside) {
+        if (!s.inside) {
             float facing = Vector3DotProduct(dir, Vector3Normalize(Vector3Subtract(eye, p)));
-            float s = Clamp((facing + 0.2f) / 0.4f, 0.0f, 1.0f);
-            k = Lerp(EXPLOSION_DOT_BACK_ALPHA, 1.0f, s * s * (3.0f - 2.0f * s));
+            float f = Clamp((facing + 0.2f) / 0.4f, 0.0f, 1.0f);
+            k = Lerp(EXPLOSION_DOT_BACK_ALPHA, 1.0f, f * f * (3.0f - 2.0f * f));
         }
-        c.a = (unsigned char)(alpha * k);
+        Color c = ColorLerp(BlastDotColor(burst), EXPLOSION_DOT_HOT_COLOR, ShockHeat(dist, burst.radius));
+        c.a = (unsigned char)Clamp(255.0f * s.alpha * k, 0.0f, 255.0f);
         DrawLine3D(p, Vector3Subtract(p, Vector3Scale(dir, len)), c);
     }
+}
+
+//MARK: Explosion streaks on the GPU
+// The streak table (ExplosionDotPoints) never changes - only the blast's
+// centre, size, clock, colour and spin do. So it lives on the GPU as one static
+// vertex buffer, uploaded once, and a blast is a single draw call: the vertex
+// shader does the per-streak maths above. The CPU's cost no longer depends on
+// the streak count, which is what lets EXPLOSION_DOT_COUNT be large.
+//
+// Each streak is a real GL line - two vertices, head and tail - so it looks
+// exactly like the DrawLine3D streaks this replaced (and DrawBlastDotLines,
+// the fallback): one pixel wide, its length in world units, so it shrinks
+// with distance.
+//
+// Same two GLSL dialects as main.cpp's world shader. The direction rides in
+// `vertexPosition` on purpose: raylib binds that name to attribute 0, and
+// WebGL1 is slow (or warns) when attribute 0 isn't an enabled array.
+// Fog matches the world shader's; the blast light is deliberately left out, so
+// the streaks keep the shooter's colour instead of being tinted orange. The
+// fragment shader discards anything outside the arena cube, per pixel, so a
+// streak crossing a wall is cut exactly at it.
+
+// rlgl only draws a vertex array as triangles (rlDrawVertexArray), so a line
+// list needs the plain GL call. glDrawArrays is a GL 1.1 entry point, exported
+// by every platform's GL library (OpenGL.framework, opengl32, Emscripten's
+// WebGL), so it is declared here rather than pulling a platform GL header into
+// a translation unit that includes raylib.h. __stdcall is GL's calling
+// convention on Windows (a no-op on x64, which is all CI builds).
+#if defined(_WIN32)
+#define PLATFORMZ_GLAPI __stdcall
+#else
+#define PLATFORMZ_GLAPI
+#endif
+extern "C" void PLATFORMZ_GLAPI glDrawArrays(unsigned int mode, int first, int count);
+inline constexpr unsigned int PLATFORMZ_GL_LINES = 0x0001;
+
+struct ShockDotsGpu {
+    bool tried = false, ok = false;
+    Shader shader{};
+    unsigned int vao = 0, vbo = 0;
+    int locParam = -1;
+    int uMvp = -1, uSpin = -1, uCenter = -1, uShell = -1, uEye = -1, uInside = -1;
+    int uBack = -1, uColor = -1, uFog = -1, uArena = -1;
+    int uDamageR = -1, uHotPower = -1, uHotColor = -1;
+};
+
+inline constexpr int SHOCK_DOT_FLOATS = 6; // dir xyz, frac, speed, along
+inline constexpr int SHOCK_DOT_STRIDE = SHOCK_DOT_FLOATS * (int)sizeof(float);
+
+inline void ShockDotsBindAttribs(const ShockDotsGpu& g) {
+    rlSetVertexAttribute(0, 3, RL_FLOAT, false, SHOCK_DOT_STRIDE, 0);
+    rlEnableVertexAttribute(0);
+    rlSetVertexAttribute((unsigned int)g.locParam, 3, RL_FLOAT, false, SHOCK_DOT_STRIDE, 3 * (int)sizeof(float));
+    rlEnableVertexAttribute((unsigned int)g.locParam);
+}
+
+// Built on first use (it needs the GL context, so it can't run before
+// InitWindow) and kept for the life of the process.
+inline ShockDotsGpu& ShockDots() {
+    static ShockDotsGpu g;
+    if (g.tried) return g;
+    g.tried = true;
+#if defined(__EMSCRIPTEN__)
+    const char* vHead =
+        "#version 100\n"
+        "#define IN attribute\n"
+        "#define OUT varying\n";
+    const char* fHead =
+        "#version 100\n"
+        "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+        "precision highp float;\n" // world distances reach ~1000 (fog)
+        "#else\n"
+        "precision mediump float;\n"
+        "#endif\n"
+        "#define IN varying\n"
+        "#define OUT_COLOR gl_FragColor\n";
+#else
+    const char* vHead =
+        "#version 330\n"
+        "#define IN in\n"
+        "#define OUT out\n";
+    const char* fHead =
+        "#version 330\n"
+        "#define IN in\n"
+        "out vec4 finalColor;\n"
+        "#define OUT_COLOR finalColor\n";
+#endif
+    std::string vs = std::string(vHead) +
+        "IN vec3 vertexPosition;\n"  // the streak's unit direction (before spin)
+        "IN vec3 dotParam;\n"        // frac, speed, along (0 head / 1 tail)
+        "uniform mat4 mvp;\n"
+        "uniform mat4 spin;\n"
+        "uniform vec3 center;\n"
+        "uniform float damageR;\n"   // heat reaches the player colour at this distance (ShockHeat)
+        "uniform vec4 shell;\n"      // startR, shockR, lenScale, min length
+        "uniform vec3 eye;\n"
+        "uniform float inside;\n"
+        "uniform float backAlpha;\n"
+        "uniform float hotPower;\n"  // heat falloff (ShockHeat)
+        "OUT float vAlpha;\n"
+        "OUT vec3 vWorld;\n"
+        "OUT float vHeat;\n"
+        "void main() {\n"
+        "    vec3 dir = (spin * vec4(vertexPosition, 0.0)).xyz;\n"
+        "    float r = shell.x + (shell.y - shell.x) * dotParam.y;\n"
+        "    float dist = r * dotParam.x;\n"
+        "    vec3 head = center + dir * dist;\n"
+        "    float len = clamp(shell.z * dotParam.y * dotParam.x, shell.w, max(dist, shell.w));\n"
+        "    vec3 tail = head - dir * len;\n"
+        "    float k = 1.0;\n"
+        "    if (inside < 0.5) {\n"
+        "        float f = clamp((dot(dir, normalize(eye - head)) + 0.2) / 0.4, 0.0, 1.0);\n"
+        "        k = mix(backAlpha, 1.0, f * f * (3.0 - 2.0 * f));\n"
+        "    }\n"
+        "    vAlpha = k;\n"
+        "    vWorld = mix(head, tail, dotParam.z);\n"
+        // Per end, so each streak cools along its length (inner end hotter).
+        "    vHeat = pow(1.0 - clamp(length(vWorld - center) / max(damageR, 0.001), 0.0, 1.0), hotPower);\n"
+        "    gl_Position = mvp * vec4(vWorld, 1.0);\n"
+        "}\n";
+    std::string fs = std::string(fHead) +
+        "IN float vAlpha;\n"
+        "IN vec3 vWorld;\n"
+        "IN float vHeat;\n"
+        "uniform vec4 color;\n"
+        "uniform vec3 hotColor;\n"
+        "uniform float arenaHalf;\n"   // 0 = walls off, no clip
+        "uniform vec3 fogParams;\n"  // start, end, max - as the world shader
+        "void main() {\n"
+        "    if (arenaHalf > 0.0 && any(greaterThan(abs(vWorld), vec3(arenaHalf)))) discard;\n"
+        "    float depth = 1.0 / gl_FragCoord.w;\n"
+        "    float fog = fogParams.z * clamp((depth - fogParams.x) / (fogParams.y - fogParams.x), 0.0, 1.0);\n"
+        "    OUT_COLOR = vec4(mix(color.rgb, hotColor, vHeat), color.a * vAlpha * (1.0 - fog));\n"
+        "}\n";
+    g.shader = LoadShaderFromMemory(vs.c_str(), fs.c_str());
+    if (!IsShaderValid(g.shader) || g.shader.id == rlGetShaderIdDefault()) return g;
+    g.locParam = rlGetLocationAttrib(g.shader.id, "dotParam");
+    if (g.locParam < 0) return g;
+    g.uMvp    = GetShaderLocation(g.shader, "mvp");
+    g.uSpin   = GetShaderLocation(g.shader, "spin");
+    g.uCenter = GetShaderLocation(g.shader, "center");
+    g.uShell  = GetShaderLocation(g.shader, "shell");
+    g.uEye    = GetShaderLocation(g.shader, "eye");
+    g.uInside = GetShaderLocation(g.shader, "inside");
+    g.uDamageR  = GetShaderLocation(g.shader, "damageR");
+    g.uHotPower = GetShaderLocation(g.shader, "hotPower");
+    g.uHotColor = GetShaderLocation(g.shader, "hotColor");
+    g.uBack   = GetShaderLocation(g.shader, "backAlpha");
+    g.uColor  = GetShaderLocation(g.shader, "color");
+    g.uFog    = GetShaderLocation(g.shader, "fogParams");
+    g.uArena  = GetShaderLocation(g.shader, "arenaHalf");
+
+    // Two vertices per streak: head (along 0) and tail (along 1).
+    const std::vector<ExplosionDot>& pts = ExplosionDotPoints();
+    std::vector<float> buf;
+    buf.reserve(pts.size() * 2 * SHOCK_DOT_FLOATS);
+    for (const ExplosionDot& d : pts)
+        for (float along : {0.0f, 1.0f})
+            buf.insert(buf.end(), {d.dir.x, d.dir.y, d.dir.z, d.frac, d.speed, along});
+
+    g.vao = rlLoadVertexArray(); // 0 where VAOs aren't supported (some WebGL1)
+    bool vao = rlEnableVertexArray(g.vao);
+    g.vbo = rlLoadVertexBuffer(buf.data(), (int)(buf.size() * sizeof(float)), false);
+    if (g.vbo == 0) { if (vao) rlDisableVertexArray(); return g; }
+    if (vao) { ShockDotsBindAttribs(g); rlDisableVertexArray(); }
+    rlDisableVertexBuffer();
+    g.ok = true;
+    return g;
+}
+
+// Draw every streak shell. clipHalf is the arena cube's half-size (0 = walls
+// off, no clip).
+inline void DrawBlastDots(const std::vector<BlastFx>& bursts, Vector3 eye, float clipHalf) {
+    if (bursts.empty()) return;
+    ShockDotsGpu& g = ShockDots();
+    if (!g.ok) {
+        for (const BlastFx& b : bursts) DrawBlastDotLines(b, eye, clipHalf);
+        return;
+    }
+    rlDrawRenderBatchActive(); // anything queued draws first, with its own shader
+    rlEnableShader(g.shader.id);
+    Matrix mvp = MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection());
+    rlSetUniformMatrix(g.uMvp, mvp);
+    float eyeV[3] = {eye.x, eye.y, eye.z};
+    float back = EXPLOSION_DOT_BACK_ALPHA;
+    float fog[3] = {FOG_START, FOG_END, FOG_MAX};
+    rlSetUniform(g.uEye, eyeV, RL_SHADER_UNIFORM_VEC3, 1);
+    rlSetUniform(g.uBack, &back, RL_SHADER_UNIFORM_FLOAT, 1);
+    rlSetUniform(g.uFog, fog, RL_SHADER_UNIFORM_VEC3, 1);
+    rlSetUniform(g.uArena, &clipHalf, RL_SHADER_UNIFORM_FLOAT, 1);
+    float hotPower = EXPLOSION_DOT_HOT_POWER;
+    float hot[3] = {EXPLOSION_DOT_HOT_COLOR.r / 255.0f, EXPLOSION_DOT_HOT_COLOR.g / 255.0f,
+                    EXPLOSION_DOT_HOT_COLOR.b / 255.0f};
+    rlSetUniform(g.uHotPower, &hotPower, RL_SHADER_UNIFORM_FLOAT, 1);
+    rlSetUniform(g.uHotColor, hot, RL_SHADER_UNIFORM_VEC3, 1);
+
+    bool vao = rlEnableVertexArray(g.vao);
+    if (!vao) { rlEnableVertexBuffer(g.vbo); ShockDotsBindAttribs(g); }
+    // Additive light doesn't need depth order, and shouldn't hide other
+    // streaks; it still TESTS depth, so a platform in front covers them.
+    rlDisableDepthMask();
+    for (const BlastFx& b : bursts) {
+        ShockShell s;
+        if (!ShockShellFor(b, eye, s)) continue;
+        float center[3] = {b.position.x, b.position.y, b.position.z};
+        float shell[4] = {s.startR, s.shockR, s.lenScale, SPARK_STREAK_LENGTH};
+        float inside = s.inside ? 1.0f : 0.0f;
+        rlSetUniform(g.uDamageR, &b.radius, RL_SHADER_UNIFORM_FLOAT, 1);
+        Color dc = BlastDotColor(b);
+        float color[4] = {dc.r / 255.0f, dc.g / 255.0f, dc.b / 255.0f, s.alpha};
+        rlSetUniformMatrix(g.uSpin, s.spin);
+        rlSetUniform(g.uCenter, center, RL_SHADER_UNIFORM_VEC3, 1);
+        rlSetUniform(g.uShell, shell, RL_SHADER_UNIFORM_VEC4, 1);
+        rlSetUniform(g.uInside, &inside, RL_SHADER_UNIFORM_FLOAT, 1);
+        rlSetUniform(g.uColor, color, RL_SHADER_UNIFORM_VEC4, 1);
+        glDrawArrays(PLATFORMZ_GL_LINES, 0, ExplosionDotCount(b.radius) * 2);
+    }
+    rlEnableDepthMask();
+    if (vao) rlDisableVertexArray();
+    else {
+        rlDisableVertexAttribute(0);
+        rlDisableVertexAttribute((unsigned int)g.locParam);
+        rlDisableVertexBuffer();
+    }
+    rlDisableShader();
 }

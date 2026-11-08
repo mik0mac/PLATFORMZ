@@ -1249,17 +1249,21 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
     }
     s += "]";
 
-    // Explosions (visual + splash events - client plays the effect)
+    // Explosions: announcements, not state. Each is sent for its first
+    // EXPLOSION_NET_WINDOW only (so a lost packet or two can't drop it) with
+    // its id, so a client can tell the repeats from a new blast; the client
+    // runs all of its VFX from there (GameSpace::updateBlasts).
     s += ",\"explosions\":[";
     auto& explosions = gameSpace.getExplosions();
     for (int i = 0; i < (int)explosions.size(); i++) {
         const Explosion& e = explosions[i];
         if (i > 0) s += ",";
-        s += "{\"px\":"     + jf(e.position.x);
-        s += ",\"py\":"     + jf(e.position.y);
-        s += ",\"pz\":"     + jf(e.position.z);
-        s += ",\"r\":"      + jf(e.radius);
-        s += ",\"active\":" + jb(e.isActive);
+        s += "{\"px\":"   + jf(e.position.x);
+        s += ",\"py\":"   + jf(e.position.y);
+        s += ",\"pz\":"   + jf(e.position.z);
+        s += ",\"id\":"   + ji((int)(e.id & 0xFF));
+        s += ",\"own\":"  + ji((int)e.ownerId);
+        s += ",\"age\":"  + jf(e.age);
         s += "}";
     }
     s += "]";
@@ -1438,13 +1442,17 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
         nb::putQVel(b, r.velocity.x); nb::putQVel(b, r.velocity.y); nb::putQVel(b, r.velocity.z);
     }
 
-    // Explosions (ephemeral, no id).
+    // Explosions: announcements for their first EXPLOSION_NET_WINDOW (see
+    // the JSON encoder). The id's low byte tells repeats from new blasts; the
+    // owner is a player id, slot + 1, which a byte holds.
+    static_assert(PLAYER_ID_BASE + GAMESPACE_NUMBER_OF_PLAYERS <= 256, "explosion owner id must fit a byte");
     auto& explosions = gameSpace.getExplosions();
     nb::putU16(b, (uint16_t)explosions.size());
     for (const Explosion& e : explosions) {
         nb::putQPos(b, e.position.x); nb::putQPos(b, e.position.y); nb::putQPos(b, e.position.z);
-        nb::putQFrac(b, e.radius, EXPLOSION_RADIUS_ENCODE_MAX);
-        nb::putU8(b, e.isActive ? 1 : 0);
+        nb::putU8(b, (uint8_t)(e.id & 0xFF));
+        nb::putU8(b, (uint8_t)e.ownerId);
+        nb::putQFrac(b, e.age, EXPLOSION_NET_WINDOW);
     }
 
     // Audio events (one-shots this tick).

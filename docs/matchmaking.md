@@ -207,7 +207,7 @@ cannot land on the new one's spawn state.
 | `challenge` | `c` | UDP only. Not a refusal — answer it and hello again |
 | `identity` | `tok` | a token to store and present from now on. Sent when you had none, or yours no longer verifies |
 | **welcome** | slot + room identity + static world | JSON over WS, binary tag `0x0C` over UDP |
-| **state** | phase, countdown, epoch, music, options, roster | JSON over WS, binary tag `0x0D` over UDP, 60 Hz |
+| **state** | phase, countdown, epoch, music, options, roster | JSON over WS, binary tag `0x0E` over UDP, 60 Hz |
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |

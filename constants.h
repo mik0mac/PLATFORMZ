@@ -319,7 +319,7 @@ const float PLAYER_FIRE_RATE = 3.0f; // shots per second.
 const int PLAYER_ELIMINATION_SCORE_AWARD = 100; // Points awarded to player for eliminating another player
 
 const std::vector<Color> HUMAN_PLAYER_COLORS = {
-    {255, 0, 0, 255},     // Red
+    
     {0, 0, 255, 255},     // Blue
     {0, 255, 0, 255},     // Green
     {255, 0, 255, 255},   // Pink
@@ -327,6 +327,7 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
     {0, 255, 255, 255},   // Cyan
     {255, 128, 0, 255},   // Orange
     {160, 32, 240, 255},  // Purple
+    {255, 0, 0, 255},     // Red
 };
 
 //MARK: Bot Constants
@@ -408,63 +409,118 @@ const float ROCKET_MUZZLE_CLEARANCE = 0.5f; // extra gap past (player radius + r
 const float ROCKET_SPIN_SPEED = 9.0f; // how fast the star-polyhedron rocket spins about its travel axis, radians/sec (visual only)
 
 //MARK: Explosion Constants
-const int EXPLOSION_DAMAGE = 25;
-const float EXPLOSION_DAMAGE_RADIUS = 25.0f; // units
-const float EXPLOSION_MAX_RADIUS = EXPLOSION_DAMAGE_RADIUS * 1.0f; // units, visual radius of the explosion effect
-const float EXPLOSION_EXPANSION_RATE = 15.0f; // How quickly the explosion expands, in units/sec
-const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // fraction of damage applied as pushback force
-// FRIENDLY_FIRE is a match rule and lives in options.h; it is consumed here in
-// ApplyExplosionSplashDamage (collisions.cpp) via GameSpace::friendlyFire.
+// A rocket hit makes an explosion. It has three parts, and the constants below
+// follow the same order:
+//   1. GAMEPLAY - the damage. Decided once, on the first frame.
+//   2. THE FLASH - a short burst of light: the ring, the glow on walls and
+//      asteroids, and the platforms lighting up. Lasts EXPLOSION_FLASH_LIFETIME.
+//   3. THE DOTS - the cloud of streaks in the shooter's colour that shows how far
+//      the damage reached. Lasts EXPLOSION_DOT_LIFETIME.
+// Only part 1 runs on the server. The flash and the dots are drawn by each
+// client on its own clock (BlastFx in elements.h), so tuning them never needs a
+// server redeploy.
 
-// Shared client+server wire contract: the binary state packet quantizes
-// explosion `radius` into a single byte (nb::putQFrac/qFrac, netbin.h). This
-// is the scale's max - the worst case is EXPLOSION_DAMAGE_RADIUS (25) times
-// the OPTIONS "EXPLOSION RADIUS" slider's max (4x, see options.h).
-const float EXPLOSION_RADIUS_ENCODE_MAX = EXPLOSION_DAMAGE_RADIUS * 4.0f;
+// --- 1. Gameplay ---
+const int   EXPLOSION_DAMAGE = 25;            // damage at the centre; it falls off toward the edge
+const float EXPLOSION_DAMAGE_RADIUS = 25.0f;  // units. The EXPLOSION RADIUS slider multiplies this.
+const float EXPLOSION_PUSHBACK_FACTOR = 1.0f; // how hard a hit shoves you, as a fraction of the damage
+// FRIENDLY_FIRE is a match rule, so it lives in options.h.
+// Seconds the server keeps an explosion around after the hit. It only needs to
+// survive long enough to reach every client: ~6 network updates, so losing one
+// or two doesn't lose the explosion. Server-side - changing it needs a redeploy.
+const float EXPLOSION_NET_WINDOW = 0.1f;
 
-// Explosion visual (shapes.h DrawExplosion + the blast light in main.cpp's world
-// shader). Splash damage lands in FULL on the blast's first frame, out to
-// damageRadius, so the visual shows the whole zone at once and fades out rather
-// than growing. Everything runs off t = radius / maxRadius (0 -> 1 over the
-// blast's life), which networked clients get from the synced radius for free.
-const float EXPLOSION_FLASH_T = 0.08f;     // t span the zone ring stays near-white before easing to orange
-const float EXPLOSION_RING_FADE_T = 0.25f;  // t at which the fixed zone ring is gone - short, so the blast doesn't read as a hard border
-const int   EXPLOSION_RING_SEGMENTS = 64;  // line segments per ring
-// Shockwave: a 3D shell of spark streaks that rushes out, decelerates, and
-// keeps going past the damage radius while fading over the whole life - a blast
-// dispersing, not a wall. radius = R * REACH * (1 - (1 - t)^EASE); e.g. REACH 2 /
-// EASE 4 crosses the damage radius at t ~ 0.16 (~0.25 s) and ends at 2R.
-const float EXPLOSION_SHOCK_REACH = 1.2f;  // final shockwave radius, as a multiple of the damage radius
-const float EXPLOSION_SHOCK_EASE = 1.0f;   // ease-out power: higher = faster start, longer coast
-const int   EXPLOSION_DOT_COUNT = 360;     // streaks filling a blast of the DEFAULT radius (EXPLOSION_DAMAGE_RADIUS)
-// The streaks fill the whole sphere, and their number scales with its size so a
-// bigger blast reads as bigger: count = DOT_COUNT * (R / EXPLOSION_DAMAGE_RADIUS)^POWER.
-// POWER 3 keeps the density per volume constant; 2 grows more gently.
-const float EXPLOSION_DOT_SIZE_POWER = 2.0f;
-const int   EXPLOSION_DOT_MIN = 60;        // floor, so a tiny blast is still a cloud
-const int   EXPLOSION_DOT_MAX = 3000;      // ceiling (the slider's 4x radius at POWER 3 would ask for 64x)
-const float EXPLOSION_DOT_SPREAD = 0.15f;  // per-streak speed variation (+/-), so the shell thickens into a cloud
-const float EXPLOSION_DOT_BACK_ALPHA = 0.4f; // far-side streak alpha, as a fraction of the near side's
-// Where the streak shell starts, as a multiple of the damage radius: 0 = from
-// the blast centre, 1 = born on the damage radius and travelling outward from
-// it toward REACH (the per-streak spread applies to the travel only, so the
-// shell starts as a clean sphere). Keep it below EXPLOSION_SHOCK_REACH.
-const float EXPLOSION_STREAK_START = 1.0f;
-// The streak shell runs on its own clock (ShockBurst, elements.h), not the
-// explosion's: it lasts this many explosion lifetimes. The zone ring, blast light
-// and platform flash still follow the explosion itself.
-const float EXPLOSION_SHOCK_LIFE_SCALE = 2.0f;
-const float EXPLOSION_STREAK_TIME = 0.04f; // streak length = this many seconds of its current travel (motion blur); floored at SPARK_STREAK_LENGTH
-// Platforms inside a blast's damage radius flash (GameSpace::platformBlastFlash).
-// A platform is mostly translucent fill, which the blast light barely tints, so
-// a rocket hitting one needs its own feedback. Strength = time fade x proximity.
-const float PLATFORM_BLAST_FLASH_MIN = 0.35f;      // proximity floor, so a platform just inside the edge still flashes visibly
-const unsigned char PLATFORM_BLAST_FILL_ALPHA = 150; // fill alpha at full flash (normal fill is 40)
-// Blast light: geometry inside an active blast glows its colour, fading with t.
-// BLAST_LIGHT_MAX must match the array size in main.cpp's world shader.
-const int   BLAST_LIGHT_MAX = 8;           // blasts lit at once (the strongest win)
-const float BLAST_LIGHT_STRENGTH = 0.9f;   // additive glow at full strength, 0..1+
-const float BLAST_LIGHT_COLOR[3] = {1.0f, 0.55f, 0.1f}; // RGB 0..1, the explosion orange
+// --- Shared by the flash and the dots ---
+const float EXPLOSION_VFX_RADIUS = EXPLOSION_DAMAGE_RADIUS; // units. How big the effects are drawn. Keep at 1.0x so they show the real damage range.
+const Color EXPLOSION_COLOR = {255, 150, 0, 255}; // orange: the ring, and the dots if the shooter is unknown
+
+// --- 2. The flash ---
+// The ring, the glow and the platform flash all start at full strength and
+// fade out together over this many seconds. A bigger explosion doesn't last longer.
+const float EXPLOSION_FLASH_LIFETIME = 5.0f / 3.0f; 
+// How bright the flash is on the walls, platforms and anything else it lights,
+// compared with the dots, which always flash at full strength. 1 = the same as
+// the dots. 0.5 = half as bright, so the dots lead and the walls stay subtle.
+// 0 = no flash on the world at all.
+const float EXPLOSION_FLASH_WORLD_SCALE = 0.8f;
+// How the flash fades. 1 = steady fade to nothing. 2 = drops fast, then lingers
+// faintly. Higher = an even quicker pop. Used by the glow, the platforms and the dots' colour.
+const float EXPLOSION_FLASH_FADE_POWER = 1.0f;
+
+// The ring: a circle outlining the damage range.
+// The two _T values are fractions of EXPLOSION_FLASH_LIFETIME (0.25 = a quarter of it).
+const float EXPLOSION_RING_WHITE_T = 0.08f; // the ring starts white-hot and is fully orange by this point
+const float EXPLOSION_RING_FADE_T = 0.05f;  // the ring is gone by this point. Short, so it doesn't leave a hard outline.
+const int   EXPLOSION_RING_SEGMENTS = 64;   // straight pieces per ring; more = rounder
+
+// The glow (the "wall flash"): walls, asteroids and everything else inside the
+// damage range light up orange. Drawn by main.cpp's world shader.
+const float EXPLOSION_LIGHT_STRENGTH = 0.5f; // brightness at the start. 0 = off, 1 = strong, above 1 = blown out.
+const float EXPLOSION_LIGHT_COLOR[3] = {1.0f, 0.55f, 0.1f}; // red, green, blue, each 0..1. Also the colour every player's dots start in.
+const float EXPLOSION_LIGHT_EDGE_DIM = 0.0f; // how much dimmer the glow is at the edge of the range than at the centre. 0 = even all the way out.
+const float EXPLOSION_LIGHT_EDGE_SOFT = 0.1f; // the outer part of the range where the glow fades to nothing, as a fraction of the radius. 0 = a hard edge.
+// How the glow shows on the arena walls, which are a grid of lines.
+// true  = the grid lines light up only where they pass inside the blast's sphere,
+//         each piece evenly, brighter the closer its line passes to the centre.
+// false = a round patch of grid that fades out from the centre, like everything else the glow touches.
+const bool  EXPLOSION_LIGHT_WALL_LINES = true;
+const int   EXPLOSION_LIGHT_MAX = 8;          // how many explosions can glow at once (the newest win). Sizes an array in the shader.
+
+// The platform flash: platforms are mostly see-through, so the glow barely
+// shows on them. Instead, any platform inside the damage range lights up as a whole.
+const Color EXPLOSION_PLATFORM_COLOR = {255, 170, 60, 255}; // the colour a platform heats to (its alpha is ignored; see below)
+const unsigned char EXPLOSION_PLATFORM_FILL_ALPHA = 150; // how solid the platform's fill gets at the peak. A normal platform is 40; 255 = solid.
+const float EXPLOSION_PLATFORM_MIN = 0.35f; // platforms near the edge of the range still flash at least this much (0..1); closer ones flash harder
+
+// --- 3. The dots ---
+// Each dot is a short streak, 1 pixel wide, drawn on the graphics card
+// (shapes.h DrawBlastDots).
+
+// How many.
+const int   EXPLOSION_DOT_COUNT = 1248;     // dots in a default-sized explosion
+// Bigger explosions get more dots: count = DOT_COUNT x (size / default size)^POWER.
+// 2 = grows gently. 3 = keeps the dots just as crowded at any size.
+const float EXPLOSION_DOT_SIZE_POWER = 3.0f;
+const int   EXPLOSION_DOT_MIN = 60;         // never fewer than this, however small the explosion
+// Never more than this. It also sets the size of the dot memory on the graphics
+// card (48 bytes a dot, so 20000 is about 1 MB, set up once at start).
+const int   EXPLOSION_DOT_MAX = 20000;
+const int   EXPLOSION_DOT_CPU_MAX = 3000;   // the limit if the graphics-card path fails and the slow backup draws them instead
+
+// Where they sit, and how they move.
+// How the dots spread from the centre to the edge. 3 = evenly through the ball.
+// Higher = crowded at the edge, like a shell. Lower = crowded in the middle, thin at the edge.
+const float EXPLOSION_DOT_RADIAL_POWER = 3.0f;
+// Where the cloud's edge starts, as a multiple of the damage radius.
+// 1 = born filling the damage range. 0 = burst out from the centre.
+const float EXPLOSION_DOT_START = 1.0f;
+// The dots drift outward for their whole life: fast at first, slowing down,
+// but never stopping. Speeds are in damage radii per second, so a bigger
+// explosion's dots move faster and the cloud keeps its shape.
+const float EXPLOSION_DOT_SPEED = 0.0f;  // outward speed of the cloud's edge at the start
+const float EXPLOSION_DOT_COAST = 0.0f;  // the slow speed it settles to and keeps. 0 = the cloud does eventually stop.
+const float EXPLOSION_DOT_DRAG = 1.5f;   // how quickly it slows from SPEED to COAST. Higher = a sharper burst.
+const float EXPLOSION_DOT_SPREAD = 0.0f;   // each dot's speed differs by up to this much (+/-), so the edge is ragged, not a perfect sphere
+
+// How long.
+const float EXPLOSION_DOT_LIFETIME = EXPLOSION_FLASH_LIFETIME * 2.0f;  // seconds. The dots stay fully bright until the flash is over (EXPLOSION_FLASH_LIFETIME), then fade out over the rest of this.
+// A dot's streak is as long as the distance it travels in this many seconds, so
+// fast dots streak and slow ones shrink to a speck (never shorter than SPARK_STREAK_LENGTH).
+const float EXPLOSION_DOT_STREAK_TIME = 0.04f;
+
+// How they look.
+// Brightness, 0..1. Dots ADD their light together, so where many overlap they
+// turn white. Lower this if you raise the count and lose the player's colour.
+const float EXPLOSION_DOT_ALPHA = 1.0f;
+const float EXPLOSION_DOT_BACK_ALPHA = 0.15f; // dots on the far side of the ball are this much as bright, so the near side stands out
+// Colour over time: every player's dots start in the flash orange
+// (EXPLOSION_LIGHT_COLOR) and fade to the shooter's colour as the flash fades
+// (EXPLOSION_FLASH_LIFETIME, EXPLOSION_FLASH_FADE_POWER).
+// Heat: on top of that, dots are HOT_COLOR at the point of impact and cool to
+// that colour at the edge of the damage range. 1 = an even blend. Higher = a small
+// white core. Lower = the white reaches further out.
+const Color EXPLOSION_DOT_HOT_COLOR = {255, 240, 210, 255};
+const float EXPLOSION_DOT_HOT_POWER = 8.0f;
 
 //MARK: Fog Constants
 // Distance fog over the arena (main.cpp world shader; never the starfield). Eye

@@ -705,35 +705,25 @@ public:
     // ownership. Which player fired the rocket that caused this explosion?
     // Player id (0 = none), not a Player* - see Rocket::ownerId.
     uint32_t ownerId = 0;
-    // position and size
+    // The SIM's explosion: it deals its splash damage once, then lives only
+    // EXPLOSION_NET_WINDOW so the server can broadcast it a few times. Nothing
+    // visible reads it - each client spawns a BlastFx from it (see
+    // GameSpace::updateBlasts). `id` tells a re-broadcast from a new blast; only
+    // its low byte crosses the wire.
     Vector3 position;
-    float radius = 0.0f; // Current radius of the explosion effect
-    float maxRadius = EXPLOSION_MAX_RADIUS; // Maximum radius of the explosion effect
-    float expansionRate = EXPLOSION_EXPANSION_RATE; // How quickly the explosion expands, in units/sec
-    bool isActive = true; // Whether the explosion effect is still active (expanding or at max radius)
+    float age = 0.0f; // seconds since detonation
+    float vfxRadius = EXPLOSION_VFX_RADIUS; // the size its BlastFx is drawn at (slider-scaled at spawn)
 
     // splash damage - set from the originating Rocket's damage/damageRadius
     // at spawn time, since the rocket itself is destroyed/erased
     // before the explosion finishes its visual lifetime.
     int damage = EXPLOSION_DAMAGE; // Max damage dealt to anything within damageRadius of position
-    float damageRadius = EXPLOSION_DAMAGE_RADIUS; // Radius of the splash damage area (separate from visual maxRadius)
+    float damageRadius = EXPLOSION_DAMAGE_RADIUS; // Radius of the splash damage area (the drawn size is vfxRadius)
     bool hasAppliedDamage = false; // Splash damage applies once, at the moment of explosion creation - not every frame
     float pushbackFactor = EXPLOSION_PUSHBACK_FACTOR; // Factor to scale the pushback force applied to objects within the explosion radius
 
-    // appearance
-    Color color_outline = {255, 150, 0, 255};
-    Color color_fill = {255, 150, 0, 40}; // low alpha translucent fill for the "glowing vector glass" look
-
-    void update(float dt) {
-        if (isActive) {
-            radius += expansionRate * dt;
-            color_fill.a = (unsigned char)(40 * (1 - radius / maxRadius)); // Fade out fill color as explosion expands
-            if (radius >= maxRadius) {
-                radius = maxRadius;
-                isActive = false; // Explosion has reached its maximum size
-            }
-        }
-    }
+    void update(float dt) { age += dt; }
+    bool done() const { return age >= EXPLOSION_NET_WINDOW; }
 };
 
 //MARK: Spark (VFX particle)
@@ -764,18 +754,22 @@ public:
     float fade() const { return lifetime > 0.0f ? Clamp(1.0f - age / lifetime, 0.0f, 1.0f) : 0.0f; }
 };
 
-//MARK: ShockBurst (VFX)
-// The explosion's streak shell, on its own clock. An Explosion is erased the
-// moment its radius reaches maxRadius (locally and in every network packet), so
-// a shell meant to outlive it can't read the explosion's t. GameSpace spawns one
-// of these per newly seen explosion and ages it; visual only, never synced.
-struct ShockBurst {
+//MARK: BlastFx (VFX)
+// Everything visible about an explosion, on the client's own clock: the zone
+// ring, platform flash and blast light (t, over EXPLOSION_FLASH_LIFETIME) and the
+// streak dots (dotT, over EXPLOSION_DOT_LIFETIME). GameSpace::updateBlasts
+// spawns one per new Explosion and ages it; visual only, never synced.
+struct BlastFx {
+    uint32_t id = 0;         // the Explosion's id, to recognise its re-broadcasts
     Vector3 position{0, 0, 0};
-    float maxRadius = 0.0f;  // the explosion's damage/visual radius, R
-    Color color = {255, 150, 0, 255};
+    float radius = 0.0f;     // drawn size, R (the explosion's vfxRadius)
+    Color color = EXPLOSION_COLOR; // the shooter's
     float age = 0.0f;        // seconds
-    float life = 1.0f;       // seconds
-    float t() const { return life > 0.0f ? Clamp(age / life, 0.0f, 1.0f) : 1.0f; }
+    float t() const    { return Clamp(age / EXPLOSION_FLASH_LIFETIME, 0.0f, 1.0f); }
+    float dotT() const { return Clamp(age / EXPLOSION_DOT_LIFETIME, 0.0f, 1.0f); }
+    float flashFade() const { return powf(1.0f - t(), EXPLOSION_FLASH_FADE_POWER); } // 1 -> 0: the flash, at full strength (the dots)
+    float worldFlash() const { return flashFade() * EXPLOSION_FLASH_WORLD_SCALE; }      // the same, scaled for the walls, platforms and glow
+    bool done() const  { return age >= fmaxf(EXPLOSION_FLASH_LIFETIME, EXPLOSION_DOT_LIFETIME); }
 };
 
 //MARK: Spark emitter (asteroid / player elimination bursts)
