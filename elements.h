@@ -420,7 +420,8 @@ public:
     // The player is a SPHERE of this radius, centered on `position` (which is
     // both the collider center and the first-person camera eye). Used by the
     // renderer (shapes.h), spawn placement (gamespace.h), and all player
-    // collision checks (collisions.cpp). PLAYER_SCALE tunes it (constants.h).
+    // collision checks (collisions.cpp) except the rocket's proximity fuse,
+    // which uses ROCKET_PROXIMITY_RADIUS. PLAYER_SCALE tunes it (constants.h).
     float radius = PLAYER_RADIUS;
 
     //MARK: Player Appearance

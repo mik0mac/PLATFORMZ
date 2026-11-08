@@ -31,6 +31,7 @@ run identity    server/test/identity_test.cpp
 run scoreboard  server/test/scoreboard_test.cpp
 run reassembly  server/test/reassembly_test.cpp
 run grid_equiv  server/test/grid_equiv_test.cpp collisions.cpp
+run rocket_fuse server/test/rocket_fuse_test.cpp collisions.cpp
 run registry    server/test/registry_test.cpp
 
 printf '\n=== benches (informational, not pass/fail) ===\n'

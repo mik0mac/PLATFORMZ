@@ -165,7 +165,10 @@ struct BotController {
             std::mt19937 rng(players[i].id);
             std::uniform_real_distribution<float> jitter(-spread, spread);
             profiles[i].aggression = Clamp(difficulty + jitter(rng), 0.0f, 1.0f);
-            profiles[i].accuracy   = Clamp(difficulty + jitter(rng), 0.0f, 1.0f);
+            // Scaled, not clamped, so the whole BOT DIFFICULTY slider still moves
+            // accuracy and a crowd stays varied: difficulty 1 lands on
+            // BOT_MAX_ACCURACY instead of every bot pinning to it from 0.7 up.
+            profiles[i].accuracy   = Clamp(difficulty + jitter(rng), 0.0f, 1.0f) * BOT_MAX_ACCURACY;
         }
     }
 

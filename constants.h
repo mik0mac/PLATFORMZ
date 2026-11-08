@@ -346,6 +346,7 @@ const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; also the BOT DIF
 // in options.h; this one is the cap and stays.
 const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
 const float BOT_MAX_AIM_SPREAD = 0.50f;    // radians of aim error at accuracy=0 (0 at accuracy=1) 0.5 = ~28.6 degrees 0.3 = ~17.2 degrees
+const float BOT_MAX_ACCURACY = 0.8f;       // accuracy at the top of the difficulty range; the profile scales [0..1] into [0..this]
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
 const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 
@@ -354,7 +355,7 @@ const bool DISABLE_BOT_FIRE_PLAYER = false;     // If true, bots don't fire rock
 const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
 const float BOT_FIRERATE_MAX = PLAYER_FIRE_RATE; // max shots/sec for bots (lower = easier)
 const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bots (higher = harder)
-const float BOT_FIRST_FIRE_DELAY = 1.5f; // seconds into a match before a bot may fire at all (#160) - no volley on the first frame
+const float BOT_FIRST_FIRE_DELAY = 3.0f; // seconds into a match before a bot may fire at all (#160) - no volley on the first frame
 
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
 // screen's players panel to label bot-filled slots.
@@ -400,6 +401,13 @@ const Color ROCKET_OOB_OUTLINE_COLOR = {128, 128, 128, 0}; // Grey outline for r
 const Color ROCKET_OOB_FILL_COLOR = {128, 128, 128, 0}; // Grey fill for rockets that are out-of-bounds.
 
 const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a small sphere)
+// Proximity fuse: a rocket whose path passes within this of a player's center
+// (plus ROCKET_RADIUS) detonates at its closest approach, so a near-miss still
+// lands (CheckRocketPlayerCollisions; a direct hit still goes off at the body).
+// The blast's damage falls off with distance, so the fuse's edge is the weakest
+// a near-miss can be: at EXPLOSION RADIUS 1x a fuse of 5 does >= ~88%, 8 ~76%,
+// 10 ~68%. Not scaled by EXPLOSION RADIUS. Any size is safe - no grid limit.
+const float ROCKET_PROXIMITY_RADIUS = 6.0f;
 
 const float ROCKET_SPEED = 270.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.02f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
