@@ -11,6 +11,7 @@
 // that the headless stub, so the test builds with no raylib install.
 #include "raylib.h"
 #include "../profile.h"
+#include "../jukebox.h"   // NextTrackAfter - the rotation lastGameplayMusic resumes
 
 #include <cassert>
 #include <cstdio>
@@ -81,6 +82,7 @@ int main() {
     profile::Get().lastCustomOptions.speedBoost = 1.75f;
     profile::Get().lastCustomName    = "ROCKET PARTY";
     profile::Get().lastCustomPrivate = true;
+    profile::Get().lastGameplayMusic = MUSIC_PLACEHOLDER1;
     CHECK(profile::Save(), "Save() writes when something changed");
     CHECK(!profile::Save(), "Save() is a no-op when nothing changed");
 
@@ -105,6 +107,7 @@ int main() {
           "local and custom rules stay independent");
     CHECK(profile::Get().lastCustomName == "ROCKET PARTY", "match name survives a relaunch");
     CHECK(profile::Get().lastCustomPrivate,                "invite-only survives a relaunch");
+    CHECK(profile::Get().lastGameplayMusic == MUSIC_PLACEHOLDER1, "music rotation survives a relaunch");
 
     // --- garbage on disk ------------------------------------------------
     std::printf("\ncorrupt file\n");
@@ -120,7 +123,8 @@ int main() {
                     "\"options\":{\"players\":400,\"map\":\"MOON\",\"botDiff\":\"hard\","
                     "\"explRadius\":1000,\"fuelBurn\":-5},"
                     "\"customName\":\"BAD\\u0007NAME WAY TOO LONG TO FIT IN THE FIELD\","
-                    "\"customOptions\":{\"players\":-9,\"jetThrust\":50}}");
+                    "\"customOptions\":{\"players\":-9,\"jetThrust\":50},"
+                    "\"gameplayMusic\":99}");
     profile::Load();
     const profile::Profile& p = profile::Get();
     CHECK(p.name.size() <= PLAYER_NAME_MAX_CHARS,   "over-long name is clamped");
@@ -137,6 +141,7 @@ int main() {
     CHECK(p.lastCustomName.size() <= MATCH_NAME_MAX_CHARS, "over-long match name is clamped");
     CHECK(p.lastCustomName.find('\a') == std::string::npos,
           "control characters are stripped from the match name");
+    CHECK(p.lastGameplayMusic == MUSIC_COUNT,       "a cue id past the table reads as none");
 
     // --- a missing key is not a reset -----------------------------------
     std::printf("\npartial file (a future build's field set, minus keys)\n");
@@ -156,6 +161,20 @@ int main() {
     // CURRENT display name instead of freezing an old one.
     CHECK(profile::Get().lastCustomName.empty(),   "an unnamed room stays unnamed, not defaulted here");
     CHECK(!profile::Get().lastCustomPrivate,       "invite-only defaults to off");
+    CHECK(profile::Get().lastGameplayMusic == MUSIC_COUNT, "no music rotation yet defaults to none");
+
+    // --- the LOCAL music rotation it feeds ------------------------------
+    std::printf("\nmusic rotation\n");
+    {
+        const auto lists = MakeJukeboxes(); // shuffled - the rotation must not care
+        const Jukebox& gp = lists[SCREEN_GAMEPLAY];
+        CHECK(NextTrackAfter(gp, MUSIC_COUNT) == MUSIC_GAMEPLAY,        "a fresh profile starts on the first track");
+        CHECK(NextTrackAfter(gp, MUSIC_GAMEPLAY) == MUSIC_PLACEHOLDER1, "each match moves to the next track");
+        CHECK(NextTrackAfter(gp, MUSIC_PLACEHOLDER1) == MUSIC_PLACEHOLDER2, "...and the next");
+        CHECK(NextTrackAfter(gp, MUSIC_PLACEHOLDER2) == MUSIC_GAMEPLAY, "the last track wraps to the first");
+        CHECK(NextTrackAfter(lists[SCREEN_TITLE], MUSIC_TITLE) == MUSIC_TITLE, "a one-track screen repeats it");
+        CHECK(NextTrackAfter(Jukebox{}, MUSIC_COUNT) == MUSIC_COUNT,    "an empty list gives none");
+    }
 
     // --- ids do not repeat ----------------------------------------------
     std::printf("\nuuid uniqueness\n");
