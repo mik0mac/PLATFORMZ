@@ -33,7 +33,7 @@
 
 //MAKR: TESTING BOOL
 // true = matches start with one human player
-const bool PRESET_TESTING_MODE = true;
+const bool PRESET_TESTING_MODE = false;
 
 //MARK: Map sizes
 // Which arenas exist. Moved here from constants.h with the rule defaults below:
