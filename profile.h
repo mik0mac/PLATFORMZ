@@ -1,8 +1,9 @@
 // profile.h
 //
 // The player's persistent local profile: display name, a stable per-install
-// clientId, master volume, and two remembered rule sets - the last LOCAL match's
-// and the last CUSTOM room this player hosted. Written as small JSON to a
+// clientId, master volume, two remembered rule sets - the last LOCAL match's
+// and the last CUSTOM room this player hosted - and where the LOCAL gameplay
+// music rotation left off. Written as small JSON to a
 // per-user location the game owns.
 //
 // This is the project's ONLY persistence layer on the client side, and it is
@@ -60,7 +61,7 @@
 #include <cstdio>
 
 #include "options.h"   // MatchOptions
-#include "constants.h" // MASTER_VOLUME_MIN_DB, PLAYER_NAME_MAX_CHARS
+#include "constants.h" // MASTER_VOLUME_MIN_DB, PLAYER_NAME_MAX_CHARS, MUSIC_COUNT
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
@@ -117,6 +118,12 @@ struct Profile {
     bool        lastCustomPrivate = false;
     std::string lastServer;        // last server URL played on   (recorded; unread today)
     std::string lastMatch;         // last room code joined       (recorded; unread today)
+    // The gameplay cue the last LOCAL match played, so the next one - this launch
+    // or the next - moves on to the track after it (NextTrackAfter, jukebox.h).
+    // MUSIC_COUNT = none yet, which starts the rotation at its first track.
+    // Stored as the bare MusicId; if a later build reorders the enum this only
+    // shifts where the rotation resumes, so it needs no migration.
+    int         lastGameplayMusic = MUSIC_COUNT;
 };
 
 //MARK: UUID
@@ -346,6 +353,7 @@ inline std::string Serialize(const Profile& p) {
         {"lastMatch",  p.lastMatch},
         {"customName",    p.lastCustomName},
         {"customPrivate", p.lastCustomPrivate},
+        {"gameplayMusic", p.lastGameplayMusic},
         {"options",       OptionsToJson(p.lastLocalOptions)},
         {"customOptions", OptionsToJson(p.lastCustomOptions)},
     };
@@ -383,6 +391,7 @@ inline bool Deserialize(const std::string& raw, Profile& p) {
     str(j, "customName", p.lastCustomName);
     flt(j, "volumeDb",   p.masterVolumeDb);
     boolean(j, "customPrivate", p.lastCustomPrivate);
+    integer(j, "gameplayMusic", p.lastGameplayMusic);
 
     auto readOptions = [&](const char* key, MatchOptions& m) {
         auto oi = j.find(key);
@@ -446,6 +455,9 @@ inline void Sanitize(Profile& p) {
 
     SanitizeOptions(p.lastLocalOptions);
     SanitizeOptions(p.lastCustomOptions);
+
+    // Indexes musicCueTable, so anything that is not a real cue means "none".
+    if (p.lastGameplayMusic < 0 || p.lastGameplayMusic > MUSIC_COUNT) p.lastGameplayMusic = MUSIC_COUNT;
 }
 
 //MARK: The one instance

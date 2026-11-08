@@ -403,8 +403,8 @@ int main(int argc, char** argv) {
 
     // MARK: MUSIC FILES
     // Client side: one MusicCue per MusicId, in enum order. The client owns and
-    // loads every cue; *which* one plays is decided by the per-screen jukeboxes
-    // below (locally here; over the wire the server will send the MusicId).
+    // loads every cue; *which* one plays is decided below (online, by the room's
+    // server, which sends the MusicId; otherwise by the track lists in order).
     MusicCue musicCueTable[MUSIC_COUNT] = {
         // filename, volume, fadeInDuration, fadeOutDuration, loop, loopStart, loopEnd (-1.0f = end of file), num_of_loops (-1 = infinite)
         MusicCue("assets/music/title.ogg", DEFAULT_MUSIC_VOLUME, 0.4f, 1.0f, true, 0.0f, -1.0f, -1),         // MUSIC_TITLE
@@ -417,15 +417,21 @@ int main(int argc, char** argv) {
     // load all cues
     for (MusicCue& mc : musicCueTable) mc.load();
 
-    // One jukebox per screen holds that screen's MusicIds and picks the current
-    // one. Persists across games so multi-track screens cycle through their
-    // list. Drives the menu screens and LOCAL play; online, the match screens
-    // play the room's pick instead (netMusic, #174).
-    std::array<Jukebox, SCREEN_COUNT> jukebox = MakeJukeboxes();
+    // Which cues belong to which screen - the same lists the server's rooms use.
+    // Only read here, never advanced: no client-side jukebox. Online, the match
+    // screens play the room's pick (netMusic, #174); everything else walks its
+    // screen's list in order with NextTrackAfter. Gameplay is the one screen
+    // with more than one track, and the cue it last played lives in the profile,
+    // so every LOCAL match moves on to the next track and a relaunch picks up
+    // where the last session stopped.
+    const std::array<Jukebox, SCREEN_COUNT> trackLists = MakeJukeboxes();
 
     // The in-loop music switch only fires on a screen *transition*, and the
     // game boots already on the title screen - start the first cue by hand.
-    musicCueTable[jukebox[SCREEN_TITLE].getCurrentTrack()].fadeIn();
+    {
+        const MusicId id = NextTrackAfter(trackLists[SCREEN_TITLE], MUSIC_COUNT);
+        if (id != MUSIC_COUNT) musicCueTable[id].fadeIn();
+    }
 
 
     // MARK: RENDER TEXTURE 2D
@@ -1624,18 +1630,25 @@ int main(int argc, char** argv) {
             for (MusicCue& mc : musicCueTable) {
                 if (mc.isPlaying()) mc.fadeOut();
             }
-            // Advance the jukebox of the screen we're leaving so the next visit
-            // gets a fresh track (no-op for single-track screens), then fade in
-            // whatever the new screen's jukebox currently points at.
-            jukebox[screenIdOf(previousScreen)].next();
             const int sid = screenIdOf(screen);
-            MusicId id = jukebox[sid].getCurrentTrack();
+            MusicId id;
             // Online, the room picks (#174): every client in it gets the same
             // MusicId in its state packets. Taken only if it is one of THIS
             // screen's tracks, which covers the menu screens (the server sends
             // none in its lobby), an older server (none at all), and a packet
-            // that has already moved on to the next phase's cue.
-            if (networked && jukebox[sid].contains(netMusic)) id = netMusic;
+            // that has already moved on to the next phase's cue. The room's pick
+            // leaves the local rotation alone.
+            if (networked && trackLists[sid].contains(netMusic)) {
+                id = netMusic;
+            } else if (sid == SCREEN_GAMEPLAY) {
+                // The track after the one the last match played, then remember
+                // it - Autosave writes it out, so a relaunch carries on from here.
+                int& last = profile::Get().lastGameplayMusic;
+                id = NextTrackAfter(trackLists[sid], (MusicId)last);
+                if (id != MUSIC_COUNT) last = id;
+            } else {
+                id = NextTrackAfter(trackLists[sid], MUSIC_COUNT); // single-track screens
+            }
             if (id != MUSIC_COUNT) musicCueTable[id].fadeIn();
             previousScreen = screen;
         }

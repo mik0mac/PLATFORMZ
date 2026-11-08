@@ -16,9 +16,12 @@
 //
 // Online, the room on the server owns this choice (#174): each Match keeps its own
 // set from MakeJukeboxes() and sends the current MusicId in every state packet, so
-// everyone in the room hears the same cue. The client's own set still drives the
-// menu screens and LOCAL play, and is how it checks that a MusicId from the server
-// belongs to the screen it is on (contains()).
+// everyone in the room hears the same cue. The client does NOT run a jukebox: it
+// uses MakeJukeboxes() only as the list of which cues belong to which screen -
+// to check that a MusicId from the server belongs to the screen it is on
+// (contains()), and to walk that list in order for menus and LOCAL play
+// (NextTrackAfter), where the last gameplay cue is kept in the profile so the
+// rotation carries on across launches instead of reshuffling every time.
 
 class Jukebox {
 public:
@@ -110,4 +113,17 @@ inline std::array<Jukebox, SCREEN_COUNT> MakeJukeboxes() {
     jb[SCREEN_GAMEOVER].addTrack(MUSIC_GAMEOVER);
     for (Jukebox& j : jb) j.shuffle();
     return jb;
+}
+
+// The first of `list`'s tracks after `after`, in MusicId order, wrapping round.
+// after = MUSIC_COUNT (none yet) gives the first one; an empty list gives
+// MUSIC_COUNT. Order comes from the enum, not the list, so the shuffle above
+// does not touch it: this is the client's fixed LOCAL rotation.
+inline MusicId NextTrackAfter(const Jukebox& list, MusicId after) {
+    const int start = (after >= 0 && after < MUSIC_COUNT) ? after + 1 : 0;
+    for (int i = 0; i < MUSIC_COUNT; ++i) {
+        const MusicId id = (MusicId)((start + i) % MUSIC_COUNT);
+        if (list.contains(id)) return id;
+    }
+    return MUSIC_COUNT;
 }
