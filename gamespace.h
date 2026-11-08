@@ -529,8 +529,8 @@ public:
 
     // eye: the camera position, for view-dependent effects (explosion depth cueing).
     // Platform flash from blasts: 0, or for the strongest blast whose damage
-    // radius reaches the platform's box, time fade (1 - t)^2 x proximity (nearest
-    // point of the box to the blast, floored at PLATFORM_BLAST_FLASH_MIN). Derived
+    // radius reaches the platform's box, time fade (1 - t)^EXPLOSION_FLASH_FADE_POWER x proximity (nearest
+    // point of the box to the blast, floored at EXPLOSION_PLATFORM_MIN). Derived
     // from the blasts each frame - no state of its own.
     float platformBlastFlash(const Platform& platform) const {
         float best = 0.0f;
@@ -544,8 +544,8 @@ public:
             Vector3 nearest = Vector3Clamp(b.position, lo, hi);
             float d = Vector3Distance(nearest, b.position);
             if (d >= R) continue;
-            float proximity = std::max(PLATFORM_BLAST_FLASH_MIN, 1.0f - d / R);
-            best = std::max(best, (1.0f - t) * (1.0f - t) * proximity);
+            float proximity = std::max(EXPLOSION_PLATFORM_MIN, 1.0f - d / R);
+            best = std::max(best, b.worldFlash() * proximity);
         }
         return best;
     }
@@ -555,7 +555,7 @@ public:
         // its whole sphere out past the arena. Open space (walls off) has no edge.
         float clipHalf = wallsEnabled ? walls.halfSize : 0.0f;
         // ---- Pass 1: opaque wireframes (write depth) ----
-        if (wallsEnabled) DrawWalls(walls);
+        if (wallsEnabled) DrawWalls(walls, blasts);
         for (Platform& platform : platforms)   DrawPlatform(platform, PASS_WIRE, platformBlastFlash(platform));
         drawPlayersPass(localPlayerIndex, PASS_WIRE);
         for (Asteroid& asteroid : asteroids)   DrawAsteroid(asteroid, PASS_WIRE, asteroidBoundaryFade(asteroid));

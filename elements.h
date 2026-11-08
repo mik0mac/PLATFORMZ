@@ -756,7 +756,7 @@ public:
 
 //MARK: BlastFx (VFX)
 // Everything visible about an explosion, on the client's own clock: the zone
-// ring, platform flash and blast light (t, over EXPLOSION_LIFETIME) and the
+// ring, platform flash and blast light (t, over EXPLOSION_FLASH_LIFETIME) and the
 // streak dots (dotT, over EXPLOSION_DOT_LIFETIME). GameSpace::updateBlasts
 // spawns one per new Explosion and ages it; visual only, never synced.
 struct BlastFx {
@@ -765,9 +765,11 @@ struct BlastFx {
     float radius = 0.0f;     // drawn size, R (the explosion's vfxRadius)
     Color color = EXPLOSION_COLOR; // the shooter's
     float age = 0.0f;        // seconds
-    float t() const    { return Clamp(age / EXPLOSION_LIFETIME, 0.0f, 1.0f); }
+    float t() const    { return Clamp(age / EXPLOSION_FLASH_LIFETIME, 0.0f, 1.0f); }
     float dotT() const { return Clamp(age / EXPLOSION_DOT_LIFETIME, 0.0f, 1.0f); }
-    bool done() const  { return age >= fmaxf(EXPLOSION_LIFETIME, EXPLOSION_DOT_LIFETIME); }
+    float flashFade() const { return powf(1.0f - t(), EXPLOSION_FLASH_FADE_POWER); } // 1 -> 0: the flash, at full strength (the dots)
+    float worldFlash() const { return flashFade() * EXPLOSION_FLASH_WORLD_SCALE; }      // the same, scaled for the walls, platforms and glow
+    bool done() const  { return age >= fmaxf(EXPLOSION_FLASH_LIFETIME, EXPLOSION_DOT_LIFETIME); }
 };
 
 //MARK: Spark emitter (asteroid / player elimination bursts)

@@ -532,7 +532,9 @@ int main(int argc, char** argv) {
         "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
         "}\n";
     std::string worldFrag = std::string(worldFragHead) +
-        "#define BLAST_MAX " + std::to_string(BLAST_LIGHT_MAX) + "\n"
+        "#define BLAST_MAX " + std::to_string(EXPLOSION_LIGHT_MAX) + "\n"
+        "#define BLAST_EDGE_DIM " + std::to_string(EXPLOSION_LIGHT_EDGE_DIM) + "\n"
+        "#define BLAST_EDGE_SOFT " + std::to_string(EXPLOSION_LIGHT_EDGE_SOFT) + "\n"
         "IN vec2 fragTexCoord;\n"
         "IN vec4 fragColor;\n"
         "IN vec3 fragWorldPos;\n"
@@ -542,15 +544,19 @@ int main(int argc, char** argv) {
         "uniform vec4 blast[BLAST_MAX];\n"     // xyz centre, w radius (0 = unused)
         "uniform float blastGlow[BLAST_MAX];\n" // 0..1 strength, fades with the blast
         "uniform vec3 blastColor;\n"
+        "uniform float wallHalf;\n"            // walls lit per line on the CPU (EXPLOSION_LIGHT_WALL_LINES): no glow out here; 0 = glow everywhere
         "void main() {\n"
         "    vec4 c = TEX(texture0, fragTexCoord) * colDiffuse * fragColor;\n"
         "    float g = 0.0;\n"
+        "    vec3 a = abs(fragWorldPos);\n"
+        "    bool onWall = wallHalf > 0.0 && max(a.x, max(a.y, a.z)) >= wallHalf - 0.01;\n"
         "    for (int i = 0; i < BLAST_MAX; i++) {\n"
+        "        if (onWall) break;\n"
         "        float r = blast[i].w;\n"
         "        if (r <= 0.0) continue;\n"
         "        float d = distance(fragWorldPos, blast[i].xyz);\n"
-        // Lit to the edge of the damage zone (soft last 15%), a little hotter at the centre.
-        "        g += blastGlow[i] * (1.0 - smoothstep(0.85 * r, r, d)) * (1.0 - 0.4 * clamp(d / r, 0.0, 1.0));\n"
+        // Lit to the edge of the damage zone (soft over the last BLAST_EDGE_SOFT), dimmer toward it.
+        "        g += blastGlow[i] * (1.0 - smoothstep((1.0 - BLAST_EDGE_SOFT) * r, r, d)) * (1.0 - BLAST_EDGE_DIM * clamp(d / r, 0.0, 1.0));\n"
         "    }\n"
         "    c.rgb = min(c.rgb + blastColor * min(g, 1.0), vec3(1.0));\n"
         "    float depth = 1.0 / gl_FragCoord.w;\n"
@@ -559,16 +565,17 @@ int main(int argc, char** argv) {
         "}\n";
     Shader worldShader = LoadShaderFromMemory(worldVert.c_str(), worldFrag.c_str());
     const bool worldShaderOK = IsShaderValid(worldShader) && worldShader.id != rlGetShaderIdDefault();
-    int blastLoc = -1, blastGlowLoc = -1;
+    int blastLoc = -1, blastGlowLoc = -1, wallHalfLoc = -1;
     if (worldShaderOK) {
         float fogParams[3] = {FOG_START, FOG_END, FOG_MAX};
         SetShaderValue(worldShader, GetShaderLocation(worldShader, "fogParams"), fogParams, SHADER_UNIFORM_VEC3);
-        float blastColor[3] = {BLAST_LIGHT_COLOR[0] * BLAST_LIGHT_STRENGTH,
-                               BLAST_LIGHT_COLOR[1] * BLAST_LIGHT_STRENGTH,
-                               BLAST_LIGHT_COLOR[2] * BLAST_LIGHT_STRENGTH};
+        float blastColor[3] = {EXPLOSION_LIGHT_COLOR[0] * EXPLOSION_LIGHT_STRENGTH,
+                               EXPLOSION_LIGHT_COLOR[1] * EXPLOSION_LIGHT_STRENGTH,
+                               EXPLOSION_LIGHT_COLOR[2] * EXPLOSION_LIGHT_STRENGTH};
         SetShaderValue(worldShader, GetShaderLocation(worldShader, "blastColor"), blastColor, SHADER_UNIFORM_VEC3);
         blastLoc     = GetShaderLocation(worldShader, "blast");
         blastGlowLoc = GetShaderLocation(worldShader, "blastGlow");
+        wallHalfLoc  = GetShaderLocation(worldShader, "wallHalf");
     }
 
     // Game state lives here, declared once, mutated every frame
@@ -2840,14 +2847,14 @@ int main(int argc, char** argv) {
                 // off inside - everything after paints straight over them.
                 DrawStarfield(sceneCam.position, (float)GetTime());
                 if (worldShaderOK) {
-                    // Blast light: the newest BLAST_LIGHT_MAX blasts still lit
+                    // Blast light: the newest EXPLOSION_LIGHT_MAX blasts still lit
                     // (spawned in order, so newest last), glow fading with the
                     // same t DrawBlastRing uses.
-                    float blast[BLAST_LIGHT_MAX * 4] = {};
-                    float blastGlow[BLAST_LIGHT_MAX] = {};
+                    float blast[EXPLOSION_LIGHT_MAX * 4] = {};
+                    float blastGlow[EXPLOSION_LIGHT_MAX] = {};
                     const auto& blasts = gameSpace.getBlasts();
                     int n = 0;
-                    for (int i = (int)blasts.size() - 1; i >= 0 && n < BLAST_LIGHT_MAX; --i) {
+                    for (int i = (int)blasts.size() - 1; i >= 0 && n < EXPLOSION_LIGHT_MAX; --i) {
                         const BlastFx& b = blasts[i];
                         float t = b.t();
                         if (b.radius <= 0.0f || t >= 1.0f) continue;
@@ -2855,11 +2862,13 @@ int main(int argc, char** argv) {
                         blast[n * 4 + 1] = b.position.y;
                         blast[n * 4 + 2] = b.position.z;
                         blast[n * 4 + 3] = b.radius;
-                        blastGlow[n] = (1.0f - t) * (1.0f - t);
+                        blastGlow[n] = b.worldFlash();
                         ++n;
                     }
-                    SetShaderValueV(worldShader, blastLoc, blast, SHADER_UNIFORM_VEC4, BLAST_LIGHT_MAX);
-                    SetShaderValueV(worldShader, blastGlowLoc, blastGlow, SHADER_UNIFORM_FLOAT, BLAST_LIGHT_MAX);
+                    SetShaderValueV(worldShader, blastLoc, blast, SHADER_UNIFORM_VEC4, EXPLOSION_LIGHT_MAX);
+                    SetShaderValueV(worldShader, blastGlowLoc, blastGlow, SHADER_UNIFORM_FLOAT, EXPLOSION_LIGHT_MAX);
+                    float wallHalf = (EXPLOSION_LIGHT_WALL_LINES && gameSpace.wallsEnabled) ? gameSpace.getWalls().halfSize : 0.0f;
+                    SetShaderValue(worldShader, wallHalfLoc, &wallHalf, SHADER_UNIFORM_FLOAT);
                     BeginShaderMode(worldShader);
                 }
                 gameSpace.draw(localIndex, sceneCam.position); // skip drawing our own body (first-person)

@@ -168,7 +168,7 @@ bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 box
 // avoid repeated code in CheckRocketAsteroidCollisions, CheckRocketPlatformCollisions, and CheckRocketWallCollisions
 // space.explosionRadiusScale is the OPTIONS EXPLOSION RADIUS multiplier: it
 // scales the damage radius and the blast's drawn size together. It never
-// changes how long the blast's VFX last (EXPLOSION_LIFETIME). Damage per hit is
+// changes how long the blast's VFX last (EXPLOSION_FLASH_LIFETIME). Damage per hit is
 // unchanged; falloff just reaches farther.
 Explosion spawnExplosion(GameSpace& space, Vector3 position, uint32_t ownerId) {
     Explosion explosion;
