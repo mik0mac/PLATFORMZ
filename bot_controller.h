@@ -67,8 +67,10 @@ struct BotController {
         float rate = (BOT_FIRERATE_MAX - BOT_FIRERATE_MIN) * bb.profile.aggression + BOT_FIRERATE_MIN; // shots/sec
         return 1.0f / rate; // seconds between shots (the Cooldown period)
     }
-    Cooldown<Player>               rateLimitedFireAtPlayer{ LATCH_FIRE_PLAYER_CD, botFirePeriod, &fireAtPlayer };
-    Cooldown<Player>               rateLimitedAttackAsteriod { LATCH_ATTACK_AST_CD, botFirePeriod, &attackAsteroid };
+    // FireCooldown, not Cooldown: between shots the bot keeps aiming, it just
+    // doesn't fire.
+    FireCooldown<Player>           rateLimitedFireAtPlayer{ LATCH_FIRE_PLAYER_CD, botFirePeriod, &fireAtPlayer };
+    FireCooldown<Player>           rateLimitedAttackAsteriod { LATCH_ATTACK_AST_CD, botFirePeriod, &attackAsteroid };
     // A more aggressive bot has a high chance of ignoring the low-health retreat
     // and fighting on. Per-bot because the tree nodes are shared across all bots.
     static float defenseProbability(Blackboard<Player>& bb) {
@@ -165,10 +167,7 @@ struct BotController {
             std::mt19937 rng(players[i].id);
             std::uniform_real_distribution<float> jitter(-spread, spread);
             profiles[i].aggression = Clamp(difficulty + jitter(rng), 0.0f, 1.0f);
-            // Scaled, not clamped, so the whole BOT DIFFICULTY slider still moves
-            // accuracy and a crowd stays varied: difficulty 1 lands on
-            // BOT_MAX_ACCURACY instead of every bot pinning to it from 0.7 up.
-            profiles[i].accuracy   = Clamp(difficulty + jitter(rng), 0.0f, 1.0f) * BOT_MAX_ACCURACY;
+            profiles[i].accuracy   = Clamp(difficulty + jitter(rng), 0.0f, 1.0f);
         }
     }
 

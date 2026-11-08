@@ -335,18 +335,23 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
 // same ApplyPlayerInput() path a human/network player uses (see input.h).
 const float BOT_REROLL_MIN_SECONDS = 1.5f; // min time before a bot re-rolls its heading/movement
 const float BOT_REROLL_MAX_SECONDS = 4.0f; // max time before a bot re-rolls its heading/movement
-const float BOT_TURN_RATE = 2.0f; // max yaw the bot turns toward its target heading, radians/sec
+// How fast a bot turns its aim (yaw and pitch), radians/sec, picked by its
+// accuracy: MIN at accuracy 0, MAX at 1. This is the ONLY thing accuracy does -
+// bot aim has no random error, and a bot fires only once its aim would actually
+// hit (onTarget, bot_logic.h), so a slower turn means a slower shot, never a
+// wilder one. The default difficulty (0.2) lands on 2.0, the old fixed rate.
+const float BOT_TURN_RATE_MIN = 1.0f;
+const float BOT_TURN_RATE_MAX = 6.0f;
 
 // Difficulty & personality (behaviour-tree bots, bot_logic.h). BOT_DIFFICULTY is
 // the center of the personality distribution [0..1]; each bot's aggression &
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
-// with bot count (so a lone bot ~= difficulty, a crowd is varied).
+// with bot count (so a lone bot ~= difficulty, a crowd is varied). Accuracy sets
+// turn speed (BOT_TURN_RATE_MIN/MAX above).
 const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; also the BOT DIFFICULTY slider MAX / hard cap
 // The slider's STARTING value, BOT_DIFFICULTY_DEFAULT, is a match rule and lives
 // in options.h; this one is the cap and stays.
 const float BOT_PERSONALITY_SPREAD = 0.2f; // max +/- jitter around difficulty (at high bot counts)
-const float BOT_MAX_AIM_SPREAD = 0.50f;    // radians of aim error at accuracy=0 (0 at accuracy=1) 0.5 = ~28.6 degrees 0.3 = ~17.2 degrees
-const float BOT_MAX_ACCURACY = 0.8f;       // accuracy at the top of the difficulty range; the profile scales [0..1] into [0..this]
 const float BOT_TICK_JITTER_MIN = 0.8f;    // decision-interval multiplier lo (LatchedSelector)
 const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 

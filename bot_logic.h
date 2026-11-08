@@ -5,7 +5,7 @@
 #include "gamespace.h" // GameSpace, Player, Rocket
 #include "input.h"     // PlayerInput, ApplyPlayerInput — bots feed the same path as humans
 #include "constants.h"
-#include "random.h"    // RandomFloat — per-frame aim jitter
+#include "random.h"    // RandomFloat — decision-interval jitter
 
 //MARK: CONSTANTS
 const float BOT_TICK_TIME = 1.0f;          // seconds between bot decision ticks.
@@ -175,17 +175,48 @@ inline const Platform* platformBlockingSegment(Vector3 from, Vector3 to,
     return blocker;
 }
 
+// The direction to fire so a rocket at projectileSpeed meets the target, assuming
+// the target holds its velocity: the smallest t > 0 with
+// |target.position + target.velocity*t - shooter.position| == projectileSpeed*t.
+// Recomputed every frame, since both ends move. A target too fast to catch
+// (no positive root) gets aimed at where it is now.
 template <typename TargetT>
-std::tuple<bool, Vector3> onTarget (const TargetT& target, Player& shooter, float threshold = 0.0f, float projectileSpeed = ROCKET_SPEED, float time_window = BOT_TICK_TIME) {
-    Vector3 shooterAimDirection = shooter.Forward(); // Get the shooter's forward direction
-    Vector3 newAimDirection = calculateLeadAim(target, shooter, projectileSpeed);
-    if (vec3ApproxEqual(shooterAimDirection, newAimDirection)) {
-        Vector3 targetFuturePosition = predictObjectFuturePosition(target.position, target.velocity, time_window);
-        newAimDirection = Vector3Subtract(targetFuturePosition, shooter.position);
-        newAimDirection = Vector3Normalize(newAimDirection);
-        return {false, newAimDirection}; // Not on target, but provide the new aim direction to lead the target.
+Vector3 interceptDirection(const TargetT& target, const Player& shooter, float projectileSpeed) {
+    Vector3 rel = Vector3Subtract(target.position, shooter.position);
+    Vector3 v = target.velocity;
+    float a = Vector3DotProduct(v, v) - projectileSpeed * projectileSpeed;
+    float b = 2.0f * Vector3DotProduct(rel, v);
+    float c = Vector3DotProduct(rel, rel);
+    float t = -1.0f;
+    if (fabsf(a) < 1e-6f) {
+        if (b < 0.0f) t = -c / b;                     // target exactly as fast as the rocket
+    } else {
+        float disc = b * b - 4.0f * a * c;
+        if (disc >= 0.0f) {
+            float s = sqrtf(disc);
+            float t1 = (-b - s) / (2.0f * a), t2 = (-b + s) / (2.0f * a);
+            if (t1 > t2) std::swap(t1, t2);
+            t = t1 > 0.0f ? t1 : t2;                  // earliest meeting still ahead
+        }
     }
-    return {true, newAimDirection}; // On target at new aim.
+    Vector3 aimPoint = t > 0.0f ? Vector3Add(rel, Vector3Scale(v, t)) : rel;
+    if (Vector3LengthSqr(aimPoint) < 1e-6f) return shooter.Forward();
+    return Vector3Normalize(aimPoint);
+}
+
+// {would a rocket fired along the bot's CURRENT aim hit the target's body?,
+//  the direction to steer toward}. The hit test is the fire gate - the same
+// intersection calculateLeadAim runs, asked directly (inferring it from
+// calculateLeadAim's return would read a dead-centre aim, where the lead equals
+// the current forward, as a miss). The steer direction is always the true
+// intercept, so a bot settles straight onto the shot instead of sweeping it.
+template <typename TargetT>
+std::tuple<bool, Vector3> onTarget (const TargetT& target, Player& shooter, float projectileSpeed = ROCKET_SPEED) {
+    Vector3 rocketVelocity = Vector3Scale(shooter.Forward(), projectileSpeed);
+    float r = targetRadius(target);
+    bool hits = calculateIntersectionWithAccuracy(shooter.position, rocketVelocity,
+                                                  target.position, target.velocity, {r, r, r}) >= 0.0f;
+    return {hits, interceptDirection(target, shooter, projectileSpeed)};
 }
 
 
@@ -210,7 +241,7 @@ struct BotDecision {
 // the shared tree nodes.
 struct BotProfile {
     float aggression = 0.6f; // 0 timid/kites .. 1 reckless/in-your-face
-    float accuracy   = 0.6f; // 0 sprays wildly .. 1 snaps on target
+    float accuracy   = 0.6f; // 0 slow to turn onto a shot .. 1 snaps on (BOT_TURN_RATE_MIN/MAX)
 };
 
 //MARK: blackboard
@@ -502,17 +533,16 @@ public:
 };
 
 // Steers the bot's yaw AND pitch one clamped step each toward aimDir (a 3D
-// direction), writing out.lookDelta. Adds a personality-scaled random spread so
-// low-accuracy bots don't track perfectly (accuracy 1 -> no spread, accuracy 0
-// -> +/-BOT_MAX_AIM_SPREAD, applied to both axes). Shared by FireAtPlayer and
-// AttackAsteroid.
+// direction), writing out.lookDelta. No random error: the step size is the
+// whole of what accuracy does (BOT_TURN_RATE_MIN at 0 .. _MAX at 1). Shared by
+// FireAtPlayer and AttackAsteroid.
 template <typename TargetT>
 inline void steerAimToward(Blackboard<TargetT>& bb, Vector3 aimDir) {
-    float maxStep = BOT_TURN_RATE * bb.dt;
+    float turnRate = Lerp(BOT_TURN_RATE_MIN, BOT_TURN_RATE_MAX, bb.profile.accuracy);
+    float maxStep = turnRate * bb.dt;
 
     // yaw: horizontal heading from the x/z components
     float desiredYaw = atan2f(aimDir.z, aimDir.x);
-    desiredYaw += RandomFloat(-1.0f, 1.0f) * BOT_MAX_AIM_SPREAD * (1.0f - bb.profile.accuracy);
     float yawError = desiredYaw - bb.bot.yaw;
     while (yawError > PI) yawError -= 2.0f * PI;
     while (yawError < -PI) yawError += 2.0f * PI;
@@ -522,7 +552,6 @@ inline void steerAimToward(Blackboard<TargetT>& bb, Vector3 aimDir) {
     // pitch: aimDir is normalized, so aimDir.y == sin(desiredPitch). Pitch is
     // bounded (not cyclic), so no PI-wrap; clamp to the same limit updateLook enforces.
     float desiredPitch = asinf(Clamp(aimDir.y, -1.0f, 1.0f));
-    desiredPitch += RandomFloat(-1.0f, 1.0f) * BOT_MAX_AIM_SPREAD * (1.0f - bb.profile.accuracy);
     desiredPitch = Clamp(desiredPitch, -bb.bot.pitchLimit, bb.bot.pitchLimit);
     float pitchError = desiredPitch - bb.bot.pitch;
     float pitchStep  = Clamp(pitchError, -maxStep, maxStep);
@@ -572,7 +601,7 @@ public:
         // so a more aggressive bot will continue to fire at the player longer with lower health than a timid bot.
         if (bb.bot.health < BOT_LOW_HEALTH_THRESHOLD * (1.0f - 0.8f * bb.profile.aggression)) return Status::Failure;
 
-        auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot, 0.0f, bb.rocketSpeed);
+        auto [isOnTarget, aimDir] = onTarget(bb.target, bb.bot, bb.rocketSpeed);
         steerAimToward(bb, aimDir);
 
         if (isOnTarget) {
@@ -608,7 +637,7 @@ public:
 
         //find aiming scheme to lead the asteroid
         if (closestAsteroid) {
-            auto [isOnTarget, aimDir] = onTarget(*closestAsteroid, bb.bot, 0.0f, bb.rocketSpeed);
+            auto [isOnTarget, aimDir] = onTarget(*closestAsteroid, bb.bot, bb.rocketSpeed);
             steerAimToward(bb, aimDir);
             if (isOnTarget) {
                 if (!DISABLE_BOT_FIRE_ASTEROIDS) bb.out.fire = true;
@@ -1398,6 +1427,35 @@ public:
         if (s.timer < cd) return Status::Failure;                  // still cooling down
         Status st = child->tick(bb);
         if (st == Status::Success) s.timer = 0.0f;                 // restart cooldown on completion
+        return st;
+    }
+};
+
+// Cooldown for a fire node (FireAtPlayer, AttackAsteroid): the same per-bot
+// period, but while cooling it still ticks the child - so the bot keeps steering
+// onto its next shot between shots instead of freezing its aim (or swinging to
+// another target) and starting each shot from a stale angle - and only holds the
+// trigger. If the child itself fails (no shot: blocked, no ammo, low health) it
+// fails as before, so the parent selector still falls through.
+template <typename TargetT>
+class FireCooldown : public Node<TargetT> {
+    int stateId; float (*periodFn)(Blackboard<TargetT>&); Node<TargetT>* child;
+public:
+    FireCooldown(int id, float (*period)(Blackboard<TargetT>&), Node<TargetT>* c)
+        : stateId(id), periodFn(period), child(c) {}
+    Status tick(Blackboard<TargetT>& bb) override {
+        BotDecision& s = bb.decisions[stateId];
+        float cd = periodFn(bb);
+        if (s.activeBranch < 0) { s.activeBranch = 0; s.timer = cd; } // fresh: ready now
+        s.timer += bb.dt;
+        if (s.timer < cd) {                                        // cooling: aim, don't fire
+            bool fireBefore = bb.out.fire;
+            Status st = child->tick(bb);
+            bb.out.fire = fireBefore;
+            return st == Status::Failure ? Status::Failure : Status::Running;
+        }
+        Status st = child->tick(bb);
+        if (st == Status::Success) s.timer = 0.0f;                 // fired: restart the cooldown
         return st;
     }
 };
