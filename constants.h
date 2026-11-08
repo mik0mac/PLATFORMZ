@@ -336,18 +336,29 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
 const float BOT_REROLL_MIN_SECONDS = 1.5f; // min time before a bot re-rolls its heading/movement
 const float BOT_REROLL_MAX_SECONDS = 4.0f; // max time before a bot re-rolls its heading/movement
 // How fast a bot turns its aim (yaw and pitch), radians/sec, picked by its
-// accuracy: MIN at accuracy 0, MAX at 1. This is the ONLY thing accuracy does -
-// bot aim has no random error, and a bot fires only once its aim would actually
-// hit (onTarget, bot_logic.h), so a slower turn means a slower shot, never a
-// wilder one. The default difficulty (0.2) lands on 2.0, the old fixed rate.
+// accuracy: MIN at accuracy 0, MAX at 1. Bot AIM has no random error, and a bot
+// fires only once its aim would actually hit (onTarget, bot_logic.h), so a
+// slower turn means a slower shot, never a wilder one - the miss lever is the
+// rocket's spread (BOT_FIRE_SPREAD_* below). The default difficulty (0.2) lands
+// on 2.0, the old fixed rate.
 const float BOT_TURN_RATE_MIN = 1.0f;
 const float BOT_TURN_RATE_MAX = 6.0f;
+// How far a bot's rocket strays from where it aimed, radians (the half-angle of
+// the cone it leaves in; each shot picks a random direction inside it). Also
+// picked by accuracy: MAX at accuracy 0, MIN at 1. Player shots only - asteroid
+// shots fly true, so a weak bot isn't also cut off from health bonuses.
+// A rocket off by an angle passes about distance*angle from the target and still
+// fuses inside ROCKET_PROXIMITY_RADIUS, so the same spread misses at range and
+// barely matters up close: a clean miss at 60 units needs ~0.09 (5 deg), at 20
+// units ~0.28 (16 deg).
+const float BOT_FIRE_SPREAD_MIN = 0.06f; // ~3.4 deg
+const float BOT_FIRE_SPREAD_MAX = 0.14f; // ~8 deg
 
 // Difficulty & personality (behaviour-tree bots, bot_logic.h). BOT_DIFFICULTY is
 // the center of the personality distribution [0..1]; each bot's aggression &
 // accuracy are seeded from its player.id as difficulty +/- a spread that widens
 // with bot count (so a lone bot ~= difficulty, a crowd is varied). Accuracy sets
-// turn speed (BOT_TURN_RATE_MIN/MAX above).
+// turn speed (BOT_TURN_RATE_MIN/MAX above) and rocket spread (BOT_FIRE_SPREAD_*).
 const float BOT_DIFFICULTY = 1.0f;         // 0 easy .. 1 hard; also the BOT DIFFICULTY slider MAX / hard cap
 // The slider's STARTING value, BOT_DIFFICULTY_DEFAULT, is a match rule and lives
 // in options.h; this one is the cap and stays.

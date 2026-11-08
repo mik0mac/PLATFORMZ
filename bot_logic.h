@@ -241,7 +241,7 @@ struct BotDecision {
 // the shared tree nodes.
 struct BotProfile {
     float aggression = 0.6f; // 0 timid/kites .. 1 reckless/in-your-face
-    float accuracy   = 0.6f; // 0 slow to turn onto a shot .. 1 snaps on (BOT_TURN_RATE_MIN/MAX)
+    float accuracy   = 0.6f; // 0 slow to aim, wide rocket spread .. 1 snaps on, tight (BOT_TURN_RATE_*, BOT_FIRE_SPREAD_*)
 };
 
 //MARK: blackboard
@@ -533,9 +533,9 @@ public:
 };
 
 // Steers the bot's yaw AND pitch one clamped step each toward aimDir (a 3D
-// direction), writing out.lookDelta. No random error: the step size is the
-// whole of what accuracy does (BOT_TURN_RATE_MIN at 0 .. _MAX at 1). Shared by
-// FireAtPlayer and AttackAsteroid.
+// direction), writing out.lookDelta. No random error: accuracy only sets the
+// step size (BOT_TURN_RATE_MIN at 0 .. _MAX at 1); misses come from the rocket's
+// spread (FireAtPlayer). Shared by FireAtPlayer and AttackAsteroid.
 template <typename TargetT>
 inline void steerAimToward(Blackboard<TargetT>& bb, Vector3 aimDir) {
     float turnRate = Lerp(BOT_TURN_RATE_MIN, BOT_TURN_RATE_MAX, bb.profile.accuracy);
@@ -606,6 +606,8 @@ public:
 
         if (isOnTarget) {
             if (!DISABLE_BOT_FIRE_PLAYER) bb.out.fire = true;
+            // The miss lever: the bot lined up a true shot, the rocket strays.
+            bb.out.fireSpread = Lerp(BOT_FIRE_SPREAD_MAX, BOT_FIRE_SPREAD_MIN, bb.profile.accuracy);
             return Status::Success;
         }
         return Status::Running;

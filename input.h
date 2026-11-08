@@ -25,7 +25,25 @@ struct PlayerInput {
     bool jetpack = false;      // holding jump/up
     bool earthGravity = false; // holding the stronger-gravity key
     bool fire = false;         // fire pressed THIS frame (single-shot)
+    // Bots only (FireAtPlayer sets it): the rocket leaves in a random direction
+    // within this many radians of the aim. Never on the wire - the server builds
+    // a remote player's PlayerInput field by field, so a human's is always 0.
+    float fireSpread = 0.0f;
 };
+
+// A random direction within `spread` radians of `aim` (unit), uniform over the
+// cone's cross-section so misses don't bunch up along any axis.
+inline Vector3 SpreadDirection(Vector3 aim, float spread) {
+    if (spread <= 0.0f) return aim;
+    // Any axis not parallel to aim gives a perpendicular basis (u, v).
+    Vector3 helper = fabsf(aim.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+    Vector3 u = Vector3Normalize(Vector3CrossProduct(aim, helper));
+    Vector3 v = Vector3CrossProduct(aim, u);
+    float angle = spread * sqrtf(RandomFloat(0.0f, 1.0f)); // sqrt: even over the disc, not bunched at the centre
+    float around = RandomFloat(0.0f, 2.0f * PI);
+    Vector3 off = Vector3Add(Vector3Scale(u, cosf(around)), Vector3Scale(v, sinf(around)));
+    return Vector3Normalize(Vector3Add(Vector3Scale(aim, cosf(angle)), Vector3Scale(off, sinf(angle))));
+}
 
 //MARK: Gather
 // Sample the local input devices into a PlayerInput. Swap this out (or feed a
@@ -124,7 +142,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
 
             rocket.ownerId = player.id; // track which player fired this rocket
             Vector3 eyePos = player.position; // eye is at the sphere center
-            Vector3 aim = player.Forward();
+            Vector3 aim = SpreadDirection(player.Forward(), in.fireSpread); // bots only; 0 for humans
             // Push the muzzle past the body surface so the rocket spawns fully
             // clear of the player: player radius + rocket radius + a small gap.
             // Tied to player.radius so it scales with PLAYER_SCALE.

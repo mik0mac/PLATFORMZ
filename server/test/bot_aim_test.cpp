@@ -1,11 +1,12 @@
 // Does a bot get onto a firing solution, and does accuracy decide how fast?
 //
-// Bot aim has no random error: accuracy only sets turn speed
-// (BOT_TURN_RATE_MIN/MAX), and the bot fires only once its current aim would
-// hit (onTarget). So what can regress quietly is the TIME to a shot - a steer
-// toward the wrong point, a turn rate that stopped scaling, or a dead-centre aim
-// read as a miss (the old onTarget did that). None of it shows in a probe
-// transcript; this times it against a crossing target.
+// Bot aim has no random error: accuracy sets turn speed (BOT_TURN_RATE_MIN/MAX),
+// and the bot fires only once its current aim would hit (onTarget). So what can
+// regress quietly is the TIME to a shot - a steer toward the wrong point, a turn
+// rate that stopped scaling, or a dead-centre aim read as a miss (the old
+// onTarget did that). None of it shows in a probe transcript; this times it
+// against a crossing target. Misses come from the rocket's spread
+// (BOT_FIRE_SPREAD_MIN/MAX), checked at the bottom.
 //
 //   g++ -std=c++17 -O2 -I server -I . -DPLATFORMZ_SERVER \
 //       server/test/bot_aim_test.cpp collisions.cpp -o /tmp/ba && /tmp/ba
@@ -83,6 +84,45 @@ int main() {
     // Fast rockets (CLASSIC HYPED: 2x rocket speed * 1.5x speed boost) need less lead.
     float hyped = TimeToSolution(1.0f, PI / 2, ROCKET_SPEED * 3.0f);
     check(hyped > 0 && hyped < (PI / 2) / BOT_TURN_RATE_MAX + 0.15f, "...and with HYPED rocket speed");
+
+    // Rocket spread: every direction inside the cone, and the cone actually used.
+    {
+        Vector3 aim = Vector3Normalize({1, 0.3f, -0.4f});
+        float spread = 0.1f, widest = 0.0f;
+        bool inside = true;
+        for (int i = 0; i < 20000; i++) {
+            float a = acosf(Clamp(Vector3DotProduct(aim, SpreadDirection(aim, spread)), -1.0f, 1.0f));
+            if (a > spread + 1e-3f) inside = false;
+            widest = std::max(widest, a);
+        }
+        check(inside, "every spread shot stays inside the cone");
+        check(widest > 0.95f * spread, "...and reaches its edge");
+        Vector3 up = {0, 1, 0};
+        check(Vector3Distance(SpreadDirection(up, 0.0f), up) < 1e-6f, "zero spread fires straight (humans)");
+        check(fabsf(Vector3Length(SpreadDirection(up, 0.1f)) - 1.0f) < 1e-4f, "straight-up aim still gives a unit direction");
+    }
+
+    // FireAtPlayer hands the spread over by accuracy; humans' default stays 0.
+    {
+        check(PlayerInput{}.fireSpread == 0.0f, "a human's PlayerInput has no spread");
+        auto spreadAt = [](float accuracy) {
+            Player bot;    bot.position = {0, 0, 0}; bot.yaw = 0.0f; bot.pitch = 0.0f;
+            Player target; target.position = {60, 0, 0};
+            std::vector<Player> players{bot, target};
+            std::vector<Platform> platforms; std::vector<Asteroid> asteroids;
+            Walls walls; std::vector<BotDecision> decisions;
+            BotProfile profile; profile.accuracy = accuracy;
+            PlayerInput out{};
+            Blackboard<Player> bb{bot, target, players, platforms, asteroids, walls, out, DT,
+                                  decisions, profile, ROCKET_SPEED, EXPLOSION_DAMAGE_RADIUS,
+                                  true, 0.0f, 0.0f};
+            FireAtPlayer<Player> node;
+            node.tick(bb);
+            return out.fire ? out.fireSpread : -1.0f;
+        };
+        check(fabsf(spreadAt(0.0f) - BOT_FIRE_SPREAD_MAX) < 1e-6f, "accuracy 0 fires with BOT_FIRE_SPREAD_MAX");
+        check(fabsf(spreadAt(1.0f) - BOT_FIRE_SPREAD_MIN) < 1e-6f, "accuracy 1 fires with BOT_FIRE_SPREAD_MIN");
+    }
 
     if (failures) { printf("\n%d bot-aim check(s) FAILED\n", failures); return 1; }
     printf("\nall bot-aim checks passed\n");
