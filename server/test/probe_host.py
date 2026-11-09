@@ -21,9 +21,16 @@ body to become a bot the latecomer can claim.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe import C, OPTS
+from probe import C, OPTS as BASE_OPTS
 
 MID_MATCH_LEAVE_GRACE_SEC = 15.0   # constants.h
+
+# No bots. This probe is about who hosts and which slot a latecomer gets, and its
+# players stand idle for ~30 s; bots aim at the nearest human, and once they have
+# killed every idle one the match is over and there is nothing left to test.
+# ClaimFreeSlot takes the lowest free slot whether or not a bot is in it, so the
+# leaver's slot 0 is still the one the latecomer lands in.
+OPTS = dict(BASE_OPTS); OPTS["maxbots"] = 0
 
 fails = 0
 def check(ok, what):

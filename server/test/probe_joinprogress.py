@@ -22,9 +22,10 @@ def check(ok, what):
 # Host opens an 8-slot match alone, so slots 1-7 fill with bots and there is
 # somewhere for a latecomer to land.
 # TWO humans, because with one the match ends the moment they die (aliveHumans
-# == 0) and there is nothing left to join. A buddy keeps it alive long enough for
-# the bots to hurt each other, which is what makes the inheritance checks mean
-# something.
+# == 0) and there is nothing left to join. Bots never aim at each other while a
+# human is alive (BotController::pickTarget) - they hurt each other only by
+# splash and by rockets fusing on a bot in the way - so the humans are what
+# they shoot, and the humans' health is the clock this probe runs on.
 host = C("HOST")
 host.hello()
 time.sleep(0.4)
@@ -37,9 +38,7 @@ room = host_room(host, "JOIN IN PROGRESS")
 check(bool(room), f"hosted a room to play in ({room})")
 check(join_room(buddy, room), f"buddy joined it ({buddy.matchCode})")
 time.sleep(0.8)
-# friendlyFire off and a passive host: with one human, the host dying ends the
-# match (aliveHumans == 0) and there is nothing left to join. The bots fight
-# each other regardless, which is what damages them.
+# friendlyFire off so the passive humans don't hurt themselves.
 opts = dict(OPTS); opts["nplayers"] = 8; opts["ff"] = False
 host.send({"type": "start", **opts})
 time.sleep(7.5)
@@ -47,13 +46,25 @@ check(host.phase == "playing", f"match running (phase={host.phase})")
 check(host.nplayers == 8, f"roster is 8 with bots filling it (got {host.nplayers})")
 
 # Play a while so the bots take damage and score - the whole point is that a
-# joiner inherits neither.
-for i in range(420):   # long enough for the bots to hurt each other
+# joiner inherits neither. But two idle humans are the bots' only targets, and
+# once both are dead the match is over and there is nothing to join. So stop
+# early - as soon as a bot is hurt (the inheritance check has teeth), or as soon
+# as either human is getting low (join while the match is still live). How fast
+# that happens depends on bot tuning, which is exactly why it is not a fixed wait.
+def humans_low():
+    hs = [p for n, p in host.players.items() if n in ("HOST", "BUDDY")]
+    return any((not p["alive"]) or p["hp"] <= 60 for p in hs)
+def a_bot_hurt():
+    return any(p["bot"] and p["hp"] < 100 for p in host.players.values())
+for i in range(420):   # up to 7 s
     for c in (host, buddy):
         c.seq += 1
         c.send({"seq": c.seq, "ep": c.epoch, "mx": 0.0, "mz": 0.0, "jp": i % 20 == 0,
                 "grav": False, "fire": False, "yaw": -1.57, "pitch": 0.0})
     time.sleep(1.0 / 60.0)
+    if a_bot_hurt() or humans_low():
+        break
+print(f"  played {i / 60.0:.1f}s before the join")
 check(host.phase == "playing", f"still playing before the join (phase={host.phase})")
 
 # Which bot the joiner will displace, and how hurt it is. If nothing got damaged
