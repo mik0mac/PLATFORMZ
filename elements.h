@@ -635,6 +635,12 @@ public:
     // none), not a Player*, so a players-vector reallocation can't dangle it;
     // resolve with findPlayerById when the Player is needed.
     uint32_t ownerId = 0;
+    // Whether this rocket's blast still earns its owner points/health. Cleared by
+    // the server's Match::TakeOverSlot for rockets a bot fired before a human took
+    // its slot: ownerId stays (it still keeps the rocket off the body it left), but
+    // the newcomer didn't fire it and must not be credited. Sim-only, never on the
+    // wire.
+    bool creditsOwner = true;
     // position, velocity, direction, speed
     Vector3 position;
     Vector3 prevPosition{}; // position at the start of this frame's movement; the
@@ -706,6 +712,8 @@ public:
     // ownership. Which player fired the rocket that caused this explosion?
     // Player id (0 = none), not a Player* - see Rocket::ownerId.
     uint32_t ownerId = 0;
+    bool creditsOwner = true; // copied from the rocket - see Rocket::creditsOwner
+
     // The SIM's explosion: it deals its splash damage once, then lives only
     // EXPLOSION_NET_WINDOW so the server can broadcast it a few times. Nothing
     // visible reads it - each client spawns a BlastFx from it (see

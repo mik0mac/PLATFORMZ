@@ -170,10 +170,11 @@ bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 box
 // scales the damage radius and the blast's drawn size together. It never
 // changes how long the blast's VFX last (EXPLOSION_FLASH_LIFETIME). Damage per hit is
 // unchanged; falloff just reaches farther.
-Explosion spawnExplosion(GameSpace& space, Vector3 position, uint32_t ownerId) {
+Explosion spawnExplosion(GameSpace& space, Vector3 position, const Rocket& rocket) {
     Explosion explosion;
     explosion.id = space.nextExplosionId++; // tells a re-broadcast from a new blast (GameSpace::updateBlasts)
-    explosion.ownerId = ownerId; // track which player fired this rocket
+    explosion.ownerId = rocket.ownerId; // track which player fired this rocket
+    explosion.creditsOwner = rocket.creditsOwner;
     explosion.position = position;
     explosion.damageRadius *= space.explosionRadiusScale;
     explosion.vfxRadius *= space.explosionRadiusScale;
@@ -249,7 +250,7 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // double-damaging the asteroid this hit produced.
                     rocket.isDestroyed = true;
 
-                    Explosion explosion = spawnExplosion(space, rocket.position, rocket.ownerId);
+                    Explosion explosion = spawnExplosion(space, rocket.position, rocket);
                     explosions.push_back(explosion);
                     space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -292,7 +293,7 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 // Detonate at the entry point on the platform, not past it.
                 Vector3 impact = Vector3Lerp(rocket.prevPosition, rocket.position, tHit);
-                Explosion explosion = spawnExplosion(space, impact, rocket.ownerId);
+                Explosion explosion = spawnExplosion(space, impact, rocket);
                 explosions.push_back(explosion);
                 space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -339,7 +340,7 @@ void CheckRocketWallCollisions(GameSpace& space) {
         rocket.position.z = Clamp(rocket.position.z, -halfSize, halfSize);
         rocket.isDestroyed = true;
 
-        Explosion explosion = spawnExplosion(space, rocket.position, rocket.ownerId);
+        Explosion explosion = spawnExplosion(space, rocket.position, rocket);
         explosions.push_back(explosion);
         space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
     }
@@ -425,7 +426,7 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& /*grid*/
         rocket.isDestroyed = true;
 
         Vector3 impact = Vector3Add(p0, Vector3Scale(d, bestT));
-        Explosion explosion = spawnExplosion(space, impact, rocket.ownerId);
+        Explosion explosion = spawnExplosion(space, impact, rocket);
         explosions.push_back(explosion);
         space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
     }
@@ -848,9 +849,10 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
         if (explosion.hasAppliedDamage) continue;
         explosion.hasAppliedDamage = true; // mark immediately - one blast, applied once
 
-        // Resolve the owning player once per blast (nullptr if none/gone);
+        // Resolve the owning player once per blast (nullptr if none/gone, or if
+        // the blast no longer earns them anything - see Rocket::creditsOwner);
         // identity checks below compare ids, not pointers.
-        Player* owner = findPlayerById(space, explosion.ownerId);
+        Player* owner = explosion.creditsOwner ? findPlayerById(space, explosion.ownerId) : nullptr;
 
         for (Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) continue;
