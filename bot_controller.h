@@ -67,8 +67,10 @@ struct BotController {
         float rate = (BOT_FIRERATE_MAX - BOT_FIRERATE_MIN) * bb.profile.aggression + BOT_FIRERATE_MIN; // shots/sec
         return 1.0f / rate; // seconds between shots (the Cooldown period)
     }
-    Cooldown<Player>               rateLimitedFireAtPlayer{ LATCH_FIRE_PLAYER_CD, botFirePeriod, &fireAtPlayer };
-    Cooldown<Player>               rateLimitedAttackAsteriod { LATCH_ATTACK_AST_CD, botFirePeriod, &attackAsteroid };
+    // FireCooldown, not Cooldown: between shots the bot keeps aiming, it just
+    // doesn't fire.
+    FireCooldown<Player>           rateLimitedFireAtPlayer{ LATCH_FIRE_PLAYER_CD, botFirePeriod, &fireAtPlayer };
+    FireCooldown<Player>           rateLimitedAttackAsteriod { LATCH_ATTACK_AST_CD, botFirePeriod, &attackAsteroid };
     // A more aggressive bot has a high chance of ignoring the low-health retreat
     // and fighting on. Per-bot because the tree nodes are shared across all bots.
     static float defenseProbability(Blackboard<Player>& bb) {

@@ -157,7 +157,7 @@ Bots aren't identical. Each carries a `BotProfile`:
 ```cpp
 struct BotProfile {
     float aggression; // 0 timid/kites .. 1 reckless/in-your-face
-    float accuracy;   // 0 sprays .. 1 snaps on target
+    float accuracy;   // 0 slow to aim, wide spread .. 1 snaps on, tight
 };
 ```
 Assigned **once at spawn** in `startGame`, seeded from `player.id` so a given bot
@@ -168,7 +168,15 @@ the difficulty; a crowd fans out into varied personalities).
 Nodes then read the profile to scale the baseline `BOT_*` constants — e.g.
 aggressive bots close in nearer (`MoveToTarget`), tolerate more damage before
 fleeing (`IsLowHealth`), and take riskier asteroid shots (`AttackAsteroid`);
-low-accuracy bots get random aim spread (`steerYawToward`). Unpredictability also
+low-accuracy bots turn their aim more slowly (`steerAimToward`, between
+`BOT_TURN_RATE_MIN` and `_MAX`), and their rockets stray further from where they
+aimed (`BOT_FIRE_SPREAD_MIN`/`_MAX`, a random direction in a cone, applied in
+`input.h` through `PlayerInput::fireSpread`; shots at players only). Aim itself
+has no random error: a bot steers straight at the true intercept
+(`interceptDirection`) and fires only once its current aim would hit
+(`onTarget`). So turn rate sets how long a bot takes to get a shot, and spread
+sets how often that shot misses. Between shots the bot keeps aiming and only
+holds the trigger (`FireCooldown`). Unpredictability also
 comes from per-decision interval jitter.
 
 ## 8. FUTURE ADDITION — the `Chance` node (probabilistic decisions)

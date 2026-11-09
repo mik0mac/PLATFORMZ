@@ -866,7 +866,10 @@ void Match::ServiceAutoStart(Clock::time_point now) {
 //                      usually instant death, which is a bad first five seconds.
 //   score              RESET. You did not earn the bot's points, and the scoreboard
 //                      credits at match end - inheriting would put unearned points
-//                      on a permanent leaderboard.
+//                      on a permanent leaderboard. Nor the bot's rockets still in
+//                      flight: they keep the slot's id (so they still can't fuse
+//                      on the body they left) but stop crediting it
+//                      (Rocket::creditsOwner), so they can't score for you either.
 //   alive              REVIVED. ClaimFreeSlot does not check isAlive, so without
 //                      this you can join straight into a corpse and spectate a
 //                      match you never played.
@@ -893,6 +896,10 @@ void Match::TakeOverSlot(int slot, const std::string& joinerName) {
     p.fuel    = PLAYER_STARTING_FUEL;
     p.ammo    = PLAYER_STARTING_AMMO;
     p.score   = 0;
+    // The bot's rockets still in flight, and any blast not yet resolved, earn
+    // nobody anything now - the joiner didn't fire them.
+    for (Rocket& r : gameSpace.getRockets())       if (r.ownerId == p.id) r.creditsOwner = false;
+    for (Explosion& e : gameSpace.getExplosions()) if (e.ownerId == p.id) e.creditsOwner = false;
     p.leaveGraceSec      = -1.0f;   // cancel any mid-match-leaver countdown
     p.deathBurstSpawned  = false;
     p.isSpectating       = false;

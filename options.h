@@ -33,7 +33,7 @@
 
 //MAKR: TESTING BOOL
 // true = matches start with one human player
-const bool PRESET_TESTING_MODE = true;
+const bool PRESET_TESTING_MODE = false;
 
 //MARK: Map sizes
 // Which arenas exist. Moved here from constants.h with the rule defaults below:
@@ -398,24 +398,26 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.numPlayers           = 6;
         o.maxBots              = 2;
         o.botDifficulty        = 0.2f;
-        o.explosionRadiusScale = 2.0f;
+        o.explosionRadiusScale = 1.0f;
+        o.friendlyFire         = false;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
-    }, "The default setup.  LARGE map.")},
+    }, "The default setup. No self-damage. LARGE map.")},
 
     {"CLASSIC HYPED", MakePreset("CLASSIC HYPED", [](MatchOptions& o) {
-        o.mapSize              = "LARGE";
+        o.mapSize              = "XL";
         o.numPlayers           = 6;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
         o.maxBots              = 2;
         o.botDifficulty        = 0.5f;
-        o.speedBoost           = 1.25f;
+        o.speedBoost           = 1.5f;
         o.jetpackThrust        = 1.5f;
         o.rocketSpeedScale     = 2.0f;
-        o.explosionRadiusScale = 3.0f;   // slider max is 4.0
-    }, "Boosted version of classic.  LARGE map.")},
+        o.explosionRadiusScale = 2.0f;   // slider max is 4.0
+        o.friendlyFire         = false;
+    }, "Boosted version of classic. No self-damage. XL map.")},
 
     {"SPAMMERS DELIGHT", MakePreset("SPAMMERS DELIGHT", [](MatchOptions& o) {
-        o.mapSize              = "LARGE";
+        o.mapSize              = "MEDIUM";
         o.numPlayers           = 6;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
         o.maxBots              = 2;

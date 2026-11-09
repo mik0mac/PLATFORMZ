@@ -170,10 +170,11 @@ bool SegmentIntersectsBox(Vector3 p0, Vector3 p1, Vector3 boxCenter, Vector3 box
 // scales the damage radius and the blast's drawn size together. It never
 // changes how long the blast's VFX last (EXPLOSION_FLASH_LIFETIME). Damage per hit is
 // unchanged; falloff just reaches farther.
-Explosion spawnExplosion(GameSpace& space, Vector3 position, uint32_t ownerId) {
+Explosion spawnExplosion(GameSpace& space, Vector3 position, const Rocket& rocket) {
     Explosion explosion;
     explosion.id = space.nextExplosionId++; // tells a re-broadcast from a new blast (GameSpace::updateBlasts)
-    explosion.ownerId = ownerId; // track which player fired this rocket
+    explosion.ownerId = rocket.ownerId; // track which player fired this rocket
+    explosion.creditsOwner = rocket.creditsOwner;
     explosion.position = position;
     explosion.damageRadius *= space.explosionRadiusScale;
     explosion.vfxRadius *= space.explosionRadiusScale;
@@ -249,7 +250,7 @@ void CheckRocketAsteroidCollisions(GameSpace& space, const CollisionGrid& grid) 
                     // double-damaging the asteroid this hit produced.
                     rocket.isDestroyed = true;
 
-                    Explosion explosion = spawnExplosion(space, rocket.position, rocket.ownerId);
+                    Explosion explosion = spawnExplosion(space, rocket.position, rocket);
                     explosions.push_back(explosion);
                     space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -292,7 +293,7 @@ void CheckRocketPlatformCollisions(GameSpace& space, const CollisionGrid& grid) 
 
                 // Detonate at the entry point on the platform, not past it.
                 Vector3 impact = Vector3Lerp(rocket.prevPosition, rocket.position, tHit);
-                Explosion explosion = spawnExplosion(space, impact, rocket.ownerId);
+                Explosion explosion = spawnExplosion(space, impact, rocket);
                 explosions.push_back(explosion);
                 space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
 
@@ -339,26 +340,43 @@ void CheckRocketWallCollisions(GameSpace& space) {
         rocket.position.z = Clamp(rocket.position.z, -halfSize, halfSize);
         rocket.isDestroyed = true;
 
-        Explosion explosion = spawnExplosion(space, rocket.position, rocket.ownerId);
+        Explosion explosion = spawnExplosion(space, rocket.position, rocket);
         explosions.push_back(explosion);
         space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
     }
 }
 
 //MARK: Rocket vs Player
-// This is direct rocket-body collision (a rocket physically touching a
-// player mid-flight, before detonating) - NOT splash damage, which is
+// This is the rocket's fuse (deciding WHERE a rocket detonates on a player
+// mid-flight) - NOT splash damage, which is
 // handled separately by ApplyExplosionSplashDamage and already applies to
 // all players in range, including whoever fired the rocket (self-damage
 // from your own blast radius is intentional).
-// A rocket physically striking a player mid-flight detonates: destroy the
-// rocket and spawn an explosion at the impact point, so the blast's splash
-// damage (ApplyExplosionSplashDamage) deals the actual hit - matching the
+// A rocket that comes within the proximity fuse of a player detonates: destroy
+// the rocket and spawn an explosion, so the blast's splash damage
+// (ApplyExplosionSplashDamage) deals the actual hit - matching the
 // rocket-vs-asteroid convention of never calling takeDamage directly. The
 // rocket's owner is skipped: a freshly-fired rocket spawns at the firing
 // player's position, so without this guard it would instantly detonate on
-// the shooter. Now that Rocket carries an owner, other players can be hit.
-void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
+// the shooter.
+//
+// Swept, like rocket-vs-platform: the test is the rocket's whole travel this
+// frame (prevPosition -> position), not its end point, so a fast rocket can't
+// step over a player between ticks. Where it goes off:
+//   - path enters the BODY (player.radius): at the entry point, exactly where a
+//     direct hit always detonated, so a direct hit does what it always did;
+//   - path only passes through the FUSE (ROCKET_PROXIMITY_RADIUS): at the path's
+//     closest approach to the player's center. If the rocket is still closing in
+//     at the end of this frame, it waits a tick so that point lands on a later
+//     segment instead of the fuse's edge.
+// Several players in range: the one whose detonation point comes first along
+// the path wins.
+//
+// No grid: the fuse is wider than a grid cell's reach (and a fast rocket's path
+// longer than one), so the 27-cell search would miss players in range. Every
+// rocket against every player is cheap at GAMESPACE_NUMBER_OF_PLAYERS (8), and
+// leaves the fuse free to be any size. `grid` is kept for signature consistency.
+void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& /*grid*/) {
     auto& rockets = space.getRockets();
     auto& players = space.getPlayers();
     auto& explosions = space.getExplosions();
@@ -366,31 +384,51 @@ void CheckRocketPlayerCollisions(GameSpace& space, const CollisionGrid& grid) {
     for (Rocket& rocket : rockets) {
         if (rocket.isDestroyed) continue;
 
-        bool hit = false;
-        grid.ForEachNeighborCell(rocket.position, [&](const CellKey& key) {
-            if (hit) return; // already resolved this rocket this frame
-            const GridCell* cell = grid.FindCell(key);
-            if (!cell) return;
+        Vector3 p0 = rocket.prevPosition;
+        Vector3 d = Vector3Subtract(rocket.position, p0); // this frame's travel
+        float len2 = Vector3DotProduct(d, d);
+        float fuseR = ROCKET_PROXIMITY_RADIUS + rocket.size;
 
-            for (int playerIndex : cell->playerIndices) {
-                Player& player = players[playerIndex];
-                if (!player.isAlive) continue;
-                if (player.id == rocket.ownerId) continue; // don't detonate on the shooter
+        float bestT = 2.0f; // > 1: nothing hit yet
+        for (const Player& player : players) {
+            if (!player.isAlive) continue;
+            if (player.id == rocket.ownerId) continue; // don't detonate on the shooter
 
-                // Rocket and player are both spheres (the player collider is a
-                // sphere matching the dodecahedron body).
-                if (SphereIntersectsSphere(rocket.position, rocket.size, player.position, player.radius)) {
-                    rocket.isDestroyed = true;
+            // Path point at t is p0 + d*t; m is p0 relative to the player.
+            Vector3 m = Vector3Subtract(p0, player.position);
+            float b = Vector3DotProduct(m, d);
+            float mm = Vector3DotProduct(m, m);
+            // Closest approach, unclamped: > 1 means still closing at frame end.
+            float tRaw = len2 > 0.0f ? -b / len2 : 0.0f;
+            float tc = Clamp(tRaw, 0.0f, 1.0f);
+            Vector3 closest = Vector3Add(m, Vector3Scale(d, tc));
+            float closest2 = Vector3DotProduct(closest, closest);
+            if (closest2 > fuseR * fuseR) continue; // never within the fuse this frame
 
-                    Explosion explosion = spawnExplosion(space, rocket.position, rocket.ownerId);
-                    explosions.push_back(explosion);
-                    space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
-
-                    hit = true;
-                    break;
+            float t;
+            float bodyR = player.radius + rocket.size;
+            if (closest2 <= bodyR * bodyR) {
+                // Direct hit: first point where |m + d*t| == bodyR.
+                if (mm <= bodyR * bodyR) {
+                    t = 0.0f; // already touching at the start of the frame
+                } else {
+                    float disc = b * b - len2 * (mm - bodyR * bodyR);
+                    t = (-b - sqrtf(std::max(disc, 0.0f))) / len2;
                 }
+            } else {
+                if (tRaw > 1.0f) continue; // still closing: closest approach is next tick
+                t = tc;
             }
-        });
+            if (t < bestT) bestT = t;
+        }
+
+        if (bestT > 1.0f) continue;
+        rocket.isDestroyed = true;
+
+        Vector3 impact = Vector3Add(p0, Vector3Scale(d, bestT));
+        Explosion explosion = spawnExplosion(space, impact, rocket);
+        explosions.push_back(explosion);
+        space.emitAudio(FX_EXPLOSION, explosion.position, explosion.ownerId);
     }
 }
 
@@ -811,9 +849,10 @@ void ApplyExplosionSplashDamage(GameSpace& space, const CollisionGrid& grid) {
         if (explosion.hasAppliedDamage) continue;
         explosion.hasAppliedDamage = true; // mark immediately - one blast, applied once
 
-        // Resolve the owning player once per blast (nullptr if none/gone);
+        // Resolve the owning player once per blast (nullptr if none/gone, or if
+        // the blast no longer earns them anything - see Rocket::creditsOwner);
         // identity checks below compare ids, not pointers.
-        Player* owner = findPlayerById(space, explosion.ownerId);
+        Player* owner = explosion.creditsOwner ? findPlayerById(space, explosion.ownerId) : nullptr;
 
         for (Asteroid& asteroid : asteroids) {
             if (asteroid.isDestroyed) continue;
