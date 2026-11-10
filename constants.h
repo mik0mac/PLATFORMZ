@@ -330,12 +330,19 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
     
     {0, 0, 255, 255},     // Blue
     {0, 255, 0, 255},     // Green
-    {255, 0, 255, 255},   // Pink
+    // {255, 0, 255, 255},   // Pink
     {255, 255, 0, 255},   // Yellow
     {0, 255, 255, 255},   // Cyan
-    {255, 128, 0, 255},   // Orange
-    {160, 32, 240, 255},  // Purple
-    {255, 0, 0, 255},     // Red
+    // {255, 128, 0, 255},   // Orange
+    //  {128, 0, 128, 255},   // Purple
+    {127, 255, 0, 255},   // Chartreuse
+    // {255, 0, 0, 255},     // Red
+    // {255, 255, 255, 255}, // White
+    {128, 128, 128, 255}, // Gray
+    {128, 64, 0, 255},    // Brown
+    // {64, 128, 0, 255},    // Olive
+    // {0, 128, 128, 255},   // Teal
+    // {128, 0, 64, 255},    // Maroon
 };
 
 //MARK: Bot Constants
@@ -469,7 +476,7 @@ const Color EXPLOSION_COLOR = {255, 150, 0, 255}; // orange: the ring, and the d
 // --- 2. The flash ---
 // The ring, the glow and the platform flash all start at full strength and
 // fade out together over this many seconds. A bigger explosion doesn't last longer.
-const float EXPLOSION_FLASH_LIFETIME = 5.0f / 3.0f; 
+const float EXPLOSION_FLASH_LIFETIME = 1.0f; 
 // How bright the flash is on the walls, platforms and anything else it lights,
 // compared with the dots, which always flash at full strength. 1 = the same as
 // the dots. 0.5 = half as bright, so the dots lead and the walls stay subtle.
@@ -509,7 +516,7 @@ const float EXPLOSION_PLATFORM_MIN = 0.35f; // platforms near the edge of the ra
 // (shapes.h DrawBlastDots).
 
 // How many.
-const int   EXPLOSION_DOT_COUNT = 1248;     // dots in a default-sized explosion
+const int   EXPLOSION_DOT_COUNT = 624;     // dots in a default-sized explosion
 // Bigger explosions get more dots: count = DOT_COUNT x (size / default size)^POWER.
 // 2 = grows gently. 3 = keeps the dots just as crowded at any size.
 const float EXPLOSION_DOT_SIZE_POWER = 3.0f;
@@ -535,7 +542,7 @@ const float EXPLOSION_DOT_DRAG = 1.5f;   // how quickly it slows from SPEED to C
 const float EXPLOSION_DOT_SPREAD = 0.0f;   // each dot's speed differs by up to this much (+/-), so the edge is ragged, not a perfect sphere
 
 // How long.
-const float EXPLOSION_DOT_LIFETIME = EXPLOSION_FLASH_LIFETIME * 2.0f;  // seconds. The dots stay fully bright until the flash is over (EXPLOSION_FLASH_LIFETIME), then fade out over the rest of this.
+const float EXPLOSION_DOT_LIFETIME = EXPLOSION_FLASH_LIFETIME * 1.5f;  // seconds. The dots stay fully bright until the flash is over (EXPLOSION_FLASH_LIFETIME), then fade out over the rest of this.
 // A dot's streak is as long as the distance it travels in this many seconds, so
 // fast dots streak and slow ones shrink to a speck (never shorter than SPARK_STREAK_LENGTH).
 const float EXPLOSION_DOT_STREAK_TIME = 0.04f;
