@@ -384,8 +384,11 @@ const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 const bool DISABLE_BOT_FIRE_PLAYER = false;     // If true, bots don't fire rockets (for testing other features)
 const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
-const float BOT_FIRERATE_MAX = PLAYER_FIRE_RATE; // max shots/sec for bots (lower = easier)
-const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bots (higher = harder)
+// Seconds between a bot's shots, chosen by its aggression (bot_controller.h):
+// aggression 1 waits MIN, 0 waits MAX, linear in seconds between. A bot still
+// only fires once it is on target, and never faster than PLAYER_FIRE_RATE.
+const float BOT_FIRE_PERIOD_MIN = 1.0f / PLAYER_FIRE_RATE;        // hardest: the player's own rate (0.33s)
+const float BOT_FIRE_PERIOD_MAX = 3.0f;                          // easiest: one shot every 3 seconds
 const float BOT_FIRST_FIRE_DELAY = 3.0f; // seconds into a match before a bot may fire at all (#160) - no volley on the first frame
 
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title

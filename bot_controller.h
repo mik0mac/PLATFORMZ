@@ -60,12 +60,12 @@ struct BotController {
 
 
     // Rate-limit the bots' fire to make the difficulty setting meaningful. Fire
-    // cadence scales with aggression: aggressive bots approach PLAYER_FIRE_RATE,
-    // timid bots fire ~1/4 as often. Computed per-bot from bb.profile because the
-    // tree nodes are shared across all bots (there's no bot instance at construction).
+    // cadence scales with aggression: aggressive bots wait BOT_FIRE_PERIOD_MIN
+    // between shots (the player's own rate), timid bots BOT_FIRE_PERIOD_MAX.
+    // Computed per-bot from bb.profile because the tree nodes are shared across
+    // all bots (there's no bot instance at construction).
     static float botFirePeriod(Blackboard<Player>& bb) {
-        float rate = (BOT_FIRERATE_MAX - BOT_FIRERATE_MIN) * bb.profile.aggression + BOT_FIRERATE_MIN; // shots/sec
-        return 1.0f / rate; // seconds between shots (the Cooldown period)
+        return Lerp(BOT_FIRE_PERIOD_MAX, BOT_FIRE_PERIOD_MIN, bb.profile.aggression); // seconds between shots
     }
     // FireCooldown, not Cooldown: between shots the bot keeps aiming, it just
     // doesn't fire.
