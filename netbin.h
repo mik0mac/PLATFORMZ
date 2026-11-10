@@ -32,7 +32,7 @@ namespace nb {
 //
 // Bump a value whenever the packet's MEANING changes incompatibly. That includes
 // changing what existing bytes decode to, not just adding/removing/reordering
-// fields: raising QPOS_RANGE (below) kept the layout byte-for-byte identical but
+// fields: raising the position range (QPOS_*_RANGE below) kept the layout byte-for-byte identical but
 // rescaled every position, and because the tag stayed put, a client happily
 // decoded a stale server's packets at 4x scale instead of rejecting them.
 //
@@ -41,12 +41,14 @@ namespace nb {
 // room name and preset joined it, 0x06 by the retired "full" rejection (see
 // below), and a stale client in the wild still speaks them. Reusing one would
 // make a genuine mismatch decode as valid.
-// 0x0E: explosions became one-shot announcements (id, owner, age) instead of
-// a radius the server counted up for the blast's whole visual life; the VFX are
-// the client's now. 0x0D is burned by the layout before that, 0x0B by the one
-// before the room's music cue (#174) joined the header, 0x0C is WELCOME's.
-static const uint8_t STATE_BIN_VERSION   = 0x0E; // per-tick state packet (bumped: explosions are announcements)
-// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B/0x0D/0x0E
+// 0x0F: the single position/velocity range split into BODY and SHOT ranges,
+// both wider than before, for the faster speed constants - same bytes, new
+// scale, exactly the case described above. 0x0E is burned by
+// the layout before that (explosions as one-shot announcements), 0x0D by the
+// one before it, 0x0B by the one before the room's music cue (#174) joined the
+// header, 0x0C is WELCOME's.
+static const uint8_t STATE_BIN_VERSION   = 0x0F; // per-tick state packet (bumped: split, wider pos/vel ranges)
+// 0x0C, not 0x03: values are NEVER recycled here, and 0x03/0x06/0x09/0x0A/0x0B/0x0D/0x0E/0x0F
 // are taken by the tags below, by STATE, and by this packet's own past. Bumped
 // from 0x02 when the welcome grew the match code and kind, and again from 0x0A
 // when it grew the room's NAME and PRESET - a client that predates either reads
@@ -223,27 +225,44 @@ inline void putStr(std::string& b, const std::string& s) {
 // far more precision than the game needs. These trade a little precision
 // (imperceptible at this game's scale) for roughly half the bytes.
 
-// Position component: int16 over +/-QPOS_RANGE. This must cover how far an
-// object can actually GET, which with WALLS_ENABLED off is a long way PAST the
-// out-of-bounds line - objects keep flying out there for seconds before the OOB
-// rules retire them. Sizing this to the OOB line alone is what caused the
-// walls-off bug where a player froze at +/-600 and rocket trails bent along the
-// clamp plane (quantizeToI16 clamps silently, per axis, and networked position
-// is server-authoritative - so the clamp IS the position the client renders).
-// Worst case is XL (360 half-size) with every speed slider maxed:
-//   OOB line   = 360 * GAMESPACE_OUT_OF_BOUNDS_FACTOR (1.5)           = 540
-//   player     = 540 + (PLAYER_SPEED_JETPACK 30 * speedBoost 2
-//                       * jetpackThrust 2) * OUT_OF_BOUNDS_TIMER 10s  = 1740
-//   rocket     = 540 + (ROCKET_SPEED 120 * speedBoost 2
-//                       * rocketSpeedScale 2 + ~120 inherited)
-//                      * Rocket::fadeLength 3s                        = 2340
-// ~7.3cm/step - still far under the smallest object radius (PLAYER_RADIUS 2.0,
-// ASTEROID_MIN_SIZE 6.0) and under the per-tick motion of anything moving.
-static const float QPOS_RANGE = 2400.0f;
-// Velocity component: int16 over +/-QVEL_RANGE. Covers worst-case rocket speed
-// (ROCKET_SPEED 120 * speedBoost max 2 * rocketSpeedScale max 2 = 480) plus
-// inherited shooter-velocity headroom.
-static const float QVEL_RANGE = 700.0f;
+// Position and velocity: int16 over +/-range. The range costs no bytes, only
+// precision - the field is int16 either way - so there are TWO, because the
+// two kinds of thing reach very different distances and a single range sized
+// for the far one costs the near one precision it can see (a player standing
+// on a platform visibly floating or sinking).
+//
+// A range must cover how far an object can actually GET, which with
+// WALLS_ENABLED off is a long way PAST the out-of-bounds line - objects keep
+// flying out there for seconds before the OOB rules retire them. Sizing this to
+// the OOB line alone is what caused the walls-off bug where a player froze at
+// +/-600 and rocket trails bent along the clamp plane (quantizeToI16 clamps
+// silently, per axis, and networked position is server-authoritative - so the
+// clamp IS the position the client renders).
+//
+// Worst cases are XL (360 half-size, OOB line 360 * 1.5 = 540) with every
+// speed slider maxed.
+//
+// BODIES - players and asteroids:
+//   player     = 540 + PLAYER_MAX_SPEED 600 * OUT_OF_BOUNDS_TIMER 10s = 6540
+//   asteroid   = wraps at the OOB line (540), ASTEROID_SPEED_LIMIT 42
+// The player figure leans on PLAYER_MAX_SPEED: without that cap, rocket
+// kickback stacks with no ceiling and no range would hold. Velocity is capped
+// before each move, so what goes on the wire can exceed 600 only by one tick of
+// explosion pushback (EXPLOSION_DAMAGE 25 per blast) - hence the headroom.
+// ~21cm and ~3cm/s per step.
+static const float QPOS_BODY_RANGE = 7000.0f;
+static const float QVEL_BODY_RANGE = 1000.0f;
+//
+// SHOTS - rockets, explosions and audio events (which sit at a rocket, a blast
+// or a player, so the wider range covers them all):
+//   rocket vel = ROCKET_SPEED 972 * speedBoost 2 * rocketSpeedScale 2
+//                + PLAYER_MAX_SPEED 600 inherited                    = 4488
+//   rocket pos = 6540 (fired by a player at the edge of BODY's range)
+//                + 4488 * Rocket::fadeLength 3s                       = 20004
+// ~63cm and ~14cm/s per step - under a rocket's per-tick motion (16+ units at
+// 60 Hz) and well under any blast radius.
+static const float QPOS_SHOT_RANGE = 20500.0f;
+static const float QVEL_SHOT_RANGE = 4600.0f;
 
 inline int16_t quantizeToI16(float v, float range) {
     if (v > range) v = range;
@@ -254,8 +273,10 @@ inline float dequantizeFromI16(int16_t q, float range) {
     return (float)q / 32767.0f * range;
 }
 
-inline void putQPos(std::string& b, float v) { putI16(b, quantizeToI16(v, QPOS_RANGE)); }
-inline void putQVel(std::string& b, float v) { putI16(b, quantizeToI16(v, QVEL_RANGE)); }
+// The range is required, not defaulted: writer and reader must name the same
+// one, and a default would let a new field silently pick the wrong one.
+inline void putQPos(std::string& b, float v, float range) { putI16(b, quantizeToI16(v, range)); }
+inline void putQVel(std::string& b, float v, float range) { putI16(b, quantizeToI16(v, range)); }
 
 // Angle (yaw/pitch): uint16 over a full turn (0..2*PI -> 0..65535).
 inline void putQAngle(std::string& b, float radians) {
@@ -304,8 +325,8 @@ struct Reader {
     int16_t  i16() { return (int16_t)u16(); }
     int32_t  i32() { return (int32_t)u32(); }
     float    f32() { uint32_t u = u32(); float f; std::memcpy(&f, &u, 4); return f; }
-    float    qPos()   { return dequantizeFromI16(i16(), QPOS_RANGE); }
-    float    qVel()   { return dequantizeFromI16(i16(), QVEL_RANGE); }
+    float    qPos(float range) { return dequantizeFromI16(i16(), range); }
+    float    qVel(float range) { return dequantizeFromI16(i16(), range); }
     float    qAngle() { return qAngleToRadians(u16()); }
     float    qFrac(float maxValue) { return qFracToFloat(u8(), maxValue); }
     std::string str() {

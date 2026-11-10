@@ -294,6 +294,14 @@ const float PLAYER_ACCELERATION_JETPACK = 81.0f; // units/sec^2. Gravity applies
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
 // THRUST sliders (MatchOptions in options.h) multiply them per match. The
 // COAST MODE toggle that decides how they decay is a rule and lives there too.
+// Hard ceiling on a player's speed from ANY source - movement, rocket kickback,
+// blast pushback, gravity. Kickback is what needs it: each shot adds
+// ROCKET_KICKBACK_FACTOR of the rocket's speed, and nothing removes it in coast
+// mode or vertically, so firing steadily would otherwise grow speed without
+// limit. Enforced in Player::updatePos, before the move. Comfortably above the
+// fastest movement (PLAYER_SPEED_JETPACK * 2 * 2 = 324). netbin.h's
+// QPOS_BODY_RANGE / QVEL_BODY_RANGE are sized from it - raise them with it.
+const float PLAYER_MAX_SPEED = 600.0f; // units/sec
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -425,7 +433,7 @@ const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a sma
 // 10 ~68%. Not scaled by EXPLOSION RADIUS. Any size is safe - no grid limit.
 const float ROCKET_PROXIMITY_RADIUS = 6.0f;
 
-const float ROCKET_SPEED = 486.0f; // units/sec
+const float ROCKET_SPEED = 972.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.02f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = true; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS, options.h).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = true; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS (options.h).

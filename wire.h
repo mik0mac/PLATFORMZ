@@ -603,8 +603,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             bool isNew = false;
             if (!p) { Player np; np.id = id; players.push_back(np); p = &players.back(); isNew = true; }
 
-            Vector3 pos = { r.qPos(), r.qPos(), r.qPos() };
-            Vector3 vel = { r.qVel(), r.qVel(), r.qVel() };
+            Vector3 pos = { r.qPos(nb::QPOS_BODY_RANGE), r.qPos(nb::QPOS_BODY_RANGE), r.qPos(nb::QPOS_BODY_RANGE) };
+            Vector3 vel = { r.qVel(nb::QVEL_BODY_RANGE), r.qVel(nb::QVEL_BODY_RANGE), r.qVel(nb::QVEL_BODY_RANGE) };
             float yaw = r.qAngle(), pitch = r.qAngle();
             int   hp   = r.u8();
             float fuel = r.qFrac(PLAYER_MAX_FUEL);
@@ -653,8 +653,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             bool isNew = false;
             if (!a) { Asteroid na; na.id = id; asteroids.push_back(na); a = &asteroids.back(); isNew = true; }
 
-            Vector3 pos = { r.qPos(), r.qPos(), r.qPos() };
-            Vector3 vel = { r.qVel(), r.qVel(), r.qVel() };
+            Vector3 pos = { r.qPos(nb::QPOS_BODY_RANGE), r.qPos(nb::QPOS_BODY_RANGE), r.qPos(nb::QPOS_BODY_RANGE) };
+            Vector3 vel = { r.qVel(nb::QVEL_BODY_RANGE), r.qVel(nb::QVEL_BODY_RANGE), r.qVel(nb::QVEL_BODY_RANGE) };
             float size = r.qFrac(ASTEROID_SIZE_ENCODE_MAX);
             int   hp   = r.u8();
             float flash = r.qFrac(ASTEROID_FLASH_DURATION);
@@ -684,8 +684,8 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             for (auto& e : rockets) if (e.id == id) { rk = &e; break; }
             if (!rk) { Rocket nr; nr.id = id; rockets.push_back(nr); rk = &rockets.back(); }
 
-            Vector3 pos = { r.qPos(), r.qPos(), r.qPos() };
-            Vector3 vel = { r.qVel(), r.qVel(), r.qVel() };
+            Vector3 pos = { r.qPos(nb::QPOS_SHOT_RANGE), r.qPos(nb::QPOS_SHOT_RANGE), r.qPos(nb::QPOS_SHOT_RANGE) };
+            Vector3 vel = { r.qVel(nb::QVEL_SHOT_RANGE), r.qVel(nb::QVEL_SHOT_RANGE), r.qVel(nb::QVEL_SHOT_RANGE) };
             rk->position    = pos;
             rk->velocity    = vel;
             rk->direction   = Vector3Normalize(vel);
@@ -706,7 +706,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
         uint16_t count = r.u16();
         for (int k = 0; k < count; ++k) {
             Explosion e;
-            e.position = { r.qPos(), r.qPos(), r.qPos() };
+            e.position = { r.qPos(nb::QPOS_SHOT_RANGE), r.qPos(nb::QPOS_SHOT_RANGE), r.qPos(nb::QPOS_SHOT_RANGE) };
             e.id       = r.u8();
             e.ownerId  = r.u8();
             e.age      = r.qFrac(EXPLOSION_NET_WINDOW);
@@ -723,7 +723,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             NetAudioEvent ev;
             ev.fx          = r.u8();
             ev.owner       = r.u32();
-            ev.pos         = { r.qPos(), r.qPos(), r.qPos() };
+            ev.pos         = { r.qPos(nb::QPOS_SHOT_RANGE), r.qPos(nb::QPOS_SHOT_RANGE), r.qPos(nb::QPOS_SHOT_RANGE) };
             ev.volumeScale = r.qFrac(1.0f);
             gs.getAudioEvents().push_back(ev);
         }

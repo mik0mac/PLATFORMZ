@@ -367,6 +367,10 @@ public:
     // boundsHalfSize is the current map's walls.halfSize (set per match by
     // GameSpace::configureMap), not the compile-time default.
     void updatePos(float dt, float boundsHalfSize) {
+        // Cap here, after input/kickback and last tick's pushback and before
+        // the move, so no source can push past PLAYER_MAX_SPEED (constants.h).
+        float speed = Vector3Length(velocity);
+        if (speed > PLAYER_MAX_SPEED) velocity = Vector3Scale(velocity, PLAYER_MAX_SPEED / speed);
         position = Vector3Add(position, Vector3Scale(velocity, dt));
         // gravity is applied in updateVelocity.
 

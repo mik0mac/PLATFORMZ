@@ -53,7 +53,7 @@ The server prints this on startup:
 
 ```
 PLATFORMZ server | port 9000 (TCP/WebSocket + UDP) | 60 Hz
-Protocol: state tag 0x09, welcome tag 0x0a | qpos +/-2400 | qvel +/-700
+Protocol: state tag 0x0f, welcome tag 0x0c | qpos +/-7000 body, 20500 shot | qvel +/-1000 body, 4600 shot
 Join key: none (open server; set PLATFORMZ_KEY to require one)
 Match caps: 12 rooms, 12 live (no live cap; set PLATFORMZ_MAX_ACTIVE to add one), 3 per address
 UDP handshake cookie: ON (HMAC-SHA256, 30s buckets)
