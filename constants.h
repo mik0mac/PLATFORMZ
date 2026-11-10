@@ -287,10 +287,10 @@ const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of R
 const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
 //MARK: Player Speed
-const float PLAYER_SPEED_WALK = 30.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 30.0f; // units/sec^2
-const float PLAYER_SPEED_JETPACK = 45.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 45.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
+const float PLAYER_SPEED_WALK = 54.0f; // units/sec
+const float PLAYER_ACCELERATION_WALK = 54.0f; // units/sec^2
+const float PLAYER_SPEED_JETPACK = 81.0f; // units/sec
+const float PLAYER_ACCELERATION_JETPACK = 81.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~75 net climb accel under moon gravity.
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
 // THRUST sliders (MatchOptions in options.h) multiply them per match. The
 // COAST MODE toggle that decides how they decay is a rule and lives there too.
@@ -425,7 +425,7 @@ const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a sma
 // 10 ~68%. Not scaled by EXPLOSION RADIUS. Any size is safe - no grid limit.
 const float ROCKET_PROXIMITY_RADIUS = 6.0f;
 
-const float ROCKET_SPEED = 270.0f; // units/sec
+const float ROCKET_SPEED = 486.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.02f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = true; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS, options.h).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = true; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS (options.h).
