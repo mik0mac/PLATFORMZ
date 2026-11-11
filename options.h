@@ -288,6 +288,55 @@ inline void ClampOptions(MatchOptions& m) {
     m.fuelRegenPct         = OPT_RANGE_FUEL_REGEN.clampi(m.fuelRegenPct);
 }
 
+//MARK: The rule list - ONE definition
+// Every rule, with the name it goes by as TEXT (JSON on the wire). Anything that
+// reads or writes the whole bundle as text walks this instead of keeping its own
+// list: the client's "options"/"start" messages and its reading of the server's
+// echo (wire.h), and the server's reading of those messages and writing of that
+// echo (server_main.cpp).
+//
+// Those were four hand-kept lists of the same seventeen names, plus two more on
+// the server that copied the bundle field by field. Add a rule to three and
+// forget the fourth and nothing fails to compile: the rule just quietly never
+// reaches players, or resets to its default every time the host presses START.
+//
+// The visitor supplies four members - integer, real, flag, text - each taking
+// (const char* key, value&). Pass a const bundle to read it, a mutable one to
+// fill it in. A template, so this file still includes nothing.
+//
+// WHAT THIS DOES NOT COVER, because each is a different thing wearing the same
+// field names:
+//   - the BINARY state packet (server buildStateBodyBinary / wire.h
+//     applyBinaryState): a packed layout with its own byte widths and a version
+//     tag, where order and size are the contract. Still written out by hand, in
+//     two places that must match.
+//   - profile.h's saved bundle: its own key names, which are a file format
+//     already on players' disks.
+//   - the OPTIONS modal and GameSpace::applyOptions, which USE rules one at a
+//     time rather than carrying the bundle.
+// A new rule still needs a line in each of those it applies to. The keys below
+// are a wire format too: renaming one breaks every client older than the server.
+template <class Options, class Visitor>
+inline void VisitMatchOptions(Options& o, Visitor& v) {
+    v.integer("nplayers",  o.numPlayers);           // requested roster size (the server floors it at the humans present)
+    v.integer("maxbots",   o.maxBots);              // how many unclaimed slots get a bot; the rest stay empty
+    v.integer("minhumans", o.minHumansToStart);     // humans an official room waits for before auto-starting
+    v.real   ("diff",      o.botDifficulty);        // 0..BOT_DIFFICULTY
+    v.real   ("welast",    o.wallElasticity);       // players only
+    v.real   ("pelast",    o.platformElasticity);   // players only
+    v.real   ("boost",     o.speedBoost);           // walk / jetpack / rocket
+    v.real   ("rspeed",    o.rocketSpeedScale);     // on top of boost
+    v.real   ("xradius",   o.explosionRadiusScale);
+    v.real   ("jthrust",   o.jetpackThrust);        // on top of boost
+    v.integer("fburn",     o.fuelConsumption);      // units/sec
+    v.integer("fregen",    o.fuelRegenPct);         // % of consumption
+    v.flag   ("walls",     o.wallsEnabled);         // boundary walls on vs open space
+    v.flag   ("phys",      o.rocketsObeyPhysics);   // rockets take gravity + the shooter's velocity
+    v.flag   ("ff",        o.friendlyFire);         // your own blast can hurt you
+    v.flag   ("coast",     o.coastMode);            // frictionless movement
+    v.text   ("map",       o.mapSize);              // which arena, by name (see mapSizeOrder)
+}
+
 //MARK: Match kind
 // How a room is GOVERNED: who may change its rules, and who starts it.
 //

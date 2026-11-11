@@ -29,6 +29,7 @@
 #include "../bot_controller.h" // shared bot orchestration (same tree/drive as the client)
 #include "../netbin.h"    // binary state-packet codec (UDP only; keeps it under the MTU)
 #include "jsonmin.h"      // jf/ji/ju/jb/js - the shared JSON writers
+#include "options_json.h" // inbound parsers + the option bundle as JSON
 #include "crypto.h"       // HMAC-SHA256 + constant-time compare (E1's cookie, later D3's token)
 #include "bucket.h"       // pz::Bucket - the token bucket behind every rate limit (E1, E2)
 #include "identity.h"     // ident::Mint / Verify - the server-issued identity token (D3)
@@ -448,7 +449,7 @@ static void ForgetConn(uint64_t connId);
 // See match.h. Idempotent, so the per-tick caller costs a compare when nothing
 // has changed.
 void Match::SizeLobbyRoster(int floorSlots) {
-    int want = pendingPlayers.load();
+    int want = options().numPlayers;
     if (want < floorSlots) want = floorSlots;
     if (want < 1) want = 1;
     if (want > GAMESPACE_NUMBER_OF_PLAYERS) want = GAMESPACE_NUMBER_OF_PLAYERS;
@@ -658,7 +659,7 @@ std::vector<uint64_t> Match::CompactConnectedSlots() {
 // name holds steady for as long as it is a bot however many humans come and go.
 void Match::refreshBotSlots(SlotMask claimed, bool allowBotify) {
     auto& players = gameSpace.getPlayers();
-    const int maxBots = pendingMaxBots.load();
+    const int maxBots = options().maxBots;
     int botsSoFar = 0;
     for (int i = 0; i < (int)players.size(); ++i) {
         bool bot = !SlotSet(claimed, i);
@@ -828,7 +829,7 @@ void Match::ServiceAutoStart(Clock::time_point now) {
     if (gamePhase.load() != Phase::LOBBY) { autoStartArmed = false; return; }
 
     const int live = connectedCount.load();
-    if (live < pendingMinHumans.load()) {
+    if (live < options().minHumansToStart) {
         if (autoStartArmed) std::cout << "Auto-start disarmed (players " << live << ")\n";
         autoStartArmed = false;
         countdownRemaining = 0.0f;   // the room emptied back below the threshold
@@ -931,47 +932,9 @@ void Match::TakeOverSlot(int slot, const std::string& joinerName) {
 }
 
 //MARK: Input parse
-// -------------------------------------------------------------------------
-// Packet parsing - JSON input from client into PlayerInput.
-// Minimal hand-rolled parser: finds keys by string search.
-// Robust enough for a known fixed schema; not a general JSON parser.
-// -------------------------------------------------------------------------
-static float parseFloat(const std::string& json, const std::string& key, float def = 0.0f) {
-    auto pos = json.find("\"" + key + "\":");
-    if (pos == std::string::npos) return def;
-    pos += key.size() + 3;
-    try { return std::stof(json.substr(pos)); } catch (...) { return def; }
-}
-static bool parseBool(const std::string& json, const std::string& key, bool def = false) {
-    auto pos = json.find("\"" + key + "\":");
-    if (pos == std::string::npos) return def;
-    pos += key.size() + 3;
-    return json.substr(pos, 4) == "true";
-}
-static uint32_t parseUInt(const std::string& json, const std::string& key, uint32_t def = 0) {
-    auto pos = json.find("\"" + key + "\":");
-    if (pos == std::string::npos) return def;
-    pos += key.size() + 3;
-    try { return (uint32_t)std::stoul(json.substr(pos)); } catch (...) { return def; }
-}
-// Read a JSON string value ("key":"..."). Unescapes \" and \\ (the only escapes
-// nlohmann emits for the client's printable-only names). Stops at the closing ".
-static std::string parseString(const std::string& json, const std::string& key,
-                               const std::string& def = "") {
-    auto pos = json.find("\"" + key + "\":");
-    if (pos == std::string::npos) return def;
-    pos += key.size() + 3;                 // skip past "key":
-    if (pos >= json.size() || json[pos] != '"') return def;
-    ++pos;                                  // skip the opening quote of the value
-    std::string out;
-    for (; pos < json.size(); ++pos) {
-        char c = json[pos];
-        if (c == '\\' && pos + 1 < json.size()) { out.push_back(json[++pos]); continue; }
-        if (c == '"') break;                // closing quote
-        out.push_back(c);
-    }
-    return out;
-}
+// The inbound JSON parsers (parseFloat/Bool/UInt/String) and the option-bundle
+// reader and writer live in options_json.h, so a test can run a real client
+// message through them.
 
 // Clamp a client-supplied display name to the shared cap (constants.h) and drop
 // anything outside printable ASCII. The stock client's entry field already enforces
@@ -1336,24 +1299,13 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
 
     // Lobby options (match-wide config), echoed every tick so a change by any
     // client shows live on every client's OPTIONS modal + roster preview.
-    s += ",\"opt\":{\"nplayers\":" + ji(pendingPlayers.load());
-    s += ",\"maxbots\":"  + ji(pendingMaxBots.load());
-    s += ",\"minhumans\":" + ji(pendingMinHumans.load());
-    s += ",\"diff\":"     + jf(pendingDiff.load());
-    s += ",\"welast\":"   + jf(pendingWallElast.load());
-    s += ",\"pelast\":"   + jf(pendingPlatElast.load());
-    s += ",\"boost\":"    + jf(pendingBoost.load());
-    s += ",\"rspeed\":"   + jf(pendingRocketSpeed.load());
-    s += ",\"xradius\":"  + jf(pendingXRadius.load());
-    s += ",\"jthrust\":"  + jf(pendingJThrust.load());
-    s += ",\"fburn\":"    + ji(pendingFuelBurn.load());
-    s += ",\"fregen\":"   + ji(pendingFuelRegen.load());
-    s += ",\"walls\":"    + jb(pendingWallsEnabled.load());
-    s += ",\"phys\":"     + jb(pendingRocketsPhysics.load());
-    s += ",\"ff\":"       + jb(pendingFriendlyFire.load());
-    s += ",\"coast\":"    + jb(pendingCoastMode.load());
-    s += ",\"map\":"      + js(MapSizeName(pendingMap.load())); // which arena, visible in the lobby before start
-    s += "}";
+    {
+        const MatchOptions opt = options();
+        s += ",\"opt\":{";
+        OptionJsonWriter w{s};
+        VisitMatchOptions(opt, w);   // "map" included: the arena, visible in the lobby before start
+        s += "}";
+    }
 
     s += "}";
     return s;
@@ -1395,29 +1347,30 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
 
     // Options (match-wide), same values buildStatePacket puts in "opt". Order
     // must match applyBinaryState() in wire.h exactly.
-    nb::putU8(b, (uint8_t)pendingPlayers.load());
+    const MatchOptions opt = options();   // one snapshot: the bundle changes as a unit
+    nb::putU8(b, (uint8_t)opt.numPlayers);
     // The two sliderless rules. Two bytes, which together with the roster byte
     // above are what cost STATE_BIN_VERSION 0x09 -> 0x0B: the flags byte had
     // only two free bits and these need four each.
-    nb::putU8(b, (uint8_t)pendingMaxBots.load());
-    nb::putU8(b, (uint8_t)pendingMinHumans.load());
-    nb::putF32(b, pendingDiff.load());
-    nb::putF32(b, pendingWallElast.load());
-    nb::putF32(b, pendingPlatElast.load());
-    nb::putF32(b, pendingBoost.load());
-    nb::putF32(b, pendingRocketSpeed.load());
-    nb::putF32(b, pendingXRadius.load());
-    nb::putF32(b, pendingJThrust.load());
-    nb::putU8(b, (uint8_t)pendingFuelBurn.load());
-    nb::putU8(b, (uint8_t)pendingFuelRegen.load());
+    nb::putU8(b, (uint8_t)opt.maxBots);
+    nb::putU8(b, (uint8_t)opt.minHumansToStart);
+    nb::putF32(b, opt.botDifficulty);
+    nb::putF32(b, opt.wallElasticity);
+    nb::putF32(b, opt.platformElasticity);
+    nb::putF32(b, opt.speedBoost);
+    nb::putF32(b, opt.rocketSpeedScale);
+    nb::putF32(b, opt.explosionRadiusScale);
+    nb::putF32(b, opt.jetpackThrust);
+    nb::putU8(b, (uint8_t)opt.fuelConsumption);
+    nb::putU8(b, (uint8_t)opt.fuelRegenPct);
     // Bits 16/32 carry the map index. Four toggles left the top nibble free, so
     // the arena reaches every client in the lobby without growing the packet or
     // spending a STATE_BIN_VERSION bump.
-    nb::putU8(b, (uint8_t)((pendingWallsEnabled.load() ? 1 : 0)
-                          | (pendingRocketsPhysics.load() ? 2 : 0)
-                          | (pendingFriendlyFire.load() ? 4 : 0)
-                          | (pendingCoastMode.load() ? 8 : 0)
-                          | ((pendingMap.load() & 0x3) << 4)
+    nb::putU8(b, (uint8_t)((opt.wallsEnabled ? 1 : 0)
+                          | (opt.rocketsObeyPhysics ? 2 : 0)
+                          | (opt.friendlyFire ? 4 : 0)
+                          | (opt.coastMode ? 8 : 0)
+                          | ((MapSizeIndex(opt.mapSize) & 0x3) << 4)
                           // Bit 64: this GAMEOVER is the host's [Q] (#188). Not an
                           // option, but this byte had the spare bits, and an older
                           // client masks the ones it knows - no version bump.
@@ -2735,23 +2688,15 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
         if (!isHostConn(connId)) return; // host-only; non-host clients have no START button, this is the backstop
         // Map is part of the options bundle now, so a start no longer carries
         // three loose numbers the lobby had never seen.
-        pendingMap = MapSizeIndex(clampName(parseString(msg, "map")));
-        pendingPlayers = (int)parseUInt(msg, "nplayers", GAMESPACE_DEFAULT_PLAYERS);
-        pendingDiff = parseFloat(msg, "diff", BOT_DIFFICULTY_DEFAULT);
-        pendingMaxBots = (int)parseUInt(msg, "maxbots", (unsigned)MAX_BOTS_DEFAULT);
-        pendingMinHumans = (int)parseUInt(msg, "minhumans", (unsigned)PUBLIC_MIN_PLAYERS);
-        pendingWallElast = parseFloat(msg, "welast", WALL_ELASTICITY_PLAYER);
-        pendingPlatElast = parseFloat(msg, "pelast", PLATFORM_ELASTICITY_PLAYER);
-        pendingBoost = parseFloat(msg, "boost", 1.0f);
-        pendingRocketSpeed = parseFloat(msg, "rspeed", 1.0f);
-        pendingXRadius = parseFloat(msg, "xradius", 1.0f);
-        pendingJThrust = parseFloat(msg, "jthrust", 1.0f);
-        pendingFuelBurn = (int)parseUInt(msg, "fburn", (unsigned)FUEL_CONSUMPTION_RATE);
-        pendingFuelRegen = (int)parseUInt(msg, "fregen", (unsigned)FUEL_REGEN_PCT_DEFAULT);
-        pendingWallsEnabled = parseBool(msg, "walls", WALLS_ENABLED);
-        pendingRocketsPhysics = parseBool(msg, "phys", ROCKETS_OBEY_PHYSICS);
-        pendingFriendlyFire = parseBool(msg, "ff", FRIENDLY_FIRE);
-        pendingCoastMode = parseBool(msg, "coast", COAST_MODE);
+        // The whole bundle, read through the one rule list (options.h). From a
+        // FRESH MatchOptions: a key the message does not carry means the
+        // compile-time default, not whatever the room held. setOptions clamps.
+        {
+            MatchOptions o;
+            OptionJsonReader reader{msg};
+            VisitMatchOptions(o, reader);
+            setOptions(o);
+        }
         startRequested = true; // release: set after the preset values above
         return;
     }
@@ -2778,27 +2723,14 @@ void Match::HandleMessage(uint64_t connId, const std::string& msg) {
     if (msg.find("\"type\":\"options\"") != std::string::npos) {
         if (optionsLocked) return;       // public room: rules are fixed at creation
         if (!isHostConn(connId)) return; // host-only; matches the client's OPTIONS gating
-        pendingPlayers = (int)parseUInt(msg, "nplayers", pendingPlayers.load());
-        pendingDiff = parseFloat(msg, "diff", pendingDiff.load());
-        pendingMaxBots = (int)parseUInt(msg, "maxbots", (unsigned)pendingMaxBots.load());
-        pendingMinHumans = (int)parseUInt(msg, "minhumans", (unsigned)pendingMinHumans.load());
-        pendingWallElast = parseFloat(msg, "welast", pendingWallElast.load());
-        pendingPlatElast = parseFloat(msg, "pelast", pendingPlatElast.load());
-        pendingBoost = parseFloat(msg, "boost", pendingBoost.load());
-        pendingRocketSpeed = parseFloat(msg, "rspeed", pendingRocketSpeed.load());
-        pendingXRadius = parseFloat(msg, "xradius", pendingXRadius.load());
-        pendingJThrust = parseFloat(msg, "jthrust", pendingJThrust.load());
-        pendingFuelBurn = (int)parseUInt(msg, "fburn", (unsigned)pendingFuelBurn.load());
-        pendingFuelRegen = (int)parseUInt(msg, "fregen", (unsigned)pendingFuelRegen.load());
-        pendingWallsEnabled = parseBool(msg, "walls", pendingWallsEnabled.load());
-        pendingRocketsPhysics = parseBool(msg, "phys", pendingRocketsPhysics.load());
-        pendingFriendlyFire = parseBool(msg, "ff", pendingFriendlyFire.load());
-        pendingCoastMode = parseBool(msg, "coast", pendingCoastMode.load());
-        // Live-editable like every other rule, so the lobby's map row updates on
-        // everyone's screen the moment the host picks a different arena.
+        // Onto the room's CURRENT rules, so a message carrying some keys changes
+        // only those. Live-editable, map included, so the lobby updates on
+        // everyone's screen the moment the host touches a control.
         {
-            const std::string m = clampName(parseString(msg, "map"));
-            if (!m.empty()) pendingMap = MapSizeIndex(m);
+            MatchOptions o = options();
+            OptionJsonReader reader{msg};
+            VisitMatchOptions(o, reader);
+            setOptions(o);
         }
         return;
     }
@@ -3129,7 +3061,10 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // NEW slot via the per-tick name sync. Every client is told its
             // new slot by the justStarted welcome resend below.
             // (lock order gameMutex->clientMutex preserved.)
-            int want = pendingPlayers.load(), connectedAtStart = 0;
+            // One snapshot of the rules for the whole start, so the roster, the
+            // arena and the sim are all built from the same bundle.
+            const MatchOptions opt = options();
+            int want = opt.numPlayers, connectedAtStart = 0;
             {
                 std::lock_guard<std::mutex> gc(clientMutex);
                 // Reap eagerly, not just on this tick's later periodic sweep:
@@ -3155,7 +3090,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // Clamp the preset's asteroid count to the UDP state-packet
             // budget for this roster, so a full tick fits one unfragmented
             // datagram (oversized ticks chunk lossily - see netbin.h).
-            const mapSizePreset& mp = mapSizePresets.at(MapSizeName(pendingMap.load()));
+            const mapSizePreset& mp = mapSizePresets.at(opt.mapSize);   // a known name: setOptions clamps it
             int roids = std::min(mp.numAsteroids, nb::MaxAsteroidsForRoster(want));
             if (roids < mp.numAsteroids)
                 std::cout << "Asteroids clamped " << mp.numAsteroids << " -> " << roids
@@ -3167,23 +3102,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // sim before the world is built - generatePlatforms() below stamps
             // PLATFORM ELASTICITY per-platform from the value applyOptions sets,
             // and collisions/movement read the rest off GameSpace.
-            {
-                MatchOptions o;
-                o.wallElasticity      = pendingWallElast.load();
-                o.platformElasticity  = pendingPlatElast.load();
-                o.speedBoost          = pendingBoost.load();
-                o.rocketSpeedScale    = pendingRocketSpeed.load();
-                o.explosionRadiusScale = pendingXRadius.load();
-                o.jetpackThrust       = pendingJThrust.load();
-                o.fuelConsumption     = pendingFuelBurn.load();
-                o.fuelRegenPct        = pendingFuelRegen.load();
-                o.wallsEnabled        = pendingWallsEnabled.load();
-                o.rocketsObeyPhysics  = pendingRocketsPhysics.load();
-                o.friendlyFire        = pendingFriendlyFire.load();
-                o.coastMode           = pendingCoastMode.load();
-                o.mapSize             = MapSizeName(pendingMap.load());
-                gameSpace.applyOptions(o);
-            }
+            gameSpace.applyOptions(opt);
             // Issue #5 order: platforms -> players (spread) -> asteroids
             // (buffered away from the placed players). Same sequence the local
             // client's generate() uses, so both modes build worlds identically.
@@ -3206,7 +3125,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // Seed every slot's bot personality once for this match (stable per
             // slot id) at the requested difficulty. Which slots are bots is set
             // by the per-tick reconcile above; drive() reads the profiles here.
-            botController.init(gameSpace.getPlayers(), pendingDiff.load());
+            botController.init(gameSpace.getPlayers(), opt.botDifficulty);
             // Refresh the cached welcome fragment now that the world exists, so
             // clients that (re)connect during this match get the new platforms.
             rebuildWelcomeStatic();
@@ -3562,7 +3481,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                     // can never acquire it.
                     r.when      = (long long)std::chrono::system_clock::to_time_t(
                                       std::chrono::system_clock::now());
-                    r.map       = MapSizeName(pendingMap.load());
+                    r.map       = options().mapSize;
                     r.official  = (matchKind == MatchKind::Official);
                     r.matchName = matchName;
                     // Every bot shares ONE identity here, unlike the career table
@@ -4114,8 +4033,8 @@ int main() {
         g_registry.Pin(code);
         std::cout << "Match registry: official room " << code
                   << " preset=" << presetName
-                  << " (locked, auto-starts at " << m->pendingMinHumans.load()
-                  << " players, maxBots=" << m->pendingMaxBots.load() << ")\n";
+                  << " (locked, auto-starts at " << m->options().minHumansToStart
+                  << " players, maxBots=" << m->options().maxBots << ")\n";
 
         if (!firstRoom) firstRoom = m;   // only to report readiness below
     }

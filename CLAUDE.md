@@ -197,6 +197,19 @@ never include a platform socket header anywhere else in the client.**
   changed, capped at `ROOM_DESC_MAX_CLAUSES` because that line is centred and
   does not wrap. Tested in `test/options_test.cpp` — it is cosmetic, so nothing
   else in either suite would fail if it quietly stopped reporting a rule.
+  `VisitMatchOptions` is **the one list of rules as text**: the client's
+  `options`/`start` messages and its reading of the server's echo (`wire.h`), and
+  the server's reading and writing of the same (`server/options_json.h`), all walk
+  it, and the server holds a room's rules as one `MatchOptions` behind
+  `Match::options()/setOptions()` (which clamps everything coming in). So **adding
+  a rule** is: the field and its default, its `OPT_RANGE_*` + `ClampOptions` line,
+  one line in `VisitMatchOptions` - and then the places that are deliberately NOT
+  on the list: the **binary** state packet (server `buildStateBodyBinary` and
+  `wire.h` `applyBinaryState`, which must match byte for byte and cost a
+  `STATE_BIN_VERSION` bump), `profile.h`'s saved bundle (its own key names, a
+  file format already on disk), `GameSpace::applyOptions`, and the OPTIONS modal.
+  `server/test/options_wire_test.cpp` proves a rule set on one side arrives on
+  the other.
   **Do not add repo `#include`s here**:
   `elements.h` includes this file, so anything added lands in the lowest layer of
   the game; `constants.h` is the only one allowed, and the dependency never runs
