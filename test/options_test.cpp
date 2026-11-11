@@ -101,7 +101,7 @@ int main() {
             {"bouncy walls",     [](MatchOptions& o){ o.wallElasticity = 1.0f; },       nullptr},
             {"dead walls",       [](MatchOptions& o){ o.wallElasticity = 0.0f; },       nullptr},
             {"hard bots",        [](MatchOptions& o){ o.botDifficulty = 0.7f; },        nullptr},
-            {"bigger blasts",    [](MatchOptions& o){ o.explosionRadiusScale = 4.0f; }, nullptr},
+            {"bigger blasts",    [](MatchOptions& o){ o.explosionRadiusScale = 3.0f; }, nullptr},
             {"faster rockets",   [](MatchOptions& o){ o.rocketSpeedScale = 2.0f; },     nullptr},
             {"jetpack thrust",   [](MatchOptions& o){ o.jetpackThrust = 2.0f; },        nullptr},
             {"bouncy platforms", [](MatchOptions& o){ o.platformElasticity = 1.0f; },   nullptr},

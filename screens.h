@@ -402,6 +402,9 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     // showOptions, MatchOptions, the `options` wire message): OPTIONS is what
     // this bundle IS everywhere it is not being read aloud.
     UiModalChrome(m, "GAME SETUP");
+    // The click that opened the modal is still down this frame: without the lock
+    // it would also land on whichever slider or toggle is under the cursor.
+    UiClickLock openingClick(!wasOpen);
 
     const float colW = 330.0f, gutter = 40.0f;
     float lxL = m.x + 40, lxR = lxL + colW + gutter;

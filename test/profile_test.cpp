@@ -134,7 +134,7 @@ int main() {
     CHECK(p.lastLocalOptions.mapSize == MatchOptions{}.mapSize, "unknown map falls back to the default");
     CHECK(p.lastLocalOptions.botDifficulty == MatchOptions{}.botDifficulty,
                                                     "wrong-typed number is ignored, not thrown on");
-    CHECK(p.lastLocalOptions.explosionRadiusScale <= 4.0f, "out-of-range scale is clamped");
+    CHECK(p.lastLocalOptions.explosionRadiusScale <= 3.0f, "out-of-range scale is clamped");
     CHECK(p.lastLocalOptions.fuelConsumption >= 0,  "negative fuel burn is clamped");
     CHECK(p.lastCustomOptions.numPlayers >= 1,      "custom roster is clamped too, not just local");
     CHECK(p.lastCustomOptions.jetpackThrust <= 2.0f,"custom scale is clamped too");

@@ -200,7 +200,7 @@ struct MatchOptions {
     // THRUST the jetpack.
     float speedBoost           = 1.0f; // 1..2: walk speed+accel only
     float rocketSpeedScale     = 1.0f; // 1..2: rocket speed
-    float explosionRadiusScale = 2.0f; // 1..4: damage radius + blast visual
+    float explosionRadiusScale = 2.0f; // 1..3: damage radius + blast visual
     float jetpackThrust        = 1.0f; // 1..2: jetpack speed+accel
 
     // Fuel: consumption is a direct rate (units/sec out of the 100-unit tank,
@@ -259,7 +259,7 @@ const OptionRange OPT_RANGE_WALL_ELASTICITY     = { 0.0f, 1.0f,   0.0f };
 const OptionRange OPT_RANGE_PLATFORM_ELASTICITY = { 0.0f, 1.0f,   0.0f };
 const OptionRange OPT_RANGE_SPEED_BOOST         = { 1.0f, 2.0f,   0.0f };
 const OptionRange OPT_RANGE_ROCKET_SPEED        = { 1.0f, 2.0f,   0.0f };
-const OptionRange OPT_RANGE_EXPLOSION_RADIUS    = { 1.0f, 4.0f,   0.0f };
+const OptionRange OPT_RANGE_EXPLOSION_RADIUS    = { 1.0f, 3.0f,   0.0f };
 const OptionRange OPT_RANGE_JETPACK_THRUST      = { 1.0f, 2.0f,   0.0f };
 const OptionRange OPT_RANGE_FUEL_CONSUMPTION    = { 0.0f, 100.0f, 1.0f };
 const OptionRange OPT_RANGE_FUEL_REGEN          = { 0.0f, 100.0f, 1.0f };
@@ -461,7 +461,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.speedBoost           = 1.5f;
         o.jetpackThrust        = 1.5f;
         o.rocketSpeedScale     = 2.0f;
-        o.explosionRadiusScale = 2.0f;   // slider max is 4.0
+        o.explosionRadiusScale = 2.0f;   // slider max is 3.0
         o.friendlyFire         = false;
     }, "Boosted version of classic. No self-damage. XL map.")},
 
@@ -502,7 +502,7 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.fuelConsumption       = 50.0f;
         o.fuelRegenPct          = 10.0f;
         o.platformElasticity    = 0.9f;
-        o.explosionRadiusScale  = 4.0f;
+        o.explosionRadiusScale  = 3.0f;
         o.rocketSpeedScale      = 2.0f;
         o.friendlyFire          = false;
         o.wallsEnabled          = false;
