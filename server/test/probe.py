@@ -19,7 +19,7 @@ Two things this got wrong the first time, both worth knowing before you extend i
     client that only speaks when acting gets dropped mid-test. Hence the ping
     thread - the real client does the same at 1/sec.
 """
-import socket, struct, json, time, threading, os
+import socket, struct, json, time, threading, os, math
 
 # Target. Defaults to localhost, but A4's whole point is measuring the server
 # WITHOUT the load generator competing for the same CPU - so these have to be
@@ -43,6 +43,7 @@ def set_target(host, port=None):
 # the room's music cue (#174).
 STATE, WELCOME, CHUNK, FULL = 0x0F, 0x0C, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
+QPOS_BODY_RANGE = 7000.0   # netbin.h: the range a body position is quantized over
 # Wire order of mapSizeOrder (constants.h). Append only, same as there.
 MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]
 def enc(o): return json.dumps(o, separators=(",", ":")).encode()
@@ -208,7 +209,17 @@ class C:
                 try:
                     for _ in range(self.nplayers):
                         pid   = struct.unpack_from("<I", d, off)[0]; off += 4
-                        off  += 6 + 6 + 4                      # pos, vel, yaw, pitch
+                        # Body position (i16 over QPOS_BODY_RANGE, netbin.h) and
+                        # aim (u16 over a full turn). Pitch is put back in
+                        # -pi..pi, as the client does - on the wire a downward
+                        # look is a large positive angle.
+                        pos   = tuple(v / 32767.0 * QPOS_BODY_RANGE
+                                      for v in struct.unpack_from("<hhh", d, off))
+                        off  += 6 + 6                          # pos, vel
+                        qyaw, qpitch = struct.unpack_from("<HH", d, off); off += 4
+                        yaw   = qyaw   / 65535.0 * 2 * math.pi
+                        pitch = qpitch / 65535.0 * 2 * math.pi
+                        if pitch > math.pi: pitch -= 2 * math.pi
                         hp    = d[off]; off += 1
                         off  += 1 + 1 + 1 + 1                  # fuel, ammo, flash, spectate
                         score = struct.unpack_from("<H", d, off)[0]; off += 2
@@ -225,6 +236,7 @@ class C:
                             "active": bool(flags & 4),
                             "host": bool(flags & 32),
                             "name": name,
+                            "pos": pos, "yaw": yaw, "pitch": pitch,
                         }
                         self.players[name] = row
                         self.slots[pid - 1] = row      # pid is slot + 1 on the wire

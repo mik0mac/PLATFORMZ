@@ -679,6 +679,14 @@ void Match::refreshBotSlots(SlotMask claimed, bool allowBotify) {
             continue;
         }
         ++botsSoFar;
+        // An EMPTY seat becoming a bot seat needs a body. Vacating a slot kills
+        // it (above), and nothing here used to bring it back - so when the bot
+        // set shifted after the match reset (someone joining or leaving during
+        // the countdown), the promoted seat went into the match as a bot that
+        // was already dead: a corpse on the roster, and an elimination burst on
+        // every client's first frame of play. It keeps the spawn point
+        // placePlayersSpread gave the slot; vacating zeroed its velocity.
+        if (players[i].isVacant) GameSpace::freshBody(players[i]);
         players[i].isBot    = true;
         players[i].isVacant = false;
         // Through THIS MATCH's shuffled order, so a room does not field the same
@@ -873,6 +881,9 @@ void Match::ServiceAutoStart(Clock::time_point now) {
 //   alive              REVIVED. ClaimFreeSlot does not check isAlive, so without
 //                      this you can join straight into a corpse and spectate a
 //                      match you never played.
+//   aim                RESET to the spawn facing: level, toward the centre of the
+//                      joiner's own horizontal plane. Inheriting the bot's aim
+//                      started people off looking at a wall, or the floor.
 //   colour             RESET to this slot's human colour. Otherwise the newcomer
 //                      renders in bot magenta for the rest of the match.
 //   vacancy            CLEARED. A slot the preset's maxBots left empty has no
@@ -891,19 +902,21 @@ void Match::TakeOverSlot(int slot, const std::string& joinerName) {
     const bool wasVacant = p.isVacant;
     p.isBot    = false;
     p.isVacant = false;
-    p.isAlive  = true;
-    p.health  = PLAYER_STARTING_HEALTH;
-    p.fuel    = PLAYER_STARTING_FUEL;
-    p.ammo    = PLAYER_STARTING_AMMO;
-    p.score   = 0;
+    // The same reset every other new body gets (gamespace.h) - alive, full
+    // health/fuel/ammo, no score, and the timers the hand-written list here
+    // used to miss: a bot's damage flash, fire cooldown and out-of-bounds
+    // countdown were all inherited along with its position.
+    GameSpace::freshBody(p);
+    // Position and velocity are inherited; the AIM is not. Look level at the
+    // centre of your own plane, as every spawn does, rather than wherever the
+    // bot happened to be pointing. No-op before the match is live - the slot
+    // still holds its spawn facing then.
+    GameSpace::faceCenter(p);
     // The bot's rockets still in flight, and any blast not yet resolved, earn
     // nobody anything now - the joiner didn't fire them.
     for (Rocket& r : gameSpace.getRockets())       if (r.ownerId == p.id) r.creditsOwner = false;
     for (Explosion& e : gameSpace.getExplosions()) if (e.ownerId == p.id) e.creditsOwner = false;
     p.leaveGraceSec      = -1.0f;   // cancel any mid-match-leaver countdown
-    p.deathBurstSpawned  = false;
-    p.isSpectating       = false;
-    p.spectatingTimer    = p.countdownToSpectating;
     assignPlayerColor(p, slot);
 
     // Only announce a real mid-match takeover. A lobby join is already visible in

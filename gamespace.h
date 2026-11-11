@@ -172,11 +172,18 @@ public:
     void orientPlayerAt(Player& player, Vector3 pos) {
         player.position = pos;
         player.startingPosition = player.position;
-        // Face the center of the game space.
-        Vector3 toCenter = Vector3Subtract({0, 0, 0}, player.position);
-        player.yaw = atan2f(toCenter.z, toCenter.x); // angle in the XZ plane
-        player.pitch = 0.0f; // look horizontally
+        faceCenter(player);
         player.velocity = {0.0f, 0.0f, 0.0f};
+    }
+
+    // Turn a player to look, level, at the centre of their own horizontal plane
+    // - the arena's vertical axis at their height, NOT the absolute centre of
+    // the cube. Every spawn uses it, and so does a mid-match join, which takes
+    // over a bot's body and would otherwise start out looking wherever the bot
+    // happened to be aiming.
+    static void faceCenter(Player& player) {
+        player.yaw   = atan2f(-player.position.z, -player.position.x); // angle in the XZ plane
+        player.pitch = 0.0f;                                           // look horizontally
     }
 
     // Place every player as far apart as possible (issue #5): the first player
@@ -254,54 +261,72 @@ public:
         if (players.size() == 1) walls.elasticityAsteroid = 1.033f; else walls.elasticityAsteroid = WALL_ELASTICITY_ASTEROID;  // for a single player game, the walls elasticity for asteroids should be set to 1.0f so that asteroids don't slow down.
     };
 
+    // Give one slot a FRESH BODY: alive, full health/fuel/ammo, no score, and
+    // every per-match timer and guard back at its default. Position, velocity
+    // and aim are the caller's business (a match start places everyone; a
+    // mid-match join inherits where the bot was).
+    //
+    // This is the ONE place that list lives. It used to be written out by hand
+    // at each site that needed a body - the match reset, a join taking over a
+    // slot, an empty seat becoming a bot - and each copy reset a different
+    // subset. The seat-becomes-a-bot copy reset nothing at all, which left a
+    // DEAD bot in the match whenever someone joined or left during the
+    // countdown: every client saw it explode on the first frame of play.
+    //
+    // IMPORTANT: this must mirror EVERY non-const per-match default in Player.
+    // Add new Player state here when you add it there.
+    static void freshBody(Player& p) {
+        p.health  = PLAYER_STARTING_HEALTH;
+        p.fuel    = PLAYER_STARTING_FUEL;
+        p.ammo    = PLAYER_STARTING_AMMO;
+        p.isAlive = true;
+        p.score   = 0;
+        p.deathBurstSpawned = false;
+        p.flashTimer    = 0.0f;
+        p.coolDownTime  = 0.0f;
+        p.isUsingJetpack = false;
+        p.isSpectating   = false;                 // fresh match: no one is spectating yet
+        p.spectatingTimer = p.countdownToSpectating; // re-arm the post-death spectate delay
+        // Out-of-bounds state: a stale timer would have the new match's spawn
+        // already counting down toward "lost in space".
+        p.isOutOfBounds    = false;
+        p.outOfBoundsTimer = 0.0f;
+        p.outOfBoundsWarned = false;
+        // Platform pass-through edge detector: a height from the old layout
+        // would fire the traversal sound on the first frame of the new one.
+        p.prevY      = 0.0f;
+        p.prevYValid = false;
+        // SFX throttles and rising-edge guards - a stale one swallows the
+        // first cue of the new match.
+        p.noFuelSfxCooldown    = 0.0f;
+        p.warningSfxCooldown   = 0.0f;
+        p.earthGravSfxCooldown = 0.0f;
+        p.earthGravWasEngaged  = false;
+        // Reticle re-anchors at the new spawn aim instead of gliding in from
+        // wherever the player was looking when the last match ended.
+        p.reticle.anchorInitialized = false;
+        // NOT reset: rocketCounter (generates rocket ids the client tracks by
+        // identity - reusing ids across matches would alias them), and
+        // leaveGraceSec / isVacant (both owned by the slot-vacancy logic in
+        // refreshBotSlots, which re-derives them every tick. At a match start
+        // it runs later in the same tick, before any sim, so isAlive above is
+        // corrected for the empty slots before it can matter).
+    }
+
     // Reset the EXISTING player slots for a fresh match without changing their
     // ids/count (Player isn't copy-assignable - const members - so reset fields
     // individually). Keeps the server's slot<->client mapping stable across a
     // restart. Call after generatePlatforms() so placePlayersSpread has platforms
     // to spread the slots across; follow with generateAsteroids().
     //
-    // IMPORTANT: this must mirror EVERY non-const default in Player. The local
-    // sim never comes through here (spawnPlayers() clears the vector and builds
-    // fresh objects), so anything missed here is stale only in networked play,
-    // only from match 2 onward - the exact signature of the spawn-aim bug that
-    // lived in this code path. Add new Player state here when you add it there.
+    // The per-player part is freshBody() above. The local sim never comes
+    // through here (spawnPlayers() clears the vector and builds fresh objects),
+    // so anything freshBody misses is stale only in networked play, only from
+    // match 2 onward - the exact signature of the spawn-aim bug that lived in
+    // this code path.
     void resetPlayersForMatch() {
         for (Player& p : players) {
-            p.health  = PLAYER_STARTING_HEALTH;
-            p.fuel    = PLAYER_STARTING_FUEL;
-            p.ammo    = PLAYER_STARTING_AMMO;
-            p.isAlive = true;
-            p.score   = 0;
-            p.deathBurstSpawned = false;
-            p.flashTimer    = 0.0f;
-            p.coolDownTime  = 0.0f;
-            p.isUsingJetpack = false;
-            p.isSpectating   = false;                 // fresh match: no one is spectating yet
-            p.spectatingTimer = p.countdownToSpectating; // re-arm the post-death spectate delay
-            // Out-of-bounds state: a stale timer would have the new match's spawn
-            // already counting down toward "lost in space".
-            p.isOutOfBounds    = false;
-            p.outOfBoundsTimer = 0.0f;
-            p.outOfBoundsWarned = false;
-            // Platform pass-through edge detector: a height from the old layout
-            // would fire the traversal sound on the first frame of the new one.
-            p.prevY      = 0.0f;
-            p.prevYValid = false;
-            // SFX throttles and rising-edge guards - a stale one swallows the
-            // first cue of the new match.
-            p.noFuelSfxCooldown    = 0.0f;
-            p.warningSfxCooldown   = 0.0f;
-            p.earthGravSfxCooldown = 0.0f;
-            p.earthGravWasEngaged  = false;
-            // Reticle re-anchors at the new spawn aim instead of gliding in from
-            // wherever the player was looking when the last match ended.
-            p.reticle.anchorInitialized = false;
-            // NOT reset: rocketCounter (generates rocket ids the client tracks by
-            // identity - reusing ids across matches would alias them), and
-            // leaveGraceSec / isVacant (both owned by the slot-vacancy logic in
-            // refreshBotSlots, which re-derives them every tick - and which runs
-            // later in this same tick, before any sim, so isAlive above is
-            // corrected for the empty slots before it can matter).
+            freshBody(p);
         }
         placePlayersSpread(); // reposition all slots spread across the new platforms (issue #5)
         rockets.clear();
