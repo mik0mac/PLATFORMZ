@@ -3170,34 +3170,12 @@ int main(int argc, char** argv) {
             // is not a death. It used to be a bare M press mid-flight, which
             // ended the match on a single keystroke with nothing to confirm it.
 
-            int remaining_players = 0;
-            int remaining_humans = 0;
-            int remaining_bots = 0;
-            int remaining_asteroids = (int)gameSpace.getAsteroids().size();
-            
-            if (gameSpace.getPlayers().size() == 1) {
-                // specal case.  Solo player, no bots.  Game only end when player dies or all asteroids are gone.
-                if (remaining_asteroids <= 0 || !gameSpace.getPlayers()[0].isAlive) {
-                    gameOverTimer -= dt;
-                    if (gameOverTimer <= 0.0f) endLocalMatch();
-                }
-            } else {
-                // main case.  Multiple players (bots and humans).  Game ends when only one player is left or all humans are dead.
-                // determine number of remaining ALIVE players (bots included). Only
-                // alive players count toward the human/bot tally - otherwise a dead
-                // human still counts as a human and remaining_humans never hits 0.
-                for (const Player& p : gameSpace.getPlayers()) {
-                    if (!p.isAlive) continue;
-                    remaining_players++;
-                    if (p.isBot) remaining_bots++; else remaining_humans++;
-                }
-                // Last-man-standing: end once one (or zero) players remain, or no
-                // humans are left. Asteroid count doesn't end a multiplayer match -
-                // only a solo game (handled above) ends on clearing all asteroids.
-                if (remaining_players <= 1 || remaining_humans <= 0) {
-                    gameOverTimer -= dt;
-                    if (gameOverTimer <= 0.0f) endLocalMatch();
-                }
+            // The rule is MatchIsOver (options.h), shared with the server. Solo
+            // (one body, BOTS off) ends when the player dies or the arena is
+            // clear; with bots it is last-man-standing, or every human dead.
+            if (MatchIsOver(gameSpace.matchTally(), /*soloEndsOnClear=*/true)) {
+                gameOverTimer -= dt;
+                if (gameOverTimer <= 0.0f) endLocalMatch();
             }
         }
         

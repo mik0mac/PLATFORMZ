@@ -570,3 +570,41 @@ inline std::string generateRoomDescription(const MatchOptions& o) {
 
     return out;
 }
+
+//MARK: When a match is over
+// The end-of-match rule, in one place. The local client (which hosts its own
+// sim) and the server each used to spell it out, in different variable names
+// and a different shape, and nothing made the two agree.
+//
+// A tally is plain counts so this file stays free of the game's classes (see
+// the include rule at the top). GameSpace::matchTally() fills one in.
+struct MatchTally {
+    int aliveHumans  = 0;  // people still in it. WHO counts is the caller's call:
+                           // locally, any living non-bot; on the server, a living
+                           // body a connected client is actually holding
+    int aliveTotal   = 0;  // every living body, bots included
+    int participants = 0;  // slots that have (or had) a body. NOT the roster size:
+                           // a seat the preset's maxBots left empty is nobody, and
+                           // counting it made a one-human match "down to its last
+                           // player" on the first tick
+    int asteroids    = 0;  // asteroids left in the arena
+};
+
+// Over when:
+//   - no human is left alive, whatever else is going on; or
+//   - it is a contest (two or more participants) and at most one body is left
+//     standing - bots included, so a lone human does not have to watch the bots
+//     finish; or
+//   - it is a SOLO run, `soloEndsOnClear` is set, and the arena is clear.
+//
+// That last flag is the one place local and online play differ, on purpose kept
+// as it was rather than quietly changed: a LOCAL solo run is the arena-clearing
+// game and ends when the last asteroid goes. An ONLINE room with one human in
+// it does not - its empty seats are still joinable, so clearing the field does
+// not end the match under someone who might be about to walk in. The asteroid
+// count never ends a contest in either mode.
+inline bool MatchIsOver(const MatchTally& t, bool soloEndsOnClear) {
+    if (t.aliveHumans <= 0)  return true;
+    if (t.participants >= 2) return t.aliveTotal <= 1;
+    return soloEndsOnClear && t.asteroids <= 0;
+}

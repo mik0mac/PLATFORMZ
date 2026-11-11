@@ -3465,16 +3465,16 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                     if (client.playerId >= 0 && client.playerId < (int)players.size()
                         && players[client.playerId].isAlive) aliveHumans++;
                 }
-                int aliveTotal = 0, participants = 0;
-                for (const auto& p : players) {
-                    if (p.isAlive) aliveTotal++;
-                    if (!p.isVacant) participants++;
-                }
-                bool multi = participants >= 2;
-                if (aliveHumans == 0 || (multi && aliveTotal <= 1)) {
+                // The rule itself is MatchIsOver (options.h), shared with the
+                // local client. Humans are counted HERE, from `clients`, not by
+                // matchTally's "any living non-bot": a body its player walked
+                // away from is not a bot either, and must not keep a match alive.
+                MatchTally tally = gameSpace.matchTally();
+                tally.aliveHumans = aliveHumans;
+                if (MatchIsOver(tally, /*soloEndsOnClear=*/false)) {
                     gamePhase = Phase::GAMEOVER;
-                    std::cout << "Match over (humans alive " << aliveHumans
-                              << ", total alive " << aliveTotal << ")\n";
+                    std::cout << "Match over (humans alive " << tally.aliveHumans
+                              << ", total alive " << tally.aliveTotal << ")\n";
                 }
             }
         }

@@ -666,6 +666,22 @@ public:
     // Bumped by generatePlatforms() and clear(). Those are the only two ways a
     // platform's position can change.
     uint32_t getPlatformEpoch() const { return platformEpoch; }
+    // The counts MatchIsOver (options.h) decides on. aliveHumans here is "a
+    // living body no bot is driving", which is the whole truth for a LOCAL
+    // match. The server overwrites it: there a non-bot body can be one its
+    // player walked away from, and only a body somebody is holding counts.
+    MatchTally matchTally() const {
+        MatchTally t;
+        for (const Player& p : players) {
+            if (!p.isVacant) t.participants++;
+            if (!p.isAlive) continue;
+            t.aliveTotal++;
+            if (!p.isBot) t.aliveHumans++;
+        }
+        t.asteroids = (int)asteroids.size();
+        return t;
+    }
+
     std::vector<Asteroid>& getAsteroids() { return asteroids; }
     std::vector<Player>& getPlayers() { return players; }
     std::vector<Rocket>& getRockets() { return rockets; }
