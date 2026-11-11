@@ -208,8 +208,8 @@ public:
     bool earthGravityEnabled = false; // Last-applied gravity mode (mirrors this frame's input) so collision rules can read it after input is gone. Set in ApplyPlayerInput.
     // Mirrors of the OPTIONS speed multipliers (set in ApplyPlayerInput) so
     // updateVelocity can scale movement without a GameSpace dependency.
-    float speedBoost = 1.0f;    // scales walk AND jetpack speed/accel
-    float jetpackThrust = 1.0f; // scales jetpack speed/accel on top of speedBoost
+    float speedBoost = 1.0f;    // scales WALK speed/accel only
+    float jetpackThrust = 1.0f; // scales jetpack speed/accel only
     // Mirror of the OPTIONS COAST MODE toggle (also set in ApplyPlayerInput):
     // frictionless movement, see the two branches in updateVelocity below.
     bool coastMode = COAST_MODE;
@@ -248,16 +248,21 @@ public:
     // both relative to current look direction (flattened), not world axes.
     // Vertical movement (jetpack up/down) is separate, not part of moveInput.
     void updateVelocity(float dt, Vector2 moveInput, float gravity) {
-        // OPTIONS multipliers: SPEED BOOST scales everything (walk + jetpack);
-        // JETPACK THRUST stacks on top for jetpack speed/accel only - and unlike
-        // the old HYPED MODE it scales the vertical thrust block below too.
-        float jetBoost = speedBoost * jetpackThrust;
-        float targetSpeed = isUsingJetpack ? speedJetpack * jetBoost : speedWalk * speedBoost;
-        float acceleration = isUsingJetpack ? accelerationJetpack * jetBoost : accelerationWalk * speedBoost;
-
-        if (!canJetpack()) {
-            targetSpeed = speedWalk * speedBoost; // If out of fuel, player can only walk, not jetpack.
-            acceleration = accelerationWalk * speedBoost;
+        // OPTIONS multipliers, one per domain: SPEED BOOST scales the walk,
+        // JETPACK THRUST scales the jetpack (horizontal AND the vertical thrust
+        // block below). Neither touches the other; rockets have their own.
+        float walkSpeed = speedWalk * speedBoost;
+        float walkAccel = accelerationWalk * speedBoost;
+        float jetSpeed  = speedJetpack * jetpackThrust;
+        float jetAccel  = accelerationJetpack * jetpackThrust;
+        // Flying never moves you slower sideways than walking would: a big
+        // SPEED BOOST can put the walk above the jetpack's own cap, and holding
+        // Space must not brake a player for it.
+        float targetSpeed  = walkSpeed;
+        float acceleration = walkAccel;
+        if (isUsingJetpack && canJetpack()) { // out of fuel = walk only
+            targetSpeed  = fmaxf(jetSpeed, walkSpeed);
+            acceleration = fmaxf(jetAccel, walkAccel);
         }
 
         Vector3 fwd = ForwardFlat();
@@ -337,15 +342,16 @@ public:
         // on the very next frame if jetpack input is still held. Accelerating
         // instead means a bounce gets a moment to actually take effect.
         if (isUsingJetpack && canJetpack()) {
-            float targetVerticalSpeed = speedJetpack * jetBoost;
+            float targetVerticalSpeed = jetSpeed;
             // if player is also moving horizontally, split the jetpack thrust between vertical and horizontal components.
+            // Measured against the UNBOOSTED walk, so SPEED BOOST cannot change how fast the jetpack climbs.
             if (moveInput.x != 0.0f || moveInput.y != 0.0f) {
-                float speedDiff = (speedJetpack * jetBoost) - (speedWalk * speedBoost);
+                float speedDiff = jetSpeed - speedWalk;
                 targetVerticalSpeed -= speedDiff; // reduce vertical speed to allocate some thrust to horizontal movement
             }
 
             float verticalChange = targetVerticalSpeed - velocity.y;
-            float maxStep = accelerationJetpack * jetBoost * dt;
+            float maxStep = jetAccel * dt;
             if (fabsf(verticalChange) > maxStep) {
                 velocity.y += (verticalChange > 0 ? maxStep : -maxStep);
             } else {

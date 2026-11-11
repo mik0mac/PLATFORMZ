@@ -52,10 +52,10 @@ public:
     // (including the single-player speed-up tuning in generate()).
     float wallElasticityPlayer     = WALL_ELASTICITY_PLAYER;     // 0..1, mirrored onto walls.elasticityPlayer
     float platformElasticityPlayer = PLATFORM_ELASTICITY_PLAYER; // 0..1, stamped onto each platform in generatePlatforms()
-    float speedBoost           = 1.0f; // walk/jetpack speed+accel and rocket speed (mirrored onto players in ApplyPlayerInput)
-    float rocketSpeedScale     = 1.0f; // rocket spawn speed, on top of speedBoost (read in input.h)
+    float speedBoost           = 1.0f; // walk speed+accel only (mirrored onto players in ApplyPlayerInput)
+    float rocketSpeedScale     = 1.0f; // rocket spawn speed (read in input.h)
     float explosionRadiusScale = 1.0f; // explosion damage radius + blast visual (read in collisions.cpp / wire.h)
-    float jetpackThrust        = 1.0f; // jetpack speed+accel, on top of speedBoost (mirrored onto players)
+    float jetpackThrust        = 1.0f; // jetpack speed+accel (mirrored onto players)
     float fuelConsumptionRate  = FUEL_CONSUMPTION_RATE; // units/sec while thrusting (tank is 100)
     int   fuelRegenPct         = FUEL_REGEN_PCT_DEFAULT; // regen as % of the consumption rate
     float fuelRegenRate() const { return fuelConsumptionRate * fuelRegenPct / 100.0f; }

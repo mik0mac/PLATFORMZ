@@ -402,6 +402,9 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
     // showOptions, MatchOptions, the `options` wire message): OPTIONS is what
     // this bundle IS everywhere it is not being read aloud.
     UiModalChrome(m, "GAME SETUP");
+    // The click that opened the modal is still down this frame: without the lock
+    // it would also land on whichever slider or toggle is under the cursor.
+    UiClickLock openingClick(!wasOpen);
 
     const float colW = 330.0f, gutter = 40.0f;
     float lxL = m.x + 40, lxR = lxL + colW + gutter;
@@ -450,7 +453,7 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
              OPT_RANGE_PLATFORM_ELASTICITY.min, OPT_RANGE_PLATFORM_ELASTICITY.max,
              s.sliderPElastActive, OPT_RANGE_PLATFORM_ELASTICITY.step)) optChanged = true;
 
-    // SPEED BOOST (walk + jetpack speed/accel, and rocket speed).
+    // SPEED BOOST (walk speed/accel only - not the jetpack, not rockets).
     DrawText("SPEED BOOST", (int)lxL, y5, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.speedBoost), lxL, y5);
     if (UiSlider({lxL, (float)(y5 + 26), colW, 22}, opt.speedBoost,
@@ -458,14 +461,14 @@ inline bool DrawOptionsModal(ShellState& s, MatchOptions& opt, bool wasOpen) {
              s.sliderBoostActive, OPT_RANGE_SPEED_BOOST.step)) optChanged = true;
 
     // --- Right column ---
-    // ROCKET VELOCITY (on top of SPEED BOOST).
+    // ROCKET VELOCITY (rockets only).
     DrawText("ROCKET VELOCITY", (int)lxR, y1, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.rocketSpeedScale), lxR, y1);
     if (UiSlider({lxR, (float)(y1 + 26), colW, 22}, opt.rocketSpeedScale,
              OPT_RANGE_ROCKET_SPEED.min, OPT_RANGE_ROCKET_SPEED.max,
              s.sliderRSpeedActive, OPT_RANGE_ROCKET_SPEED.step)) optChanged = true;
 
-    // JETPACK THRUST (on top of SPEED BOOST; jetpack only).
+    // JETPACK THRUST (jetpack only).
     DrawText("JETPACK THRUST", (int)lxR, y2, 18, RAYWHITE);
     valueAt(TextFormat("%.1fx", opt.jetpackThrust), lxR, y2);
     if (UiSlider({lxR, (float)(y2 + 26), colW, 22}, opt.jetpackThrust,

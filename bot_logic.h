@@ -260,8 +260,8 @@ struct Blackboard {
     float dt;
     std::vector<BotDecision>& decisions; // per-bot latch/timer, one slot per LatchedSelector (indexed by its latchId)
     const BotProfile& profile;  // per-bot personality (aggression/accuracy)
-    // Effective values under the match's OPTIONS sliders (GameSpace::speedBoost *
-    // rocketSpeedScale, and explosionRadiusScale) - so lead-aim, line-of-sight
+    // Effective values under the match's OPTIONS sliders (GameSpace::rocketSpeedScale
+    // and explosionRadiusScale) - so lead-aim, line-of-sight
     // margins, and cover standoff stay accurate when a match scales rockets or
     // blasts up. Computed once in BotController::drive, not per-node.
     float rocketSpeed;
@@ -768,9 +768,9 @@ public:
 
 // Net upward acceleration of a full jetpack burn against moon gravity - how hard
 // a bot can brake a fall. Reads the OPTIONS multipliers ApplyPlayerInput mirrors
-// onto the player, so it follows JETPACK THRUST / SPEED BOOST.
+// onto the player, so it follows JETPACK THRUST (SPEED BOOST is walk-only).
 inline float botJetpackBrake(const Player& bot) {
-    return fmaxf(bot.accelerationJetpack * bot.speedBoost * bot.jetpackThrust - MOON_GRAVITY, 1.0f);
+    return fmaxf(bot.accelerationJetpack * bot.jetpackThrust - MOON_GRAVITY, 1.0f);
 }
 // Downward speed (m/s) the bot's remaining fuel can take off a fall.
 inline float botFuelDeltaV(const Player& bot, float fuelConsumptionRate) {
@@ -1029,7 +1029,7 @@ class ClimbHigher : public Node<TargetT> {
     static bool hopAffordable(const Platform& base, float apex, const Player& bot, float consumption,
                               float keep = BOT_CLIMB_FUEL_MARGIN) {
         float rise = apex - topOf(base, bot);
-        float vCap = bot.speedJetpack * bot.speedBoost * bot.jetpackThrust;
+        float vCap = bot.speedJetpack * bot.jetpackThrust;
         if (2.0f * MOON_GRAVITY * rise > 0.8f * vCap * vCap) return false;
         return bot.fuel >= hopFuel(rise, bot, consumption) + keep;
     }

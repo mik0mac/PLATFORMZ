@@ -81,8 +81,8 @@ int main() {
     // Turning 90deg at MAX takes (PI/2)/MAX; leave a little for the lead.
     check(fast < (PI / 2) / BOT_TURN_RATE_MAX + 0.15f, "accuracy 1 is on target about as fast as it can turn");
 
-    // Fast rockets (CLASSIC HYPED: 2x rocket speed * 1.5x speed boost) need less lead.
-    float hyped = TimeToSolution(1.0f, PI / 2, ROCKET_SPEED * 3.0f);
+    // Fast rockets (CLASSIC HYPED: 2x rocket speed) need less lead.
+    float hyped = TimeToSolution(1.0f, PI / 2, ROCKET_SPEED * 2.0f);
     check(hyped > 0 && hyped < (PI / 2) / BOT_TURN_RATE_MAX + 0.15f, "...and with HYPED rocket speed");
 
     // Rocket spread: every direction inside the cone, and the cone actually used.

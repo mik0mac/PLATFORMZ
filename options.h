@@ -195,13 +195,13 @@ struct MatchOptions {
     float wallElasticity     = WALL_ELASTICITY_PLAYER;     // 0..1
     float platformElasticity = PLATFORM_ELASTICITY_PLAYER; // 0..1
 
-    // Multipliers over the compile-time tuning. SPEED BOOST is the master
-    // scale (walk + jetpack + rocket); ROCKET VELOCITY and JETPACK THRUST
-    // stack on top of it for their domains.
-    float speedBoost           = 1.0f; // 1..2: walk/jetpack speed+accel, rocket speed
-    float rocketSpeedScale     = 1.0f; // 1..2, on top of speedBoost (rockets only)
-    float explosionRadiusScale = 2.0f; // 1..4: damage radius + blast visual
-    float jetpackThrust        = 1.0f; // 1..2, on top of speedBoost (jetpack only)
+    // Multipliers over the compile-time tuning, one per domain and never
+    // stacked: SPEED BOOST is the walk, ROCKET VELOCITY the rockets, JETPACK
+    // THRUST the jetpack.
+    float speedBoost           = 1.0f; // 1..2: walk speed+accel only
+    float rocketSpeedScale     = 1.0f; // 1..2: rocket speed
+    float explosionRadiusScale = 1.0f; // 1..3: damage radius + blast visual
+    float jetpackThrust        = 1.0f; // 1..2: jetpack speed+accel
 
     // Fuel: consumption is a direct rate (units/sec out of the 100-unit tank,
     // so it reads as %/sec); regen is a PERCENTAGE of the consumption rate
@@ -259,7 +259,7 @@ const OptionRange OPT_RANGE_WALL_ELASTICITY     = { 0.0f, 1.0f,   0.0f };
 const OptionRange OPT_RANGE_PLATFORM_ELASTICITY = { 0.0f, 1.0f,   0.0f };
 const OptionRange OPT_RANGE_SPEED_BOOST         = { 1.0f, 2.0f,   0.0f };
 const OptionRange OPT_RANGE_ROCKET_SPEED        = { 1.0f, 2.0f,   0.0f };
-const OptionRange OPT_RANGE_EXPLOSION_RADIUS    = { 1.0f, 4.0f,   0.0f };
+const OptionRange OPT_RANGE_EXPLOSION_RADIUS    = { 1.0f, 3.0f,   0.0f };
 const OptionRange OPT_RANGE_JETPACK_THRUST      = { 1.0f, 2.0f,   0.0f };
 const OptionRange OPT_RANGE_FUEL_CONSUMPTION    = { 0.0f, 100.0f, 1.0f };
 const OptionRange OPT_RANGE_FUEL_REGEN          = { 0.0f, 100.0f, 1.0f };
@@ -324,10 +324,10 @@ inline void VisitMatchOptions(Options& o, Visitor& v) {
     v.real   ("diff",      o.botDifficulty);        // 0..BOT_DIFFICULTY
     v.real   ("welast",    o.wallElasticity);       // players only
     v.real   ("pelast",    o.platformElasticity);   // players only
-    v.real   ("boost",     o.speedBoost);           // walk / jetpack / rocket
-    v.real   ("rspeed",    o.rocketSpeedScale);     // on top of boost
+    v.real   ("boost",     o.speedBoost);           // walk only
+    v.real   ("rspeed",    o.rocketSpeedScale);     // rockets
     v.real   ("xradius",   o.explosionRadiusScale);
-    v.real   ("jthrust",   o.jetpackThrust);        // on top of boost
+    v.real   ("jthrust",   o.jetpackThrust);        // jetpack
     v.integer("fburn",     o.fuelConsumption);      // units/sec
     v.integer("fregen",    o.fuelRegenPct);         // % of consumption
     v.flag   ("walls",     o.wallsEnabled);         // boundary walls on vs open space
@@ -448,65 +448,65 @@ inline std::vector<std::pair<std::string, MatchPreset>> matchOptionPresets = {
         o.maxBots              = 2;
         o.botDifficulty        = 0.2f;
         o.explosionRadiusScale = 1.0f;
-        o.friendlyFire         = false;
+        o.friendlyFire         = true;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
-    }, "The default setup. No self-damage. LARGE map.")},
+    }, "The default setup. LARGE map.")},
 
     {"CLASSIC HYPED", MakePreset("CLASSIC HYPED", [](MatchOptions& o) {
         o.mapSize              = "XL";
         o.numPlayers           = 6;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
         o.maxBots              = 2;
-        o.botDifficulty        = 0.5f;
+        o.botDifficulty        = 0.3f;
         o.speedBoost           = 1.5f;
-        o.jetpackThrust        = 1.5f;
+        o.jetpackThrust        = 1.0f;
         o.rocketSpeedScale     = 2.0f;
-        o.explosionRadiusScale = 2.0f;   // slider max is 4.0
-        o.friendlyFire         = false;
-    }, "Boosted version of classic. No self-damage. XL map.")},
+        o.explosionRadiusScale = 2.0f;   // slider max is 3.0
+        o.friendlyFire         = true;
+    }, "Boosted version of classic. XL map.")},
 
     {"SPAMMERS DELIGHT", MakePreset("SPAMMERS DELIGHT", [](MatchOptions& o) {
         o.mapSize              = "MEDIUM";
         o.numPlayers           = 6;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
         o.maxBots              = 2;
-        o.botDifficulty        = 0.35f;
+        o.botDifficulty        = 0.4f;
         o.speedBoost           = 1.0f;
-        o.jetpackThrust        = 1.2f;
+        o.jetpackThrust        = 1.0f;
         o.friendlyFire         = false;
-        o.explosionRadiusScale = 3.0f;
-        o.rocketSpeedScale     = 2.0f;
-        o.coastMode            = false;      // friction on: release the key, slow down
-    }, "No self-damage. Big explosions. Speed boosted. No coast mode.")},
+        o.explosionRadiusScale = 1.0f;
+        o.rocketSpeedScale     = 1.5f;
+        o.coastMode            = true;
+    }, "No self-damage. Let the spamming begin! MEDIUM map.")},
 
     {"MAYHEM", MakePreset("MAYHEM", [](MatchOptions& o) {
         o.mapSize              = "SMALL";
         o.numPlayers           = 4;
         o.minHumansToStart     = (PRESET_TESTING_MODE) ? 1 : 2;
-        o.botDifficulty        = 0.7f;
+        o.botDifficulty        = 0.5f;
         o.maxBots              = 2;          
         o.friendlyFire         = false;
-        o.explosionRadiusScale = 1.0f;
-        o.speedBoost           = 1.25f;
-        o.jetpackThrust        = 1.25f;
+        o.explosionRadiusScale = 1.5f;
+        o.speedBoost           = 2.0f;
+        o.jetpackThrust        = 1.5f;
         o.wallElasticity       = 1.0f;
         o.platformElasticity   = 1.0f;
-    }, "Extra fast on a SMALL map.")},
+    }, "Extra chaos packed into a SMALL map.")},
 
     {"VOID", MakePreset("THE VOID", [](MatchOptions& o) {
         o.mapSize               = "XL";
         o.numPlayers            = 8;
         o.minHumansToStart      = (PRESET_TESTING_MODE) ? 1 : 3; // an empty void is a dull one
-        o.botDifficulty         = 0.9f;
+        o.botDifficulty         = 0.6f;
         o.maxBots               = 3;
         o.fuelConsumption       = 50.0f;
         o.fuelRegenPct          = 10.0f;
         o.platformElasticity    = 0.9f;
-        o.explosionRadiusScale  = 4.0f;
+        o.explosionRadiusScale  = 3.0f;
         o.rocketSpeedScale      = 2.0f;
         o.friendlyFire          = false;
         o.wallsEnabled          = false;
-    }, "XL map, no walls.  Fuel is scarce. No self-damage.")}
+    }, "XL map. No walls. FUEL IS SCARCE. Use it wisely.")}
 };
 
 // Where a preset sits on the typical-to-niche ramp above; matchOptionPresets

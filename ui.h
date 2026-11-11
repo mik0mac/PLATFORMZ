@@ -81,6 +81,28 @@ inline const Color FILL_HI = {0, 255, 200, 90};  // translucent fill (hover)
 inline const Color TEXT     = RAYWHITE;
 inline const float BORDER   = 2.0f;
 inline const int   PAD      = 10; // left text padding inside fields/buttons
+// While true, buttons, toggles and sliders draw but ignore the mouse press. Set
+// it through UiClickLock, never directly.
+inline bool clicksLocked = false;
+}
+
+//MARK: Click lock
+// The press that OPENS a popup is still "pressed" for the rest of that frame,
+// and the popup is drawn in that same frame - so without this, whatever control
+// sits under the cursor (a slider, a toggle) takes the opening click too. Hold
+// one of these over a popup's controls on its first frame:
+//     UiClickLock lock(!wasOpen);
+// Scoped, and it never UNlocks an outer lock.
+struct UiClickLock {
+    bool prev;
+    explicit UiClickLock(bool lock) : prev(ui::clicksLocked) { ui::clicksLocked = prev || lock; }
+    ~UiClickLock() { ui::clicksLocked = prev; }
+    UiClickLock(const UiClickLock&) = delete;
+    UiClickLock& operator=(const UiClickLock&) = delete;
+};
+// A left press this frame that a widget may act on.
+inline bool UiLeftPressed() {
+    return !ui::clicksLocked && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 
 //MARK: Panel
@@ -113,7 +135,7 @@ inline bool UiButton(Rectangle r, const char* label, int fontSize = 20) {
              (int)(r.x + (r.width  - tw) / 2.0f),
              (int)(r.y + (r.height - fontSize) / 2.0f),
              fontSize, ui::TEXT);
-    return hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    return hovered && UiLeftPressed();
 }
 
 //MARK: Toggle
@@ -132,7 +154,7 @@ inline bool UiToggle(Rectangle r, bool& value, int fontSize = 20) {
              (int)(r.x + (r.width  - tw) / 2.0f),
              (int)(r.y + (r.height - fontSize) / 2.0f),
              fontSize, value ? ui::OUTLINE : ui::TEXT);
-    bool clicked = hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    bool clicked = hovered && UiLeftPressed();
     if (clicked) value = !value;
     return clicked;
 }
@@ -263,7 +285,7 @@ inline bool UiTextField(Rectangle r, std::string& text, bool& focused,
 inline bool UiSlider(Rectangle r, float& value, float minV, float maxV,
                      bool& active, float step = 0.0f) {
     bool hovered = CheckCollisionPointRec(GetMousePosition(), r);
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hovered) active = true;
+    if (UiLeftPressed() && hovered) active = true;
     if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) active = false; // released anywhere
 
     float old = value;
