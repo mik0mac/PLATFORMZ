@@ -1,22 +1,19 @@
 // Do the client and the server agree on every match rule?
 //
-// The rule bundle crosses the wire as JSON in both directions, written and read
-// by different code on each side:
-//
-//   client -> server   wire.h writes "start"/"options" with a real JSON library;
-//                      the server reads them by string search (options_json.h)
-//   server -> client   the server writes the "opt" echo by hand (2 decimals);
-//                      wire.h reads it back with the JSON library
-//
-// All four walk one list now (VisitMatchOptions, options.h). This is the test
-// that they really do - that a rule set on one side arrives on the other - and
-// it compares bundles through that same list, so a rule added there is covered
+// A client sends the rule bundle as JSON, written with a real JSON library
+// (wire.h); the server reads it by string search (options_json.h). Both walk
+// one list now (VisitMatchOptions, options.h). This is the test that they
+// really do - that a rule set on the client arrives on the server - and it
+// compares bundles through that same list, so a rule added there is covered
 // here without anyone remembering to add it.
+//
+// The other direction, the server's echo of the rules, rides the binary state
+// packet; the live probes read it there (probe.py's maxBots/minHumans/mapSize).
 //
 //   g++ -std=c++17 -O2 -I server -I . -I/opt/homebrew/include -DPLATFORMZ_SERVER \
 //       server/test/options_wire_test.cpp -o /tmp/ow && /tmp/ow
-#include "wire.h"            // the CLIENT's writer and reader
-#include "options_json.h"    // the SERVER's reader and writer
+#include "wire.h"            // the CLIENT's writer
+#include "options_json.h"    // the SERVER's reader
 
 #include <cstdio>
 #include <set>
@@ -103,22 +100,6 @@ int main() {
              "an OPTIONS message with one key changes only that rule");
         same(serverReads("{\"type\":\"options\",\"map\":\"\"}", tuned), tuned,
              "an empty arena name is not a change");
-    }
-
-    printf("server -> client\n");
-    {
-        std::string s = "{\"type\":\"state\",\"opt\":{";
-        OptionJsonWriter w{s};
-        VisitMatchOptions(tuned, w);
-        s += "}}";
-        nlohmann::json j = nlohmann::json::parse(s, nullptr, /*allow_exceptions=*/false);
-        check(!j.is_discarded(), "the server's echo is valid JSON");
-        MatchOptions got;
-        if (!j.is_discarded()) {
-            wire_detail::OptionKeyReader reader{j["opt"]};
-            VisitMatchOptions(got, reader);
-        }
-        same(got, tuned, "the echo carries every rule back (to 2 decimals)");
     }
 
     printf("what the server will accept\n");

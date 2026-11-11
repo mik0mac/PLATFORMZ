@@ -235,8 +235,8 @@ static double Pct(std::vector<double> v, double p) {
 // automated coverage before this.
 struct WsResult {
     bool        welcome = false;
-    int         states  = 0;      // JSON state packets
-    int         binStates = 0;    // binary state packets (only ever sent to a ?bin=1 client)
+    int         states  = 0;      // JSON state packets - there should never be one
+    int         binStates = 0;    // binary state packets
     bool        binDecodes = true; // every binary packet parsed as a State by the real client code
     double      stateSpanSec = 0.0; // first to last state of either kind
     std::string identity;     // a token the server issued us, if it did
@@ -334,27 +334,26 @@ static int WsSmoke(const Opts& o) {
     const WsResult first = WsConnect(o, /*token*/ "", 10.0, 30);
     if (!first.error.empty()) { std::cout << "  FAIL websocket error: " << first.error << "\n"; return 1; }
     check(first.welcome, "a welcome arrived");
-    check(first.states >= 30, "state packets stream (" + std::to_string(first.states) + " in 10s)");
-    check(first.binStates == 0, "a client that did not ask for binary gets JSON only (an older page)");
+    check(first.binStates >= 30, "state packets stream (" + std::to_string(first.binStates) + " in 10s)");
+    check(first.states == 0, "...and none of them is JSON: the state is binary for every client");
+    check(first.binDecodes, "...as binary frames the client's own decoder accepts");
     // This client is alone in a lobby, which is not simulating - so it should be
     // on the idle send rate, not the tick rate.
     {
-        const double rate = first.stateSpanSec > 0.0 ? (first.states - 1) / first.stateSpanSec : 0.0;
+        const double rate = first.stateSpanSec > 0.0 ? (first.binStates - 1) / first.stateSpanSec : 0.0;
         const double want = 60.0 / IDLE_BROADCAST_EVERY_N_TICKS;
         check(rate > want * 0.5 && rate < want * 2.0,
               "a lobby is sent at the idle rate (" + std::to_string((int)(rate + 0.5)) + "/s, want ~"
               + std::to_string((int)want) + ", not 60)");
     }
 
-    // The path the browser build uses now: ?bin=1 on the URL.
+    // What the real client still puts on its URL. The server ignores it now; it
+    // must not change anything.
     {
         const WsResult bin = WsConnect(o, first.identity, 10.0, 30, /*binary*/ true);
-        if (!bin.error.empty()) { std::cout << "  FAIL binary connect: " << bin.error << "\n"; return 1; }
-        check(bin.welcome, "a ?bin=1 client is welcomed (the welcome stays JSON)");
-        check(bin.binStates >= 30, "...and gets the binary state packet ("
-              + std::to_string(bin.binStates) + " received)");
-        check(bin.states == 0, "...and no JSON state at all");
-        check(bin.binDecodes, "...as binary frames the client's own decoder accepts");
+        if (!bin.error.empty()) { std::cout << "  FAIL ?bin=1 connect: " << bin.error << "\n"; return 1; }
+        check(bin.welcome && bin.binStates >= 30 && bin.states == 0 && bin.binDecodes,
+              "a ?bin=1 client gets exactly the same (" + std::to_string(bin.binStates) + " binary states)");
     }
 
     // D3 over WebSocket. The token rides the upgrade URL here rather than a

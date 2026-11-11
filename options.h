@@ -291,12 +291,12 @@ inline void ClampOptions(MatchOptions& m) {
 //MARK: The rule list - ONE definition
 // Every rule, with the name it goes by as TEXT (JSON on the wire). Anything that
 // reads or writes the whole bundle as text walks this instead of keeping its own
-// list: the client's "options"/"start" messages and its reading of the server's
-// echo (wire.h), and the server's reading of those messages and writing of that
-// echo (server_main.cpp).
+// list: the client's "options"/"start" messages (wire.h) and the server's
+// reading of them (server/options_json.h).
 //
-// Those were four hand-kept lists of the same seventeen names, plus two more on
-// the server that copied the bundle field by field. Add a rule to three and
+// Those were hand-kept lists of the same seventeen names - four while the
+// server's echo of the rules was JSON too - plus two more on the server that
+// copied the bundle field by field. Add a rule to three and
 // forget the fourth and nothing fails to compile: the rule just quietly never
 // reaches players, or resets to its default every time the host presses START.
 //

@@ -66,13 +66,6 @@ struct ConnectedClient {
     // can't overwrite the press before the sim tick consumes it. Consumed (and
     // cleared) once per shot in SimulationLoop.
     bool firePending    = false;
-    // A WebSocket client that asked for the BINARY state packet (?bin=1 on its
-    // connect URL). The same packet a UDP client gets, an eighth the size of the
-    // JSON one. Opt-in rather than assumed because a browser can still be
-    // running a cached page from before it could read binary frames - that page
-    // drops them unread and would sit on a world that never updates.
-    // Meaningless for UDP, which is always binary.
-    bool binaryState    = false;
     // Display name from the client's "name" message. Stored here (io thread) and
     // copied onto the player slot by the sim loop, so all gameSpace mutation stays
     // single-threaded. nameDirty flags an unapplied change.
@@ -231,8 +224,8 @@ struct Match {
     bool               startHeld = false;
     // Seconds left in the pre-match countdown, published in every state packet so
     // all clients show the same number and drive their fade-ins in lockstep.
-    // Written by the sim thread each COUNTDOWN tick, read by the io thread in
-    // buildStatePacket.
+    // Written by the sim thread each COUNTDOWN tick, read when the state packet
+    // is built.
     std::atomic<float> countdownRemaining{0.0f};
 
     // Monotonic match counter, bumped when a match is built and published in every
@@ -488,8 +481,6 @@ public:
     std::string buildWelcome(int playerId);
     std::string buildWelcomeBinary(int playerId);
     std::string welcomeFor(const ConnectedClient& c);
-    std::string buildStateBodyJson(SlotMask connectedSlots, int hostSlot);
-    std::string buildStatePacket(uint32_t tick, uint32_t lastSeq, const std::string& body);
     std::string buildStateBodyBinary(SlotMask connectedSlots, int hostSlot);
     std::string buildStateBinary(uint32_t tick, uint32_t lastSeq, const std::string& body);
 

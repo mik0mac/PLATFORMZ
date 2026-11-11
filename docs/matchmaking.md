@@ -116,9 +116,8 @@ a room. Over UDP it must still keep up its heartbeat - `UDP_CLIENT_TIMEOUT_LOBBY
 is 3 seconds and applies to everyone, seated or not.
 
 Everything a client sends is JSON. Everything it receives is JSON **except** the
-welcome over UDP and the per-tick state, which are binary (`netbin.h`) - sized so
-a full 8-player tick fits one unfragmented datagram, and sent over WebSocket too
-to any client that asks (`?bin=1`; see the state row below). The client dispatches on **byte 0**:
+per-tick state, on both transports, and the welcome over UDP. Those are binary
+(`netbin.h`), sized so a full 8-player tick fits one unfragmented datagram. The client dispatches on **byte 0**:
 `{` is JSON, anything else is a binary tag.
 
 ### WebSocket
@@ -208,21 +207,22 @@ cannot land on the new one's spawn state.
 | `challenge` | `c` | UDP only. Not a refusal — answer it and hello again |
 | `identity` | `tok` | a token to store and present from now on. Sent when you had none, or yours no longer verifies |
 | **welcome** | slot + room identity + static world | JSON over WS, binary tag `0x0C` over UDP |
-| **state** | phase, countdown, epoch, music, options, roster | binary tag `0x0F` over UDP, and over WS to a client that connected with `?bin=1` (one binary frame, never chunked); JSON over WS otherwise. 60 Hz while the world is simulating, 10 Hz otherwise — see below |
+| **state** | phase, countdown, epoch, music, options, roster | binary tag `0x0F` on both transports (one datagram over UDP, one binary frame over WS). 60 Hz while the world is simulating, 10 Hz otherwise — see below |
 | `matchlist` | `cur`, `next`, `total`, `m[]` | **public rooms only** |
 | `created` | `m` | the code of the room you just made — the only place a private room's code is ever revealed |
 | `joinfail` | `why` | see below |
 | `leaderboard` | `lb[{n,s,b}]`, optional `best` | the best RUNS, already ranked. `b` marks the bot row. `best` is this client's own best run, pinned under the board — absent when they have none, and absent when it is already up there. This is the **ONLINE** tab of the client's HIGH SCORES modal; the LOCAL tab is a second board the client keeps itself (`local_scores.h`, fed only by offline matches) and never reaches the wire |
 | *(chunk)* | tag `0x03` | transport framing, reassembled below the protocol |
 
-**State: which format, and how often.** The binary packet is the same bytes on
-both transports and about an eighth the size of the JSON one (measured: 689 B
-against 4,867 B a tick for an eight-slot MEDIUM match). A WebSocket client asks
-for it with `?bin=1` on its connect URL, beside `?key=`/`?cid=`/`?tok=`, because
-the server has to know before it sends the first packet. It is opt-in so a
-browser still running a cached page from before the web client could read
-binary frames keeps working on JSON; the server logs such a connection as
-`ws json`. The **welcome stays JSON over WebSocket** — it is sent once.
+**State: one format, and how often.** There is one state packet, the binary one,
+and every client gets the same bytes. Over WebSocket it used to be JSON - about
+seven times the size (4,867 B against 689 B a tick for an eight-slot MEDIUM
+match) and a second copy of every field to keep in step; that format is gone
+from both the server and the client. The **welcome is still JSON over
+WebSocket** — it is sent once. The client still puts `?bin=1` on its connect
+URL: the current server ignores it, but the one build that still had the JSON
+format sent JSON to any WebSocket client that did not ask, and a current client
+cannot read that.
 
 A room sends state every tick only while its world is moving: `PLAYING`, and the
 first `GAMEOVER_SIM_SECONDS` of `GAMEOVER`. In `LOBBY`, `COUNTDOWN` and the rest
@@ -231,8 +231,8 @@ of `GAMEOVER` it sends one tick in `IDLE_BROADCAST_EVERY_N_TICKS` (constants.h;
 change of phase, a sound or kill-feed message, somebody taking or leaving a seat
 (so a newcomer's first packet is immediate), a rules change, and the auto-start
 timer arming or disarming. The client runs the countdown down locally between packets.
-`probe_sendrate.py` checks the rates; `loadtest --mode ws-smoke` checks the
-binary opt-in.
+`probe_sendrate.py` checks the rates; `loadtest --mode ws-smoke` checks that a
+WebSocket client gets binary state and nothing else.
 
 **Music** in the state is `mu`, a `MusicId` (`constants.h`): the cue the room
 picked for its current phase, so everyone in the room hears the same one (#174).

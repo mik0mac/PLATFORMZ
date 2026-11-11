@@ -1,9 +1,10 @@
 // wire.h
 //
-// The JSON wire contract, mirroring server/server_main.cpp. One side serializes
-// input, the other parses state - this file is the client half:
+// The wire contract, mirroring server/server_main.cpp - this file is the client
+// half. Everything the client SENDS is JSON; what it receives is JSON except the
+// per-tick state (and, over UDP, the welcome), which are binary (netbin.h):
 //   serializeInput()  ->  exactly what the server's parseInput() reads
-//   applyMessage()    <-  parses a welcome/state packet from buildStatePacket()
+//   applyMessage()    <-  one inbound frame: binary state/welcome, or a JSON message
 //
 // State application is sync-by-id, not replace-the-vector, so per-object state
 // the server doesn't transmit stays stable. In particular an asteroid's wireframe
@@ -380,13 +381,6 @@ struct OptionKeyWriter {      // bundle -> JSON object
     void flag   (const char* k, bool v)               { j[k] = v; }
     void text   (const char* k, const std::string& v) { j[k] = v; }
 };
-struct OptionKeyReader {      // JSON object -> bundle; an absent key keeps what the field held
-    const nlohmann::json& j;
-    void integer(const char* k, int& v)         { v = j.value(k, v); }
-    void real   (const char* k, float& v)       { v = j.value(k, v); }
-    void flag   (const char* k, bool& v)        { v = j.value(k, v); }
-    void text   (const char* k, std::string& v) { v = j.value(k, v); }
-};
 } // namespace wire_detail
 
 inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
@@ -473,33 +467,6 @@ namespace wire_detail {
 
 using nlohmann::json;
 
-// Update existing local objects to match the server, creating any unseen ones
-// (via make). `make` sets stable fields once; `set` copies the networked fields
-// every packet. Does NOT remove locals - use for a fixed, persistent set such as
-// player slots. Also the only option for types that aren't move-assignable
-// (Player has a const member, so erase(remove_if) won't compile for it).
-template <class T, class Make, class Set>
-inline void syncByIdNoErase(std::vector<T>& vec, const json& arr, Make make, Set set) {
-    for (const auto& jo : arr) {
-        uint32_t id = jo.value("id", 0u);
-        T* found = nullptr;
-        for (auto& e : vec) if (e.id == id) { found = &e; break; }
-        if (!found) { vec.push_back(make(jo)); found = &vec.back(); }
-        set(*found, jo);
-    }
-}
-
-// As above, but also drops locals whose id is absent from the packet - for
-// collections the server adds to and removes from (asteroids, rockets). Requires
-// the element type to be move-assignable.
-template <class T, class Make, class Set>
-inline void syncById(std::vector<T>& vec, const json& arr, Make make, Set set) {
-    std::unordered_set<uint32_t> present;
-    for (const auto& jo : arr) present.insert(jo.value("id", 0u));
-    syncByIdNoErase(vec, arr, make, set);
-    vec.erase(std::remove_if(vec.begin(), vec.end(),
-        [&](const T& e) { return present.find(e.id) == present.end(); }), vec.end());
-}
 
 inline Vector3 vec3(const json& jo, const char* x, const char* y, const char* z) {
     return { jo.value(x, 0.0f), jo.value(y, 0.0f), jo.value(z, 0.0f) };
@@ -545,11 +512,11 @@ inline ServerMessage applyBinaryWelcome(const std::string& buf, GameSpace& gs) {
     return msg;
 }
 
-//MARK: Inbound - binary state (UDP)
-// Decode a binary state packet (server buildStateBinary) into the GameSpace, the
-// mirror of the "state" branch of applyMessage below - same sync-by-id semantics,
-// reading fields sequentially from the byte stream instead of JSON. Field ORDER
-// must match the server writer exactly.
+//MARK: Inbound - state
+// Decode a state packet (server buildStateBinary) into the GameSpace. The only
+// state format, on both transports. Sync-by-id (see the top of this file),
+// reading fields sequentially from the byte stream. Field ORDER must match the
+// server writer exactly.
 inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
     ServerMessage msg;
     msg.type = ServerMessage::Type::State;
@@ -630,7 +597,7 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             // takes its sin/cos, but the client seeds its own aim from this value
             // and clamps it to +-89 deg - which pinned a player who took over a
             // body that was looking down to staring straight up. Pitch is a signed
-            // angle; put it back in -PI..PI. (JSON carries it signed already.)
+            // angle; put it back in -PI..PI.
             p->pitch         = (pitch > PI) ? pitch - 2.0f * PI : pitch;
             p->health        = hp;
             p->fuel          = fuel;
@@ -765,15 +732,15 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
 }
 
 //MARK: Inbound - apply
-// Parse one text frame. For a "state" packet, overwrite the GameSpace vectors to
+// Apply one inbound frame. A state packet overwrites the GameSpace vectors to
 // match the server. Returns what kind of message it was (welcome carries the
 // assigned playerId; the caller maps that to "me").
 inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     using nlohmann::json;
     using namespace wire_detail;
 
-    // Binary packet (UDP): byte 0 is a tag, never '{'. Everything the WebSocket
-    // path sends (welcome + state) stays JSON and falls through below.
+    // Binary packet: byte 0 is a tag, never '{'. The state on both transports,
+    // and the welcome over UDP. Everything else is JSON and falls through below.
     if (!text.empty()) {
         uint8_t tag = (uint8_t)text[0];
         if (tag == nb::STATE_BIN_VERSION)   return applyBinaryState(text, gs);
@@ -912,160 +879,10 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
         }
         return msg;
     }
-    if (type != "state") { msg.type = ServerMessage::Type::Unknown; return msg; }
-
-    msg.type = ServerMessage::Type::State;
-    msg.tick = j.value("tick", 0u);
-    // Match phase (server-authoritative) - drives the networked client's screen.
-    const std::string phase = j.value("phase", "");
-    msg.phase = phase == "playing"   ? ServerMessage::Phase::Playing
-              : phase == "countdown" ? ServerMessage::Phase::Countdown
-              : phase == "gameover"  ? ServerMessage::Phase::GameOver
-              : phase == "lobby"     ? ServerMessage::Phase::Lobby
-                                     : ServerMessage::Phase::Unknown;
-    msg.countdown = j.value("countdown", 0.0f); // seconds left (0 unless Countdown)
-    msg.epoch     = j.value("ep", 0u);          // match epoch; echoed back in our input
-    msg.endedByHost = j.value("eh", 0) != 0;    // the host ended it (#188); absent otherwise
-    msg.music     = MusicIdFromWire(j.value("mu", (int)MUSIC_COUNT)); // room's music cue (#174)
-
-
-    // Lobby options snapshot (match-wide). Present every state packet; the client
-    // applies these to its OPTIONS modal so any client's change shows live.
-    if (j.contains("opt")) {
-        const auto& o = j["opt"];
-        msg.hasOptions = true;
-        // Absent keys fall back to the compile-time defaults: start from a
-        // fresh bundle and let the reader overwrite what the packet carries.
-        msg.opt = MatchOptions{};
-        OptionKeyReader reader{o};
-        VisitMatchOptions(msg.opt, reader);
-    }
-
-    // Players - a fixed, persistent set of slots; never erased (also Player
-    // isn't move-assignable, so erase(remove_if) wouldn't compile).
-    if (j.contains("players")) {
-        syncByIdNoErase(gs.getPlayers(), j["players"],
-            [](const json& jo) {
-                Player p;
-                p.id = jo.value("id", 0u);
-                p.position = p.startingPosition = vec3(jo, "px", "py", "pz");
-                // A body we first hear of already dead died before we were
-                // watching. Its burst is not ours to play (see enterNetworkedMatch).
-                p.deathBurstSpawned = !jo.value("alive", true);
-                return p;
-            },
-            [](Player& p, const json& jo) {
-                p.position = vec3(jo, "px", "py", "pz");
-                p.velocity = vec3(jo, "vx", "vy", "vz");
-                p.yaw      = jo.value("yaw", 0.0f);
-                p.pitch    = jo.value("pitch", 0.0f);
-                p.health   = jo.value("hp", 0);
-                p.fuel     = jo.value("fuel", 0.0f);
-                p.ammo     = jo.value("ammo", 0);
-                p.isAlive  = jo.value("alive", true);
-                p.isSpectating    = jo.value("spec", false); // server-owned: dead player is now a free-fly spectator
-                p.spectatingTimer = jo.value("stmr", p.spectatingTimer); // drives the client-side greyscale ramp
-                p.isBot    = jo.value("bot", false); // server-owned: which slots are bots (absent on older packets)
-                p.isHost   = jo.value("host", false); // server-owned: who may start/retune this room
-                p.flashTimer = jo.value("flash", 0.0f); // server-driven damage flash (body glow)
-                p.isOutOfBounds    = jo.value("oob", false);  // server-owned: outside the boundary, elimination pending
-                p.outOfBoundsTimer = jo.value("oobt", p.outOfBoundsTimer); // drives the HUD countdown
-                p.isConnected = jo.value("active", true); // hide empty slots client-side
-                p.name     = jo.value("name", std::string("Player")); // server-owned display name
-                p.score    = jo.value("score", p.score); // server-owned score (kept stable if absent)
-            });
-        // Slots the server stopped sending (roster shrank between matches, e.g.
-        // lobby bots popped when the match starts) are orphaned locally at their
-        // last-known position - which for lobby-only slots is the origin,
-        // rendering an inert "phantom" body at world center. We can't erase them
-        // (Player has const members, hence syncByIdNoErase), so hide them via the
-        // existing isConnected draw gate.
-        std::unordered_set<uint32_t> presentIds;
-        for (const auto& jo : j["players"]) presentIds.insert(jo.value("id", 0u));
-        for (Player& p : gs.getPlayers())
-            if (presentIds.find(p.id) == presentIds.end()) p.isConnected = false;
-    }
-
-    // Asteroids - startingPosition seeds the wireframe shape, so set it once.
-    if (j.contains("asteroids")) {
-        syncById(gs.getAsteroids(), j["asteroids"],
-            [](const json& jo) {
-                Asteroid a;
-                a.id = jo.value("id", 0u);
-                a.position = a.startingPosition = vec3(jo, "px", "py", "pz");
-                a.size = jo.value("size", 1.0f);
-                return a;
-            },
-            [](Asteroid& a, const json& jo) {
-                a.position    = vec3(jo, "px", "py", "pz");
-                a.velocity    = vec3(jo, "vx", "vy", "vz");
-                a.size        = jo.value("size", a.size);
-                a.health      = jo.value("hp", a.health);
-                a.syncFillAlpha(); // fill alpha tracks health; clients never run takeDamage
-                a.flashTimer  = jo.value("flash", 0.0f); // server-driven hot-glow damage flash
-                a.isDestroyed = jo.value("dead", false);
-            });
-    }
-
-    // Rockets - server sends velocity but not direction; derive it for drawing.
-    if (j.contains("rockets")) {
-        syncById(gs.getRockets(), j["rockets"],
-            [](const json& jo) {
-                Rocket r;
-                r.id = jo.value("id", 0u);
-                return r;
-            },
-            [](Rocket& r, const json& jo) {
-                r.position    = vec3(jo, "px", "py", "pz");
-                r.velocity    = vec3(jo, "vx", "vy", "vz");
-                r.direction   = Vector3Normalize(r.velocity);
-                r.isDestroyed = jo.value("dead", false);
-            });
-    }
-
-    // Explosions - announcements, rebuilt each packet (see the binary decode).
-    if (j.contains("explosions")) {
-        auto& explosions = gs.getExplosions();
-        explosions.clear();
-        for (const auto& jo : j["explosions"]) {
-            Explosion e;
-            e.position = vec3(jo, "px", "py", "pz");
-            e.id       = jo.value("id", 0u);
-            e.ownerId  = jo.value("own", 0u);
-            e.age      = jo.value("age", 0.0f);
-            e.vfxRadius *= gs.explosionRadiusScale;
-            e.hasAppliedDamage = true;
-            explosions.push_back(e);
-        }
-    }
-
-    // Audio events - one-shot sounds the server emitted this tick. Append (the
-    // caller drains + clears each frame); main.cpp filters echoes of events it
-    // already predicted locally and pushes the rest to the AudioQueue.
-    if (j.contains("audio")) {
-        for (const auto& jo : j["audio"]) {
-            NetAudioEvent ev;
-            ev.fx    = jo.value("fx", 0);
-            ev.owner = jo.value("own", 0u);
-            ev.pos   = vec3(jo, "px", "py", "pz");
-            ev.volumeScale = jo.value("vol", 1.0f);
-            gs.getAudioEvents().push_back(ev);
-        }
-    }
-
-    // Messages emitted by the server this tick (kill-feed / warnings). Rebuilt
-    // from type + names; generate()/visibility run client-side in main.cpp's
-    // draw. Appended (drained + cleared each frame like audio events).
-    if (j.contains("messages")) {
-        for (const auto& jo : j["messages"]) {
-            Message m((MessageType)jo.value("mt", 0),
-                      jo.value("pa", std::string()),
-                      jo.value("pb", std::string()),
-                      jo.value("pai", 0u),
-                      jo.value("pbi", 0u));
-            gs.getMessages().push_back(m);
-        }
-    }
-
+    // Anything else is not ours. That includes a JSON "state": the per-tick
+    // state is binary on every transport now (applyBinaryState, dispatched on
+    // byte 0 above), and the JSON twin - a second copy of every field - is gone
+    // from both ends.
+    msg.type = ServerMessage::Type::Unknown;
     return msg;
 }

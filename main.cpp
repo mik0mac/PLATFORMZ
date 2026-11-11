@@ -298,10 +298,13 @@ int main(int argc, char** argv) {
         // the server welcomes us the instant we connect, so the hello below may
         // never be sent at all. Both are hex/UUID, so neither needs escaping.
         add("tok", profile::Get().token);
-        // "Send me the binary state packet." Over WebSocket the server otherwise
-        // sends the JSON one, eight times the size, because a browser may still
-        // be running a cached page that cannot read binary frames - so a client
-        // has to say it can. (udp:// is always binary and drops the query.)
+        // "Send me the binary state packet." The current server sends it to
+        // everyone and ignores this. It is still sent for the one server that
+        // does not: the build from just before the JSON state was removed, which
+        // gave JSON to any WebSocket client that did not ask - and this client
+        // can no longer read that. Costs six bytes; makes the order the server
+        // and the page are deployed in not matter. Safe to drop once no such
+        // server can still be running. (udp:// drops the query.)
         add("bin", "1");
         return out;
     };
