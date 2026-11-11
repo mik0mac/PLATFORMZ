@@ -975,7 +975,15 @@ int main(int argc, char** argv) {
         // wire-synced, so the server clearing its own copy in resetPlayersForMatch()
         // never reaches us - without this, anyone who died last match gets no burst
         // for the rest of the session.
-        for (Player& p : gameSpace.getPlayers()) p.deathBurstSpawned = false;
+        //
+        // Re-armed for the LIVING only. This is also the door a mid-match joiner
+        // comes through, and clearing the flag on everybody made every body that
+        // had died before they arrived explode at once on their first frame. At
+        // an ordinary start the countdown's state packets have already revived
+        // every slot, so this is the same "all clear" it always was. A body that
+        // is dead now and comes back later (a joiner taking the slot over) is
+        // re-armed by the burst loop in the PLAYING block.
+        for (Player& p : gameSpace.getPlayers()) p.deathBurstSpawned = !p.isAlive;
         // Seed the look prediction from the server's spawn orientation NOW - the
         // countdown states already carried it into our slot - so the very first
         // PLAYING frame sends and renders the correct facing instead of a stale
@@ -2635,6 +2643,10 @@ int main(int argc, char** argv) {
             // is the flag to ask. It stays TRUE for a mid-match leaver's open
             // body, which is a real body and does still burst when it dies.
             for (Player& player : gameSpace.getPlayers()) {
+                // Alive again (a new match, or a joiner took a dead slot over):
+                // the next death is a new one. BEFORE the isConnected test, so a
+                // slot that was empty when the flag was set is still re-armed.
+                if (player.isAlive) player.deathBurstSpawned = false;
                 if (!player.isConnected) continue;
                 if (!player.isAlive && !player.deathBurstSpawned) {
                     gameSpace.spawnEliminationBurst(player.position, player.color_outline);

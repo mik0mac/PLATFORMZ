@@ -620,7 +620,13 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             if (isNew) p->startingPosition = pos;
             p->velocity      = vel;
             p->yaw           = yaw;
-            p->pitch         = pitch;
+            // The wire angle is 0..2*PI, so a DOWNWARD pitch arrives as a large
+            // positive one (-30 deg reads as 330). Harmless to anything that only
+            // takes its sin/cos, but the client seeds its own aim from this value
+            // and clamps it to +-89 deg - which pinned a player who took over a
+            // body that was looking down to staring straight up. Pitch is a signed
+            // angle; put it back in -PI..PI. (JSON carries it signed already.)
+            p->pitch         = (pitch > PI) ? pitch - 2.0f * PI : pitch;
             p->health        = hp;
             p->fuel          = fuel;
             p->ammo          = ammo;
@@ -633,6 +639,9 @@ inline ServerMessage applyBinaryState(const std::string& buf, GameSpace& gs) {
             p->isSpectating  = (flags & 8) != 0;
             p->isOutOfBounds = (flags & 16) != 0;
             p->isHost        = (flags & 32) != 0;
+            // A body we first hear of already dead died before we were watching.
+            // Its burst is not ours to play (see enterNetworkedMatch).
+            if (isNew) p->deathBurstSpawned = !p->isAlive;
             p->outOfBoundsTimer = oobTimer;
             p->name          = name;
         }
@@ -948,6 +957,9 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
                 Player p;
                 p.id = jo.value("id", 0u);
                 p.position = p.startingPosition = vec3(jo, "px", "py", "pz");
+                // A body we first hear of already dead died before we were
+                // watching. Its burst is not ours to play (see enterNetworkedMatch).
+                p.deathBurstSpawned = !jo.value("alive", true);
                 return p;
             },
             [](Player& p, const json& jo) {
