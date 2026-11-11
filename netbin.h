@@ -257,10 +257,12 @@ static const float QVEL_BODY_RANGE = 1000.0f;
 //
 // SHOTS - rockets, explosions and audio events (which sit at a rocket, a blast
 // or a player, so the wider range covers them all):
-//   rocket vel = ROCKET_SPEED 972 * speedBoost 2 * rocketSpeedScale 2
-//                + PLAYER_MAX_SPEED 600 inherited                    = 4488
+//   rocket vel = ROCKET_SPEED 972 * rocketSpeedScale 2
+//                + PLAYER_MAX_SPEED 600 inherited                    = 2544
 //   rocket pos = 6540 (fired by a player at the edge of BODY's range)
-//                + 4488 * Rocket::fadeLength 3s                       = 20004
+//                + 2544 * Rocket::fadeLength 3s                       = 14172
+// (SPEED BOOST used to multiply rockets too, 4488 / 20004; the ranges were
+// sized for that and are kept - the spare costs precision only, not bytes.)
 // ~63cm and ~14cm/s per step - under a rocket's per-tick motion (16+ units at
 // 60 Hz) and well under any blast radius.
 static const float QPOS_SHOT_RANGE = 20500.0f;

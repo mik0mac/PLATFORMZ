@@ -158,7 +158,7 @@ inline void ApplyPlayerInput(Player& player, const PlayerInput& in,
             // (applied just below). Overrides the per-rocket constant defaults.
             rocket.gravityEnabled      = gameSpace.rocketsObeyPhysics;
             rocket.velocityInheritance = gameSpace.rocketsObeyPhysics;
-            rocket.speed *= gameSpace.speedBoost * gameSpace.rocketSpeedScale; // OPTIONS SPEED BOOST x ROCKET VELOCITY
+            rocket.speed *= gameSpace.rocketSpeedScale; // OPTIONS ROCKET VELOCITY (SPEED BOOST is walk-only)
             rocket.velocity  = Vector3Scale(aim, rocket.speed); // fire straight, no inherited velocity
             if (rocket.velocityInheritance) {
                 rocket.velocity = Vector3Add(rocket.velocity, player.velocity); // inherit player's velocity

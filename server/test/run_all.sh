@@ -33,6 +33,7 @@ run reassembly  server/test/reassembly_test.cpp
 run grid_equiv  server/test/grid_equiv_test.cpp collisions.cpp
 run rocket_fuse server/test/rocket_fuse_test.cpp collisions.cpp
 run bot_aim     server/test/bot_aim_test.cpp collisions.cpp
+run speed_options server/test/speed_options_test.cpp collisions.cpp
 run registry    server/test/registry_test.cpp
 run options_wire server/test/options_wire_test.cpp
 

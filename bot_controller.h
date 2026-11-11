@@ -181,10 +181,10 @@ struct BotController {
         // (defensive — callers init() at match start).
         if ((int)decisions.size() < (int)players.size()) init(players);
         // OPTIONS-scaled values so lead-aim/standoff match what actually happens
-        // in collisions/input.h: rockets spawn at ROCKET_SPEED * speedBoost *
+        // in collisions/input.h: rockets spawn at ROCKET_SPEED *
         // rocketSpeedScale (input.h), blasts detonate at EXPLOSION_DAMAGE_RADIUS *
         // explosionRadiusScale (collisions.cpp spawnExplosion).
-        float rocketSpeed = ROCKET_SPEED * gs.speedBoost * gs.rocketSpeedScale;
+        float rocketSpeed = ROCKET_SPEED * gs.rocketSpeedScale;
         float explosionRadius = EXPLOSION_DAMAGE_RADIUS * gs.explosionRadiusScale;
         // Gates for the fuel-conserving / wall-bounce behaviors (bot_logic.h:
         // SeekHighGround, Bounce) - read straight off GameSpace's OPTIONS fields.

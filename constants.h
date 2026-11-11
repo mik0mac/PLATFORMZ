@@ -305,8 +305,9 @@ const float PLAYER_SPEED_WALK = 54.0f; // units/sec
 const float PLAYER_ACCELERATION_WALK = 54.0f; // units/sec^2
 const float PLAYER_SPEED_JETPACK = 81.0f; // units/sec
 const float PLAYER_ACCELERATION_JETPACK = 81.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~75 net climb accel under moon gravity.
-// The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
-// THRUST sliders (MatchOptions in options.h) multiply them per match. The
+// The speeds above are the 1x baseline: the OPTIONS SPEED BOOST (walk) and
+// JETPACK THRUST (jetpack) sliders (MatchOptions in options.h) multiply them
+// per match. The
 // COAST MODE toggle that decides how they decay is a rule and lives there too.
 // Hard ceiling on a player's speed from ANY source - movement, rocket kickback,
 // blast pushback, gravity. Kickback is what needs it: each shot adds
