@@ -86,22 +86,36 @@ for c in (host, late):
                        f"pitch {math.degrees(r['pitch']):.2f} deg")
 
 print("a player joins the match already running")
-time.sleep(3.0)                      # let the bots turn away from their spawn aim
-bot_aims = [off_centre_deg(host.slots[s]) for s in bots if host.slots[s]["alive"]]
+# The joiner takes the LOWEST free slot, which is the lowest bot. Wait until that
+# bot has plainly turned away from its spawn facing, or a joiner who inherited
+# its aim would pass by luck.
+target = min(bots)
+def turned_away():
+    r = host.slots.get(target, {})
+    return bool(r) and r["alive"] and (off_centre_deg(r) > 25.0 or abs(math.degrees(r["pitch"])) > 5.0)
+check(wait_until(turned_away, 20, step=0.02),
+      f"the bot in slot {target} has turned away from the centre "
+      f"({off_centre_deg(host.slots[target]):.0f} deg yaw, {math.degrees(host.slots[target]['pitch']):.0f} deg pitch)")
 check(host.phase == "playing", f"still playing (phase={host.phase})")
-check(any(a > 5.0 for a in bot_aims) or any(abs(math.degrees(host.slots[s]["pitch"])) > 5.0 for s in bots),
-      f"the bots really have turned away, so inheriting their aim would show "
-      f"(yaw offsets {[round(a) for a in bot_aims]})")
 third = C("THIRD"); third.hello(); time.sleep(0.4)
-check(join_room(third, room), "joined the running match")
-time.sleep(0.3)
-if third.slot is not None and third.slot in third.slots:
+third.send({"type": "join", "m": room, "code": ""})
+# Read the body the moment it is ours. It INHERITS the bot's velocity, so it is
+# moving, and the direction to the centre moves with it: the facing was exact at
+# the tick of the takeover and drifts after. Hence the first packet, and a yaw
+# tolerance that a moving body can meet but an inherited aim (25+ deg, above)
+# cannot. Pitch has no such excuse - nothing changes it but input, and this
+# client sends none - so it is held to level.
+def seated():
+    r = third.slots.get(third.slot) if third.slot is not None else None
+    return third.matchCode == room and bool(r) and not r["bot"]
+check(wait_until(seated, 5, step=0.01), f"joined the running match (slot={third.slot})")
+if seated():
     r = third.slots[third.slot]
-    check(r["alive"] and not r["bot"], "took a body over, alive and human")
-    check(faces_in(r), f"and faces in: {off_centre_deg(r):.2f} deg off in yaw, "
-                       f"pitch {math.degrees(r['pitch']):.2f} deg")
-else:
-    check(False, f"got a slot in the running match (slot={third.slot})")
+    check(third.slot == target, f"took the bot's body over (slot {third.slot})")
+    check(r["alive"], "alive")
+    check(off_centre_deg(r) < 10.0 and abs(math.degrees(r["pitch"])) < 0.5,
+          f"and faces in, level: {off_centre_deg(r):.2f} deg off in yaw, "
+          f"pitch {math.degrees(r['pitch']):.2f} deg")
 
 for c in (host, late, third):
     c.alive = False
