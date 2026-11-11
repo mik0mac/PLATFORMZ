@@ -244,7 +244,10 @@ never include a platform socket header anywhere else in the client.**
 12 independent **rooms**, each a whole match, all ticked on one 60 Hz beat. It
 reuses the game headers (`gamespace.h`, `collisions.h`, `input.h`) against
 math-only raylib shims, so server and client physics are the same code. Clients
-reach it over WebSocket (JSON) or UDP (binary, `netbin.h`); the same server speaks
+reach it over WebSocket or UDP; the per-tick state is the same **binary** packet
+(`netbin.h`) on both - a WebSocket client asks for it with `?bin=1`, and one that
+does not (an older cached page) still gets JSON. Rooms that are not simulating
+send state at 10 Hz, not 60 (`IDLE_BROADCAST_EVERY_N_TICKS`). The same server speaks
 both at once on one port.
 
 Five docs, and it is worth reading the right one before changing anything here:

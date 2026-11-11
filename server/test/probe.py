@@ -76,6 +76,7 @@ class C:
         # on the wire.
         self.matchName, self.matchPreset = "", ""
         self.countdown = 0.0
+        self.states = 0            # state packets received, for anything measuring the send rate
         self.music = None  # the room's music cue (MusicId) from the last state packet
         # The two rules with no OPTIONS slider, echoed in every state packet
         # like the rest of the bundle. Per-preset, so never assumed.
@@ -182,6 +183,7 @@ class C:
                 #       u8 fburn, u8 fregen, u8 flags, u8 rosterCount
                 # (music at 18 is what STATE_BIN_VERSION 0x0D added; every
                 # offset after it shifted by one.)
+                self.states += 1
                 self.phase = PHASES.get(d[9], "?")
                 # f32 at 10: the pre-match countdown, and in LOBBY the official
                 # room's auto-start timer (0 unless armed).

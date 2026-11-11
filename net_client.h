@@ -15,7 +15,9 @@
 //     callback-driven on the main thread, so no mutex is needed - the same
 //     inbox + poll() drain model still applies.
 //
-// Nothing here knows about the game - it's a dumb pipe of strings.
+// Nothing here knows about the game - it's a dumb pipe of strings. The strings
+// are BYTES, not text: a frame can be JSON or the binary state packet, and
+// wire.h's applyMessage tells which by its first byte.
 
 #pragma once
 
@@ -87,10 +89,17 @@ private:
         return EM_TRUE;
     }
     static EM_BOOL OnMessage(int, const EmscriptenWebSocketMessageEvent* e, void* ud) {
-        // We only speak text (JSON). isText guards against any stray binary frame.
-        if (e->isText && e->data)
-            static_cast<NetClient*>(ud)->inbox_.emplace_back(
-                reinterpret_cast<const char*>(e->data)); // text is null-terminated
+        if (!e->data) return EM_TRUE;
+        NetClient* self = static_cast<NetClient*>(ud);
+        if (e->isText) {
+            self->inbox_.emplace_back(reinterpret_cast<const char*>(e->data)); // text is null-terminated
+        } else {
+            // A binary frame: the state packet, the same bytes a native client
+            // gets over UDP (we ask for it with ?bin=1 - see main.cpp's dialUrl).
+            // It is full of zero bytes, so it must be taken by LENGTH; treating
+            // it as a C string would cut it at the first one.
+            self->inbox_.emplace_back(reinterpret_cast<const char*>(e->data), (size_t)e->numBytes);
+        }
         return EM_TRUE;
     }
     static EM_BOOL OnError(int, const EmscriptenWebSocketErrorEvent*, void* ud) {

@@ -116,6 +116,12 @@ struct Client {
     // it broadcasts at 60 Hz, so a client that got far fewer than 60*seconds
     // either lost datagrams or was starved.
     uint64_t states = 0, welcomes = 0, chunks = 0, others = 0, bytes = 0;
+    // The same count restricted to PLAYING, with the span it covers. A room that
+    // is not simulating sends a fraction of its ticks (IDLE_BROADCAST_EVERY_N_TICKS),
+    // so "60 a second" is only the right expectation while a match is live - and
+    // a match can end inside the measurement window.
+    uint64_t playStates = 0;
+    double   firstPlaySec = 0.0, lastPlaySec = 0.0;
     double   firstStateSec = 0.0, lastStateSec = 0.0;
     double   worstGapSec = 0.0;
     int      challenges = 0;
@@ -167,6 +173,11 @@ struct Client {
                 // is u8 tag, u32 tick, u32 lastSeq, then the body: u8 phase,
                 // f32 countdown, u32 epoch.
                 if (n >= 18) std::memcpy(&epoch, buf + 14, 4);
+                if (n >= 10 && (uint8_t)buf[9] == 2) {          // phase byte: 2 = PLAYING
+                    if (playStates == 0) firstPlaySec = t;
+                    lastPlaySec = t;
+                    playStates++;
+                }
             } else if (tag == nb::WELCOME_BIN_VERSION) {
                 welcomes++;
                 if (n >= 10) {
@@ -224,15 +235,20 @@ static double Pct(std::vector<double> v, double p) {
 // automated coverage before this.
 struct WsResult {
     bool        welcome = false;
-    int         states  = 0;
+    int         states  = 0;      // JSON state packets
+    int         binStates = 0;    // binary state packets (only ever sent to a ?bin=1 client)
+    bool        binDecodes = true; // every binary packet parsed as a State by the real client code
+    double      stateSpanSec = 0.0; // first to last state of either kind
     std::string identity;     // a token the server issued us, if it did
     std::string error;
 };
 
 // `token` is presented on the URL, exactly as the real client presents it.
 static WsResult WsConnect(const Opts& o, const std::string& token, double seconds,
-                          int wantStates) {
+                          int wantStates, bool binary = false) {
     WsResult r;
+    double firstState = 0.0;
+    GameSpace world;    // one client's worth - only to prove a binary packet decodes
     try {
         net::io_context ioc;
         tcp::resolver resolver(ioc);
@@ -245,7 +261,9 @@ static WsResult WsConnect(const Opts& o, const std::string& token, double second
         std::string target = "/";
         const char* sep = "?";
         if (!o.key.empty()) { target += sep + std::string("key=") + o.key; sep = "&"; }
-        if (!token.empty()) { target += sep + std::string("tok=") + token; }
+        if (!token.empty()) { target += sep + std::string("tok=") + token; sep = "&"; }
+        // What the real client appends to ask for the binary state packet.
+        if (binary)         { target += sep + std::string("bin=1"); }
         ws.handshake(o.host + ":" + o.port, target);
 
         // Connecting does not seat you any more (C6b): you arrive holding no
@@ -269,7 +287,7 @@ static WsResult WsConnect(const Opts& o, const std::string& token, double second
 
         const double deadline = NowSec() + seconds;
         beast::flat_buffer buffer;
-        while (NowSec() < deadline && (!r.welcome || r.states < wantStates)) {
+        while (NowSec() < deadline && (!r.welcome || r.states + r.binStates < wantStates)) {
             buffer.clear();
             // A timeout leaves the loop with whatever we have, so the checks
             // below report WHICH expectation failed instead of an error string.
@@ -280,8 +298,18 @@ static WsResult WsConnect(const Opts& o, const std::string& token, double second
             if (msg.find("\"type\":\"welcome\"") != std::string::npos) {
                 r.welcome = true;
                 ws.write(net::buffer(serializeName("SMOKE")));
+            } else if (!msg.empty() && (uint8_t)msg[0] == nb::STATE_BIN_VERSION) {
+                // Through wire.h's applyMessage - the exact code the client runs
+                // on a frame, whichever transport delivered it.
+                if (applyMessage(msg, world).type != ServerMessage::Type::State) r.binDecodes = false;
+                if (!ws.got_binary()) r.binDecodes = false;   // must be a BINARY frame, or a browser rejects it
+                r.binStates++;
+                if (firstState == 0.0) firstState = NowSec();
+                r.stateSpanSec = NowSec() - firstState;
             } else if (msg.find("\"type\":\"state\"") != std::string::npos) {
                 r.states++;
+                if (firstState == 0.0) firstState = NowSec();
+                r.stateSpanSec = NowSec() - firstState;
             } else if (msg.find("\"type\":\"identity\"") != std::string::npos) {
                 const auto k = msg.find("\"tok\":\"");
                 const auto e = k == std::string::npos ? k : msg.find('"', k + 7);
@@ -307,6 +335,27 @@ static int WsSmoke(const Opts& o) {
     if (!first.error.empty()) { std::cout << "  FAIL websocket error: " << first.error << "\n"; return 1; }
     check(first.welcome, "a welcome arrived");
     check(first.states >= 30, "state packets stream (" + std::to_string(first.states) + " in 10s)");
+    check(first.binStates == 0, "a client that did not ask for binary gets JSON only (an older page)");
+    // This client is alone in a lobby, which is not simulating - so it should be
+    // on the idle send rate, not the tick rate.
+    {
+        const double rate = first.stateSpanSec > 0.0 ? (first.states - 1) / first.stateSpanSec : 0.0;
+        const double want = 60.0 / IDLE_BROADCAST_EVERY_N_TICKS;
+        check(rate > want * 0.5 && rate < want * 2.0,
+              "a lobby is sent at the idle rate (" + std::to_string((int)(rate + 0.5)) + "/s, want ~"
+              + std::to_string((int)want) + ", not 60)");
+    }
+
+    // The path the browser build uses now: ?bin=1 on the URL.
+    {
+        const WsResult bin = WsConnect(o, first.identity, 10.0, 30, /*binary*/ true);
+        if (!bin.error.empty()) { std::cout << "  FAIL binary connect: " << bin.error << "\n"; return 1; }
+        check(bin.welcome, "a ?bin=1 client is welcomed (the welcome stays JSON)");
+        check(bin.binStates >= 30, "...and gets the binary state packet ("
+              + std::to_string(bin.binStates) + " received)");
+        check(bin.states == 0, "...and no JSON state at all");
+        check(bin.binDecodes, "...as binary frames the client's own decoder accepts");
+    }
 
     // D3 over WebSocket. The token rides the upgrade URL here rather than a
     // hello, so this is the only place that path is exercised at all.
@@ -467,7 +516,7 @@ static int Load(const Opts& o) {
     pumpFor(COUNTDOWN_SECONDS + 2.0);
 
     // --- Hold the load ----------------------------------------------------
-    for (Client& c : cs) { c.states = 0; c.bytes = 0; c.worstGapSec = 0.0; }
+    for (Client& c : cs) { c.states = 0; c.bytes = 0; c.worstGapSec = 0.0; c.playStates = 0; }
     const double t0 = NowSec();
     const double tEnd = t0 + o.seconds;
     uint64_t sent = 0, ticks = 0;
@@ -507,8 +556,21 @@ static int Load(const Opts& o) {
         rates.push_back((double)c.states / held);
         gaps.push_back(c.worstGapSec);
     }
+    // The rate WHILE PLAYING: packets over the span they arrived in, per
+    // client. Not states/held - once a match ends its room drops to the idle
+    // send rate, and averaging that in would report a server that had fallen
+    // behind when it had simply finished.
+    double playRateSum = 0.0, playSpan = 0.0; int playClients = 0;
+    for (const Client& c : cs) {
+        if (c.slot < 0 || c.playStates < 2) continue;
+        const double span = c.lastPlaySec - c.firstPlaySec;
+        if (span < 1.0) continue;                 // too short a span to call a rate
+        playRateSum += (double)(c.playStates - 1) / span;
+        playSpan    += span;
+        playClients++;
+    }
     const double expected = 60.0 * held;
-    const double meanRate = active ? (double)states / active / held : 0.0;
+    const double meanRate = playClients ? playRateSum / playClients : 0.0;
 
     std::cout << std::fixed << std::setprecision(1);
     std::cout << "\n--- " << held << "s with " << active << " clients in "
@@ -523,6 +585,8 @@ static int Load(const Opts& o) {
               << (loopHz < 55.0 ? "  <-- BELOW 60: the harness is the bottleneck,"
                                   " not the server" : "") << "\n";
     std::cout << "  state received  " << states << " packets\n";
+    std::cout << "  while PLAYING   " << playClients << " of " << active << " clients, "
+              << (playClients ? playSpan / playClients : 0.0) << "s each on average\n";
     std::cout << "  per client      " << meanRate << "/s vs 60/s expected  ("
               << std::setprecision(1) << (100.0 * meanRate / 60.0) << "% delivered)\n";
     std::cout << "  slowest client  " << Pct(rates, 0.0) << "/s\n";
