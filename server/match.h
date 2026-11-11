@@ -66,6 +66,13 @@ struct ConnectedClient {
     // can't overwrite the press before the sim tick consumes it. Consumed (and
     // cleared) once per shot in SimulationLoop.
     bool firePending    = false;
+    // A WebSocket client that asked for the BINARY state packet (?bin=1 on its
+    // connect URL). The same packet a UDP client gets, an eighth the size of the
+    // JSON one. Opt-in rather than assumed because a browser can still be
+    // running a cached page from before it could read binary frames - that page
+    // drops them unread and would sit on a world that never updates.
+    // Meaningless for UDP, which is always binary.
+    bool binaryState    = false;
     // Display name from the client's "name" message. Stored here (io thread) and
     // copied onto the player slot by the sim loop, so all gameSpace mutation stays
     // single-threaded. nameDirty flags an unapplied change.
@@ -264,6 +271,7 @@ struct Match {
     void setOptions(MatchOptions o) {
         ClampOptions(o);
         pendingMap.store(MapSizeIndex(o.mapSize));
+        optionsDirty.store(true);   // the lobby is showing these: send them on the next tick
         std::lock_guard<std::mutex> g(optMutex);
         pendingOpt = std::move(o);
     }
@@ -271,6 +279,10 @@ struct Match {
     // (options.h). For the directory, which lists every room and must never
     // wait on one - it reads atomics only. Written by setOptions and nowhere else.
     std::atomic<int>   pendingMap{MapSizeIndex(MatchOptions{}.mapSize)};
+    // Set by setOptions, cleared by the tick that sends the new rules. An idle
+    // room sends only a fraction of its ticks; a rules change is not left
+    // waiting for the next one.
+    std::atomic<bool>  optionsDirty{false};
 private:
     mutable std::mutex optMutex;
     MatchOptions       pendingOpt;
@@ -389,6 +401,9 @@ public:
     // Were locals of SimulationLoop; they persist across ticks, so they belong to
     // the match now that the tick body is a method.
     Clock::time_point countdownEnd;      // when COUNTDOWN flips to PLAYING (valid only while COUNTDOWN)
+    Phase             lastSentPhase = Phase::LOBBY; // phase in the last state packet sent; a change is always sent at once
+    bool              lastSentArmed = false;        // ...and likewise the auto-start timer's armed state
+    int               lastSentSeats = 0;            // ...and how many clients held a seat (connectedCount)
     Phase             prevPhase = Phase::LOBBY; // previous tick's phase, for the match-end edge (scoreboard credit)
     // The room's music (#174): the server picks, so every client in the room
     // hears the same cue. One jukebox per screen, from the same list the client

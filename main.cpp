@@ -298,6 +298,11 @@ int main(int argc, char** argv) {
         // the server welcomes us the instant we connect, so the hello below may
         // never be sent at all. Both are hex/UUID, so neither needs escaping.
         add("tok", profile::Get().token);
+        // "Send me the binary state packet." Over WebSocket the server otherwise
+        // sends the JSON one, eight times the size, because a browser may still
+        // be running a cached page that cannot read binary frames - so a client
+        // has to say it can. (udp:// is always binary and drops the query.)
+        add("bin", "1");
         return out;
     };
 
@@ -1296,6 +1301,7 @@ int main(int argc, char** argv) {
 
     auto pumpNet = [&]() -> ServerMessage::Phase {
         ServerMessage::Phase phase = ServerMessage::Phase::Unknown;
+        bool gotState = false;
         for (const std::string& frame : net.poll()) {
             lastStateTime = GetTime(); // any server frame = the connection is alive
             ServerMessage m = applyMessage(frame, gameSpace);
@@ -1304,6 +1310,7 @@ int main(int argc, char** argv) {
             }
             else if (m.type == ServerMessage::Type::State) {
                 phase = m.phase; netCountdown = m.countdown; netEpoch = m.epoch; netMusic = m.music;
+                gotState = true;
                 // Apply the server's live options to our OPTIONS modal. Don't
                 // stomp a control the local user is actively driving: skip a
                 // slider while it's being dragged, and for the toggles only take
@@ -1373,6 +1380,13 @@ int main(int argc, char** argv) {
         // design, so drop it at the source.
         gameSpace.getMessages().clear();
         gameSpace.getAudioEvents().clear();
+        // Outside a live match the server sends state a few times a second, not
+        // every tick (IDLE_BROADCAST_EVERY_N_TICKS), so the countdown would
+        // step in tenths if it only moved when a packet arrived. Run it down
+        // locally between packets; the next one re-bases it. Only while it is
+        // counting - zero means there is no countdown to show.
+        if (!gotState && netCountdown > 0.0f)
+            netCountdown = fmaxf(0.0f, netCountdown - GetFrameTime());
         return phase;
     };
 

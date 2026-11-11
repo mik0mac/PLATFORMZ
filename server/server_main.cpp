@@ -1602,6 +1602,10 @@ public:
             c.identity   = ident.id;
             c.transport  = Transport::WS;
             c.session    = self;
+            // ?bin=1: this client reads the binary state packet (see
+            // ConnectedClient::binaryState). On the URL for the same reason the
+            // others are - it has to be known before the first packet goes out.
+            c.binaryState = QueryParam(std::string(self->req_.target()), "bin") == "1";
             // Who this connection is, for the per-address creation budget. Taken
             // from the socket, never from anything the client said.
             c.remoteAddr = self->remoteAddr_;
@@ -1669,6 +1673,13 @@ private:
     // Strand-only. Write outbox_.front(); on completion pop it and continue
     // until the deque is empty. Exactly one async_write is ever outstanding.
     void DoWrite() {
+        // A WebSocket frame is text or binary, and a browser hands the two to
+        // the page differently - a binary packet sent as text is rejected as
+        // invalid UTF-8 and the connection is closed. Every JSON message this
+        // server builds opens with '{'; no binary tag is 0x7B (netbin.h asserts
+        // it for the chunk tag, and the client tells them apart the same way).
+        const std::string& front = outbox_.front();
+        ws_.binary(!front.empty() && front[0] != '{');
         ws_.async_write(net::buffer(outbox_.front()),
             [self = shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec) {
@@ -1926,7 +1937,10 @@ static bool AttachConn(uint64_t connId, const std::string& code,
     // The one place a connection takes a seat, so the one place worth logging it
     // - connect and room-hop both land here.
     std::cout << "conn " << connId << " ("
-              << (rec.transport == Transport::UDP ? "udp" : "ws")
+              // "ws json" is an older page that never asked for the binary
+              // state packet - worth seeing, since each one costs eight times
+              // the bandwidth and they should die out after a deploy.
+              << (rec.transport == Transport::UDP ? "udp" : rec.binaryState ? "ws" : "ws json")
               << ") -> slot " << slot << " in " << code
               << ". Active there: " << seated
               // The IDENTITY, never the token: this half is safe to write down,
@@ -2912,11 +2926,16 @@ void Match::BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
     // Which player slots are occupied, so clients can hide empty ones.
     SlotMask connectedSlots = 0;
-    bool haveWs = false, haveUdp = false;
+    // Binary for every UDP client and for a WebSocket client that asked for it;
+    // JSON only for a WebSocket client that did not (an older page).
+    auto wantsBinary = [](const ConnectedClient& c) {
+        return c.transport == Transport::UDP || c.binaryState;
+    };
+    bool haveJson = false, haveBin = false;
     for (auto& [cid, client] : clients) {
         SlotAdd(connectedSlots, client.playerId);
-        if (client.transport == Transport::UDP) haveUdp = true;
-        else haveWs = true;
+        if (wantsBinary(client)) haveBin = true;
+        else haveJson = true;
     }
     // Resolved here, under the lock this already holds, so a host who left is
     // replaced on the very next packet rather than whenever someone next presses
@@ -2926,13 +2945,14 @@ void Match::BroadcastState(uint32_t tick) {
     // Build each transport's shared body at most once, and only if a client
     // of that transport is actually connected.
     std::string jsonBody, binBody;
-    if (haveWs)  jsonBody = buildStateBodyJson(connectedSlots, hostSlot);
-    if (haveUdp) binBody  = buildStateBodyBinary(connectedSlots, hostSlot);
+    if (haveJson) jsonBody = buildStateBodyJson(connectedSlots, hostSlot);
+    if (haveBin)  binBody  = buildStateBodyBinary(connectedSlots, hostSlot);
 
     for (auto& [cid, client] : clients) {
-        // UDP gets the compact binary state (fits one datagram; MTU-safe over the
-        // internet). WebSocket/TCP has no MTU limit, so it keeps the JSON state.
-        std::string packet = (client.transport == Transport::UDP)
+        // The compact binary state for everyone who can read it. Over UDP it is
+        // sized to fit one datagram; over WebSocket there is no such limit and
+        // it goes as a single binary frame, never chunked (SendToClient).
+        std::string packet = wantsBinary(client)
             ? buildStateBinary(tick, client.lastSeq, binBody)
             : buildStatePacket(tick, client.lastSeq, jsonBody);
         // Oversize warning (throttled): a binary state over UDP_SAFE_DATAGRAM
@@ -3029,6 +3049,8 @@ void Match::Tick(CollisionGrid& scratchGrid) {
     bool     leaderboardDirty = false; // scoreboard credited this tick -> broadcast below
     bool     wentLive    = false; // COUNTDOWN -> PLAYING flipped THIS tick -> drop every
                                   // client's stale input latch before the first apply
+    bool     sendState   = true;  // broadcast this tick? (false on most idle-room ticks)
+    bool     simThisTick = false; // the world advanced this tick (PLAYING, or the GAMEOVER wind-down)
     double gridMs = 0.0;
     {
         ScopedTime _sim(statSim);
@@ -3270,7 +3292,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         // Wind an ended match down instead of simulating it forever. Both
         // thresholds are far past GAME_OVER_TIMER (5 s), so a client still
         // running its death-FX countdown sees exactly what it always did.
-        bool simThisTick = (phase == Phase::PLAYING);
+        simThisTick = (phase == Phase::PLAYING);
         if (phase == Phase::GAMEOVER && gameOverStamped) {
             double since = Duration(now - gameOverAt).count();
             simThisTick = since < GAMEOVER_SIM_SECONDS;
@@ -3517,6 +3539,34 @@ void Match::Tick(CollisionGrid& scratchGrid) {
 
         tick = ++serverTick;
         asteroidCount = gameSpace.getAsteroids().size(); // read under gameMutex
+
+        // Does this tick need to go out? Every tick while the world is moving.
+        // Otherwise one in IDLE_BROADCAST_EVERY_N_TICKS (constants.h) - unless
+        // this tick carries something that exists for one tick only: a sound or
+        // a message (both are cleared at the top of the next), or a change of
+        // phase, which every client's screen is waiting on.
+        //
+        // And three things a person in the room is looking straight at, so they
+        // should not arrive a beat late either: somebody taking or leaving a
+        // seat (which is also what gets a NEWCOMER their first packet at once,
+        // rather than a blank lobby for a tenth of a second), the rules
+        // changing, and the auto-start timer arming or disarming.
+        const Phase sendPhase = gamePhase.load();
+        const int  seatsNow    = connectedCount.load();
+        const bool seatsChanged = seatsNow != lastSentSeats;
+        const bool armChanged   = autoStartArmed != lastSentArmed;
+        lastSentSeats = seatsNow;
+        lastSentArmed = autoStartArmed;
+        sendState = simThisTick
+                 || sendPhase != lastSentPhase
+                 || seatsChanged
+                 || armChanged
+                 || optionsDirty.exchange(false)
+                 || justStarted
+                 || !gameSpace.getAudioEvents().empty()
+                 || !gameSpace.getMessages().empty()
+                 || (tick % IDLE_BROADCAST_EVERY_N_TICKS) == 0;
+        if (sendState) lastSentPhase = sendPhase;
     }
 
     //MARK: Send tick
@@ -3541,10 +3591,9 @@ void Match::Tick(CollisionGrid& scratchGrid) {
 
     if (gridMs > 0.0) statGrid.Add(gridMs);
 
-    // Broadcast authoritative state to all clients every tick.
-    // At 60Hz this is ~60 packets/sec per client. For 2 players the
-    // bandwidth is trivial; revisit delta-compression if player count grows.
-    { ScopedTime _bc(statBroadcast); BroadcastState(tick); }
+    // Broadcast authoritative state: every tick while the world is moving, a
+    // fraction of them while it is not (see sendState above).
+    if (sendState) { ScopedTime _bc(statBroadcast); BroadcastState(tick); }
 
     // The heartbeat used to live here, one line per second per match. With N
     // matches that is N lines a second, and - worse - the Actions idle watchdog

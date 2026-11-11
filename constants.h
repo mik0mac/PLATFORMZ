@@ -202,6 +202,20 @@ const int    MATCH_MAX_ACTIVE_DEFAULT = MATCH_MAX_CONCURRENT;
 // preset says nothing, and because the client needs a value before the first state
 // packet arrives.
 const int    PUBLIC_MIN_PLAYERS      = 2;    // humans needed before the countdown arms
+
+// How often a room that is NOT simulating sends its state: one tick in this
+// many, so 10 a second against the tick's 60. A lobby, a countdown and a
+// finished match are a roster, a rules block and a frozen (or absent) world -
+// nothing in them moves, and streaming them at the sim rate was most of what a
+// quiet server sent. Anything a player is waiting on still goes out on its own
+// tick: a change of phase, a sound or a message, somebody taking or leaving a
+// seat, a rules change, the auto-start timer arming (Match::Tick has the list).
+// What can now be a tenth of a second late is a name being typed.
+//
+// Kept well under the 3 s the client waits before deciding a UDP server has
+// gone quiet (main.cpp) and the idle timeouts above.
+const int IDLE_BROADCAST_EVERY_N_TICKS = 6;
+
 const double PUBLIC_AUTOSTART_SECONDS = 10.0; // lobby countdown once that many are present
 
 constexpr float GAME_OVER_TIMER = 5.0f; // seconds to wait before showing the game-over screen after the last player dies
