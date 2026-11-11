@@ -227,9 +227,10 @@ binary frames keeps working on JSON; the server logs such a connection as
 A room sends state every tick only while its world is moving: `PLAYING`, and the
 first `GAMEOVER_SIM_SECONDS` of `GAMEOVER`. In `LOBBY`, `COUNTDOWN` and the rest
 of `GAMEOVER` it sends one tick in `IDLE_BROADCAST_EVERY_N_TICKS` (constants.h;
-10 a second). Two things always go out on their own tick regardless: a change of
-phase, and any tick that produced a sound or kill-feed message, since both exist
-for one tick only. The client runs the countdown down locally between packets.
+10 a second). Anything a player is waiting on still goes out on its own tick: a
+change of phase, a sound or kill-feed message, somebody taking or leaving a seat
+(so a newcomer's first packet is immediate), a rules change, and the auto-start
+timer arming or disarming. The client runs the countdown down locally between packets.
 `probe_sendrate.py` checks the rates; `loadtest --mode ws-smoke` checks the
 binary opt-in.
 

@@ -132,6 +132,10 @@ for i in range(need - 1):
 
 # The room must be able to SAY it is about to start. Without this there was a
 # silent window where it had committed and nobody in it could tell.
+# Wait for it rather than reading it the instant the last player's welcome
+# lands. A lobby is sent state a few times a second, not every tick, and the
+# packet carrying the armed timer is a separate one from that welcome.
+wait_until(lambda: a.countdown > 0.0 or a.phase != "lobby", 2.0, step=0.02)
 first = a.countdown
 check(0.0 < first <= PUBLIC_AUTOSTART_SECONDS + 0.5,
       f"the auto-start countdown is published to the room ({first:.1f}s)")
@@ -140,6 +144,7 @@ if a.phase == "lobby":
     check(a.countdown < first or a.phase != "lobby",
           f"and it counts DOWN ({first:.1f}s -> {a.countdown:.1f}s)")
 for o in others:
+    wait_until(lambda: o.countdown > 0.0 or o.phase != "lobby", 2.0, step=0.02)
     check(o.countdown > 0.0 or o.phase != "lobby",
           f"everyone in the room sees it ({o.name}={o.countdown:.1f}s)")
 

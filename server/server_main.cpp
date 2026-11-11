@@ -3545,9 +3545,23 @@ void Match::Tick(CollisionGrid& scratchGrid) {
         // this tick carries something that exists for one tick only: a sound or
         // a message (both are cleared at the top of the next), or a change of
         // phase, which every client's screen is waiting on.
+        //
+        // And three things a person in the room is looking straight at, so they
+        // should not arrive a beat late either: somebody taking or leaving a
+        // seat (which is also what gets a NEWCOMER their first packet at once,
+        // rather than a blank lobby for a tenth of a second), the rules
+        // changing, and the auto-start timer arming or disarming.
         const Phase sendPhase = gamePhase.load();
+        const int  seatsNow    = connectedCount.load();
+        const bool seatsChanged = seatsNow != lastSentSeats;
+        const bool armChanged   = autoStartArmed != lastSentArmed;
+        lastSentSeats = seatsNow;
+        lastSentArmed = autoStartArmed;
         sendState = simThisTick
                  || sendPhase != lastSentPhase
+                 || seatsChanged
+                 || armChanged
+                 || optionsDirty.exchange(false)
                  || justStarted
                  || !gameSpace.getAudioEvents().empty()
                  || !gameSpace.getMessages().empty()

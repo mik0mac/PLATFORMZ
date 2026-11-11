@@ -207,9 +207,10 @@ const int    PUBLIC_MIN_PLAYERS      = 2;    // humans needed before the countdo
 // many, so 10 a second against the tick's 60. A lobby, a countdown and a
 // finished match are a roster, a rules block and a frozen (or absent) world -
 // nothing in them moves, and streaming them at the sim rate was most of what a
-// quiet server sent. A phase change, and any tick that produced a sound or a
-// message, still goes out at once; all that can now be a tenth of a second late
-// is a roster or rules edit.
+// quiet server sent. Anything a player is waiting on still goes out on its own
+// tick: a change of phase, a sound or a message, somebody taking or leaving a
+// seat, a rules change, the auto-start timer arming (Match::Tick has the list).
+// What can now be a tenth of a second late is a name being typed.
 //
 // Kept well under the 3 s the client waits before deciding a UDP server has
 // gone quiet (main.cpp) and the idle timeouts above.
