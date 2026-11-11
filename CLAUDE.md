@@ -198,9 +198,10 @@ never include a platform socket header anywhere else in the client.**
   does not wrap. Tested in `test/options_test.cpp` — it is cosmetic, so nothing
   else in either suite would fail if it quietly stopped reporting a rule.
   `VisitMatchOptions` is **the one list of rules as text**: the client's
-  `options`/`start` messages and its reading of the server's echo (`wire.h`), and
-  the server's reading and writing of the same (`server/options_json.h`), all walk
-  it, and the server holds a room's rules as one `MatchOptions` behind
+  `options`/`start` messages (`wire.h`) and the server's reading of them
+  (`server/options_json.h`) both walk it. The server's echo of the rules rides
+  the binary state packet. The server holds a room's rules as one `MatchOptions`
+  behind
   `Match::options()/setOptions()` (which clamps everything coming in). So **adding
   a rule** is: the field and its default, its `OPT_RANGE_*` + `ClampOptions` line,
   one line in `VisitMatchOptions` - and then the places that are deliberately NOT
@@ -245,9 +246,10 @@ never include a platform socket header anywhere else in the client.**
 reuses the game headers (`gamespace.h`, `collisions.h`, `input.h`) against
 math-only raylib shims, so server and client physics are the same code. Clients
 reach it over WebSocket or UDP; the per-tick state is the same **binary** packet
-(`netbin.h`) on both - a WebSocket client asks for it with `?bin=1`, and one that
-does not (an older cached page) still gets JSON. Rooms that are not simulating
-send state at 10 Hz, not 60 (`IDLE_BROADCAST_EVERY_N_TICKS`). The same server speaks
+(`netbin.h`) on both, and there is no JSON state any more - one writer
+(`buildStateBodyBinary`) and one reader (`applyBinaryState`), which must match
+byte for byte. Rooms that are not simulating send state at 10 Hz, not 60
+(`IDLE_BROADCAST_EVERY_N_TICKS`). The same server speaks
 both at once on one port.
 
 Five docs, and it is worth reading the right one before changing anything here:

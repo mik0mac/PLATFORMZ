@@ -1,7 +1,7 @@
 // server/options_json.h
 //
-// The server's INBOUND JSON parsers, and the match-rule bundle as JSON in both
-// directions. Split out of server_main.cpp so a test can push a real client
+// The server's INBOUND JSON parsers, and its reader for the match-rule bundle
+// a client sends as JSON. Split out of server_main.cpp so a test can push a real client
 // message through the same code the server runs (test/options_wire_test.cpp) -
 // the client writes these messages with a real JSON library and the server
 // reads them by string search, and nothing used to check the two agreed on
@@ -60,19 +60,9 @@ inline std::string parseString(const std::string& json, const std::string& key,
 }
 
 //MARK: Options as text
-// The two directions the rule bundle crosses the wire as JSON, both walking the
-// one list in options.h (VisitMatchOptions) rather than keeping their own.
-
-// Bundle -> the body of a JSON object: "nplayers":4,"maxbots":7,...
-struct OptionJsonWriter {
-    std::string& s;
-    bool first = true;
-    void key(const char* k) { s += first ? "\"" : ",\""; first = false; s += k; s += "\":"; }
-    void integer(const char* k, int v)                { key(k); s += ji(v); }
-    void real   (const char* k, float v)              { key(k); s += jf(v); }
-    void flag   (const char* k, bool v)               { key(k); s += jb(v); }
-    void text   (const char* k, const std::string& v) { key(k); s += js(v); }
-};
+// The rule bundle arriving as JSON, walking the one list in options.h
+// (VisitMatchOptions) rather than keeping its own. Inbound only: the server's
+// echo of the rules goes out in the binary state packet.
 
 // A client's "start"/"options" message -> bundle. A key the message does not
 // carry leaves the field as it was, so WHAT THE BUNDLE HELD GOING IN is the

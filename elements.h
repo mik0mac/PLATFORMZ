@@ -128,7 +128,7 @@ public:
     std::string name = "Player"; // Player's display name
     // Multiplayer: is this slot occupied by a connected client? Defaults true so
     // local single-player and test bots always render; the server sets it per
-    // slot in the broadcast (see buildStatePacket), and the client skips drawing
+    // slot in the broadcast (see SlotShown, server_main.cpp), and the client skips drawing
     // unoccupied slots (gamespace.h draw()). Not used by the local sim.
     bool isConnected = true;
 

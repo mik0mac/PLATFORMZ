@@ -8,12 +8,13 @@
 //   - The sim loop applies each client's latest input to their player via
 //     ApplyPlayerInput() from input.h - the exact same function the local
 //     client uses, keeping server and client physics identical.
-//   - State is broadcast as JSON every tick to all clients.
+//   - State is broadcast as one binary packet (netbin.h) to every client, on
+//     both transports.
 //
-// Wire protocol (text frames, JSON):
+// Wire protocol (JSON except the per-tick state and the UDP welcome):
 //   Client -> Server:  {"seq":N,"ep":M,"mx":0.0,"mz":1.0,"jp":false,"grav":false,"fire":false,"yaw":-1.57,"pitch":0.0}
 //   Server -> Client (on connect): {"type":"welcome","playerId":1,"tick":0}
-//   Server -> Client (each tick):  {"type":"state","tick":N,"seq":N,"ep":M, "players":[...], "asteroids":[...], ...}
+//   Server -> Client (each tick):  binary state, tag nb::STATE_BIN_VERSION - see buildStateBodyBinary
 //
 // "ep" is the match epoch: the server bumps it per match and echoes it in every
 // state packet; the client stamps the newest one it saw on each input. Input
@@ -1151,190 +1152,21 @@ static bool SlotShown(SlotMask connectedSlots, int slot, const Player& p, Phase 
 
 //MARK: State packet
 // -------------------------------------------------------------------------
-// State serialization - build the JSON state body sent to all clients.
-// Every client sees the same world this tick - only `tick`/`lastSeq` (the tiny
-// per-client header built by buildStatePacket below) actually differ, so this
-// body is built exactly ONCE per tick in BroadcastState and reused for every
-// connected WS client instead of being re-serialized per client.
-// `connectedSlots` are the player indices currently occupied by a client; each
-// player carries an "active" flag so clients can skip rendering empty slots.
-// -------------------------------------------------------------------------
-std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
-    std::string s;
-    s.reserve(1024);
-    const Phase ph = gamePhase.load(); // once: the music below must match the phase sent
-    s += ",\"phase\":\"" + std::string(phaseString(ph)) + "\"";
-    s += ",\"countdown\":" + jf(countdownRemaining.load()); // seconds left in the pre-match countdown (0 unless COUNTDOWN)
-    s += ",\"ep\":" + std::to_string(matchEpoch.load()); // match epoch; clients echo it in their input packets
-    s += ",\"mu\":" + std::to_string((int)musicFor(ph)); // the room's music cue (#174); MUSIC_COUNT = none
-    if (ph == Phase::GAMEOVER && endedByHost.load()) s += ",\"eh\":1"; // host ended it (#188); absent otherwise
-
-    // Players
-    s += ",\"players\":[";
-    auto& players = gameSpace.getPlayers();
-    for (int i = 0; i < (int)players.size(); i++) {
-        const Player& p = players[i];
-        if (i > 0) s += ",";
-        s += "{\"id\":"     + ju(p.id);
-        s += ",\"px\":"     + jf(p.position.x);
-        s += ",\"py\":"     + jf(p.position.y);
-        s += ",\"pz\":"     + jf(p.position.z);
-        s += ",\"vx\":"     + jf(p.velocity.x);
-        s += ",\"vy\":"     + jf(p.velocity.y);
-        s += ",\"vz\":"     + jf(p.velocity.z);
-        s += ",\"yaw\":"    + jf(p.yaw);
-        s += ",\"pitch\":"  + jf(p.pitch);
-        s += ",\"hp\":"     + ji(p.health);
-        s += ",\"fuel\":"   + jf(p.fuel);
-        s += ",\"ammo\":"   + ji(p.ammo);
-        s += ",\"alive\":"  + jb(p.isAlive);
-        s += ",\"spec\":"   + jb(p.isSpectating);    // server-owned: dead player has become a free-fly spectator
-        s += ",\"stmr\":"   + jf(p.spectatingTimer); // post-death spectate countdown (drives the client's greyscale ramp)
-        s += ",\"bot\":"    + jb(p.isBot); // server-owned bot flag (set for unoccupied slots during a match)
-        s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
-        s += ",\"oob\":"    + jb(p.isOutOfBounds);   // server-owned: outside the boundary, elimination pending
-        s += ",\"oobt\":"   + jf(p.outOfBoundsTimer); // seconds left before being lost in space (drives the HUD countdown)
-        // SlotShown has the rule. This flag is also how the client learns a
-        // slot is empty: isVacant itself never crosses the wire.
-        s += ",\"active\":" + jb(SlotShown(connectedSlots, i, p, gamePhase.load()));
-        s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
-        // Who runs this room. Server-owned, because the client can no longer work
-        // it out: host is the CREATOR now, not whoever holds the lowest slot, and
-        // an official room has no host at all (so no slot carries this).
-        s += ",\"host\":"   + jb(i == hostSlot);
-        s += ",\"name\":"   + js(p.name);  // server-owned display name (from the "name" message)
-        s += "}";
-    }
-    s += "]";
-
-    // Asteroids
-    s += ",\"asteroids\":[";
-    auto& asteroids = gameSpace.getAsteroids();
-    for (int i = 0; i < (int)asteroids.size(); i++) {
-        const Asteroid& a = asteroids[i];
-        if (i > 0) s += ",";
-        s += "{\"id\":"   + ju(a.id);
-        s += ",\"px\":"   + jf(a.position.x);
-        s += ",\"py\":"   + jf(a.position.y);
-        s += ",\"pz\":"   + jf(a.position.z);
-        s += ",\"vx\":"   + jf(a.velocity.x);
-        s += ",\"vy\":"   + jf(a.velocity.y);
-        s += ",\"vz\":"   + jf(a.velocity.z);
-        s += ",\"size\":" + jf(a.size);
-        s += ",\"hp\":"   + ji(a.health);
-        s += ",\"flash\":" + jf(a.flashTimer); // hot-glow damage flash for the client
-        s += ",\"dead\":" + jb(a.isDestroyed);
-        s += "}";
-    }
-    s += "]";
-
-    // Rockets
-    s += ",\"rockets\":[";
-    auto& rockets = gameSpace.getRockets();
-    for (int i = 0; i < (int)rockets.size(); i++) {
-        const Rocket& r = rockets[i];
-        if (i > 0) s += ",";
-        s += "{\"id\":"    + ju(r.id);
-        s += ",\"px\":"    + jf(r.position.x);
-        s += ",\"py\":"    + jf(r.position.y);
-        s += ",\"pz\":"    + jf(r.position.z);
-        s += ",\"vx\":"    + jf(r.velocity.x);
-        s += ",\"vy\":"    + jf(r.velocity.y);
-        s += ",\"vz\":"    + jf(r.velocity.z);
-        s += ",\"dead\":"  + jb(r.isDestroyed);
-        s += "}";
-    }
-    s += "]";
-
-    // Explosions: announcements, not state. Each is sent for its first
-    // EXPLOSION_NET_WINDOW only (so a lost packet or two can't drop it) with
-    // its id, so a client can tell the repeats from a new blast; the client
-    // runs all of its VFX from there (GameSpace::updateBlasts).
-    s += ",\"explosions\":[";
-    auto& explosions = gameSpace.getExplosions();
-    for (int i = 0; i < (int)explosions.size(); i++) {
-        const Explosion& e = explosions[i];
-        if (i > 0) s += ",";
-        s += "{\"px\":"   + jf(e.position.x);
-        s += ",\"py\":"   + jf(e.position.y);
-        s += ",\"pz\":"   + jf(e.position.z);
-        s += ",\"id\":"   + ji((int)(e.id & 0xFF));
-        s += ",\"own\":"  + ji((int)e.ownerId);
-        s += ",\"age\":"  + jf(e.age);
-        s += "}";
-    }
-    s += "]";
-
-    // Audio events (one-shot sounds: launch/explosion/break/hit/death). Each
-    // carries an owner id so clients can skip echoes of events they already
-    // predicted locally for themselves. Cleared each tick (see SimulationLoop).
-    s += ",\"audio\":[";
-    auto& audio = gameSpace.getAudioEvents();
-    for (int i = 0; i < (int)audio.size(); i++) {
-        if (i > 0) s += ",";
-        s += "{\"fx\":"  + ji(audio[i].fx);
-        s += ",\"own\":" + ju(audio[i].owner);
-        s += ",\"px\":"  + jf(audio[i].pos.x);
-        s += ",\"py\":"  + jf(audio[i].pos.y);
-        s += ",\"pz\":"  + jf(audio[i].pos.z);
-        s += ",\"vol\":" + jf(audio[i].volumeScale);
-        s += "}";
-    }
-    s += "]";
-
-    // Messages (kill-feed / warnings). Only type + the two player names cross the
-    // wire; the client's Message::generate() rebuilds text/color/visibility.
-    s += ",\"messages\":[";
-    auto& msgs = gameSpace.getMessages();
-    for (int i = 0; i < (int)msgs.size(); i++) {
-        if (i > 0) s += ",";
-        s += "{\"mt\":" + ji((int)msgs[i].type);
-        s += ",\"pa\":" + js(msgs[i].playerA_Name);
-        s += ",\"pb\":" + js(msgs[i].playerB_Name);
-        s += ",\"pai\":" + ju(msgs[i].playerA_id);
-        s += ",\"pbi\":" + ju(msgs[i].playerB_id);
-        s += "}";
-    }
-    s += "]";
-
-    // Lobby options (match-wide config), echoed every tick so a change by any
-    // client shows live on every client's OPTIONS modal + roster preview.
-    {
-        const MatchOptions opt = options();
-        s += ",\"opt\":{";
-        OptionJsonWriter w{s};
-        VisitMatchOptions(opt, w);   // "map" included: the arena, visible in the lobby before start
-        s += "}";
-    }
-
-    s += "}";
-    return s;
-}
-
-// Cheap per-client wrapper: prepends the tiny header (type/tick/seq) that
-// actually varies per client onto the shared `body` built once per tick by
-// buildStateBodyJson above.
-std::string Match::buildStatePacket(uint32_t tick, uint32_t lastSeq,
-                                    const std::string& body) {
-    std::string s;
-    s.reserve(32 + body.size());
-    s += "{\"type\":\"state\"";
-    s += ",\"tick\":" + ju(tick);
-    s += ",\"seq\":"  + ju(lastSeq);
-    s += body;
-    return s;
-}
-
-//MARK: State packet (binary)
-// -------------------------------------------------------------------------
-// The same state as buildStateBodyJson, packed as little-endian binary (netbin.h)
-// for UDP clients so it fits one datagram (~4x smaller than the JSON). Field
-// ORDER here must match the client's applyBinaryState() reader in wire.h.
-// Unused-on-the-wire fields are dropped: asteroid/rocket `dead` (the server never
-// sends dead=true - destroyed objects just vanish from the set).
+// State serialization - the world this tick, packed as little-endian binary
+// (netbin.h). The ONLY state format: every client gets these bytes, a UDP client
+// as one datagram (it is sized to fit - see the asteroid clamp at match start)
+// and a WebSocket client as one binary frame. There used to be a JSON twin for
+// WebSocket, seven times the size and a second field list to keep in step.
 //
-// Same once-per-tick split as buildStateBodyJson: this body excludes the
-// header (tag/tick/lastSeq), which buildStateBinary below prepends per client.
+// Field ORDER here must match the client's applyBinaryState() reader in wire.h.
+// Destroyed asteroids and rockets are simply absent from the set - there is no
+// `dead` flag.
+//
+// Every client sees the same world this tick; only `tick`/`lastSeq` differ. So
+// this body is built exactly ONCE per tick in BroadcastState, and
+// buildStateBinary below prepends the per-client header (tag/tick/lastSeq).
+// `connectedSlots` are the player indices currently occupied by a client; each
+// player carries an "active" flag so clients can skip empty slots (SlotShown).
 // -------------------------------------------------------------------------
 std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     std::string b;
@@ -1345,8 +1177,9 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     nb::putU32(b, matchEpoch.load()); // match epoch; clients echo it in their input packets
     nb::putU8(b, (uint8_t)musicFor(ph)); // the room's music cue (#174; STATE_BIN_VERSION 0x0D)
 
-    // Options (match-wide), same values buildStatePacket puts in "opt". Order
-    // must match applyBinaryState() in wire.h exactly.
+    // Options (match-wide), echoed so a change by the host shows live on every
+    // client's OPTIONS modal + roster preview. Order must match
+    // applyBinaryState() in wire.h exactly.
     const MatchOptions opt = options();   // one snapshot: the bundle changes as a unit
     nb::putU8(b, (uint8_t)opt.numPlayers);
     // The two sliderless rules. Two bytes, which together with the roster byte
@@ -1391,7 +1224,8 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
         nb::putQFrac(b, p.flashTimer, Player::flash_duration);
         nb::putQFrac(b, p.spectatingTimer, p.countdownToSpectating);
         nb::putU16(b, (uint16_t)p.score);
-        // The same rule as the JSON builder, by construction: SlotShown.
+        // SlotShown has the rule. This flag is also how the client learns a
+        // slot is empty: isVacant itself never crosses the wire.
         bool active = SlotShown(connectedSlots, i, p, gamePhase.load());
         // Bit 32 is the host flag. Bits 32/64/128 were free, so this needed no
         // layout change and no STATE_BIN_VERSION bump - a client built before it
@@ -1602,10 +1436,6 @@ public:
             c.identity   = ident.id;
             c.transport  = Transport::WS;
             c.session    = self;
-            // ?bin=1: this client reads the binary state packet (see
-            // ConnectedClient::binaryState). On the URL for the same reason the
-            // others are - it has to be known before the first packet goes out.
-            c.binaryState = QueryParam(std::string(self->req_.target()), "bin") == "1";
             // Who this connection is, for the per-address creation budget. Taken
             // from the socket, never from anything the client said.
             c.remoteAddr = self->remoteAddr_;
@@ -1937,10 +1767,7 @@ static bool AttachConn(uint64_t connId, const std::string& code,
     // The one place a connection takes a seat, so the one place worth logging it
     // - connect and room-hop both land here.
     std::cout << "conn " << connId << " ("
-              // "ws json" is an older page that never asked for the binary
-              // state packet - worth seeing, since each one costs eight times
-              // the bandwidth and they should die out after a deploy.
-              << (rec.transport == Transport::UDP ? "udp" : rec.binaryState ? "ws" : "ws json")
+              << (rec.transport == Transport::UDP ? "udp" : "ws")
               << ") -> slot " << slot << " in " << code
               << ". Active there: " << seated
               // The IDENTITY, never the token: this half is safe to write down,
@@ -2909,10 +2736,9 @@ static void HandleClientMessage(uint64_t connId, const std::string& msg) {
 // -------------------------------------------------------------------------
 // Broadcast state to all connected clients.
 // Every client sees the same world this tick - only `lastSeq` differs, so the
-// (comparatively expensive) JSON/binary body is serialized ONCE per tick per
-// transport here, not once per connected client; buildStatePacket/
-// buildStateBinary then just prepend each client's own small tick/seq header
-// onto that shared body.
+// (comparatively expensive) body is serialized ONCE per tick here, not once per
+// connected client; buildStateBinary then just prepends each client's own small
+// tick/seq header onto that shared body.
 //
 // Called from the sim loop AFTER gameMutex is released, on purpose: the
 // per-client build and blocking socket writes must not stall the simulation
@@ -2926,35 +2752,21 @@ void Match::BroadcastState(uint32_t tick) {
     std::lock_guard<std::mutex> lock(clientMutex);
     // Which player slots are occupied, so clients can hide empty ones.
     SlotMask connectedSlots = 0;
-    // Binary for every UDP client and for a WebSocket client that asked for it;
-    // JSON only for a WebSocket client that did not (an older page).
-    auto wantsBinary = [](const ConnectedClient& c) {
-        return c.transport == Transport::UDP || c.binaryState;
-    };
-    bool haveJson = false, haveBin = false;
-    for (auto& [cid, client] : clients) {
-        SlotAdd(connectedSlots, client.playerId);
-        if (wantsBinary(client)) haveBin = true;
-        else haveJson = true;
-    }
+    for (auto& [cid, client] : clients) SlotAdd(connectedSlots, client.playerId);
     // Resolved here, under the lock this already holds, so a host who left is
     // replaced on the very next packet rather than whenever someone next presses
     // something. -1 in an official room: nobody hosts it.
     const int hostSlot = HostSlotLocked();
 
-    // Build each transport's shared body at most once, and only if a client
-    // of that transport is actually connected.
-    std::string jsonBody, binBody;
-    if (haveJson) jsonBody = buildStateBodyJson(connectedSlots, hostSlot);
-    if (haveBin)  binBody  = buildStateBodyBinary(connectedSlots, hostSlot);
+    // One body for everyone, built once. (Nobody here means nobody to send to.)
+    if (clients.empty()) return;
+    const std::string body = buildStateBodyBinary(connectedSlots, hostSlot);
 
     for (auto& [cid, client] : clients) {
-        // The compact binary state for everyone who can read it. Over UDP it is
-        // sized to fit one datagram; over WebSocket there is no such limit and
-        // it goes as a single binary frame, never chunked (SendToClient).
-        std::string packet = wantsBinary(client)
-            ? buildStateBinary(tick, client.lastSeq, binBody)
-            : buildStatePacket(tick, client.lastSeq, jsonBody);
+        // Over UDP the packet is sized to fit one datagram; over WebSocket there
+        // is no such limit and it goes as a single binary frame (Session::DoWrite
+        // marks it binary; SendToClient never chunks that transport).
+        std::string packet = buildStateBinary(tick, client.lastSeq, body);
         // Oversize warning (throttled): a binary state over UDP_SAFE_DATAGRAM
         // gets chunked with no retransmit, so any lost chunk drops that whole
         // tick. If this fires steadily, the map preset has too many objects.

@@ -1,14 +1,16 @@
 // netbin.h
 //
-// Little-endian binary codec for the UDP state packet. The per-tick state packet
-// is the one high-frequency, size-critical message; as JSON it ran ~2 KB (over
+// Little-endian binary codec for the state packet. The per-tick state packet is
+// the one high-frequency, size-critical message; as JSON it ran several KB (over
 // the safe UDP MTU, so it IP-fragments and drops badly over the internet). The
-// binary form is ~4x smaller and fits one datagram.
+// binary form is about seven times smaller and fits one datagram.
 //
-// Scope: UDP only. WebSocket/TCP has no MTU limit, so browser (and native ws://)
-// clients keep the JSON state path untouched. The client tells the two apart by
-// the first byte: '{' (0x7B) = JSON, anything else = binary (see wire.h
-// applyMessage). We tag binary packets with STATE_BIN_VERSION as byte 0.
+// Scope: the state on BOTH transports, and the welcome over UDP. It began as
+// UDP-only, with WebSocket clients kept on JSON because TCP has no MTU to fit;
+// that JSON state is gone - it was most of what a web client was sent. Every
+// other message is JSON, and the client tells the two apart by the first byte:
+// '{' (0x7B) = JSON, anything else = binary (see wire.h applyMessage). We tag
+// binary packets with STATE_BIN_VERSION as byte 0.
 //
 // Encoding is explicit little-endian (shift-based, so host endianness doesn't
 // matter) and floats travel as their IEEE-754 bit pattern - identical on every
