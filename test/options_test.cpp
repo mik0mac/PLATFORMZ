@@ -172,30 +172,27 @@ int main() {
     // --- MatchIsOver: the end-of-match rule the client and the server share ---
     {
         printf("MatchIsOver\n");
-        auto over = [](int humans, int alive, int participants, int roids, bool soloClear) {
+        auto over = [](int humans, int alive, int participants, int roids) {
             MatchTally t;
             t.aliveHumans = humans; t.aliveTotal = alive;
             t.participants = participants; t.asteroids = roids;
-            return MatchIsOver(t, soloClear);
+            return MatchIsOver(t);
         };
         auto is = [](bool got, bool want, const char* what) {
             check(got == want, what, got ? "over" : "still playing");
         };
         // A contest: last body standing, or no humans left.
-        is(over(1, 8, 8, 18, true),  false, "a full match that has just begun is not over");
-        is(over(1, 2, 8, 18, true),  false, "one human and one bot left: still a fight");
-        is(over(1, 1, 8, 18, true),  true,  "one body left standing ends a contest");
-        is(over(0, 3, 8, 18, true),  true,  "every human dead ends it, bots still alive or not");
-        is(over(2, 2, 2, 0,  true),  false, "clearing the asteroids never ends a contest");
-        is(over(2, 2, 2, 0,  false), false, "...online either");
-        // Solo: the lone human dying, and - locally only - clearing the arena.
-        is(over(1, 1, 1, 5,  true),  false, "a solo run with asteroids left goes on");
-        is(over(1, 1, 1, 0,  true),  true,  "a LOCAL solo run ends when the arena is clear");
-        is(over(1, 1, 1, 0,  false), false, "an ONLINE solo room does not end on a clear arena");
-        is(over(0, 0, 1, 5,  true),  true,  "the solo player dying ends it");
-        is(over(0, 0, 1, 5,  false), true,  "...online too");
+        is(over(1, 8, 8, 18), false, "a full match that has just begun is not over");
+        is(over(1, 2, 8, 18), false, "one human and one bot left: still a fight");
+        is(over(1, 1, 8, 18), true,  "one body left standing ends a contest");
+        is(over(0, 3, 8, 18), true,  "every human dead ends it, bots still alive or not");
+        is(over(2, 2, 2, 0),  false, "clearing the asteroids never ends a contest");
+        // Solo: the lone human dying, or clearing the arena - local and online alike.
+        is(over(1, 1, 1, 5),  false, "a solo run with asteroids left goes on");
+        is(over(1, 1, 1, 0),  true,  "a solo run ends when the arena is clear");
+        is(over(0, 0, 1, 5),  true,  "the solo player dying ends it");
         // Empty seats are not participants (the first-tick bug).
-        is(over(1, 1, 1, 18, false), false, "one human among EMPTY seats is solo, not 'last one standing'");
+        is(over(1, 1, 1, 18), false, "one human among EMPTY seats is solo, not 'last one standing'");
     }
 
     return failures ? 1 : 0;
