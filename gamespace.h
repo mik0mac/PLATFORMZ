@@ -415,6 +415,29 @@ public:
                         SPARK_BURST_LIFETIME_MIN, SPARK_BURST_LIFETIME_MAX);
     }
 
+    // The one-time burst for a player who has just died. Returns true on the
+    // frame it fires, so the sim can add what only the sim does (the death cue,
+    // stopping the body). Players are never erased, so deathBurstSpawned is what
+    // keeps it to once per death.
+    //
+    // Shared by the local sim (updateActiveObjects) and the networked client
+    // (main.cpp), which used to carry a loop each. They differ in ONE thing -
+    // how they know a slot has a body at all - and that is `hasBody`: the sim
+    // asks !isVacant, the client asks isConnected (the server's `active` flag;
+    // isVacant never crosses the wire). An empty slot is permanently !isAlive
+    // and was never in the match, so it has nothing to detonate; without this
+    // every empty slot fired a burst on the first tick of every match.
+    //
+    // A slot seen ALIVE re-arms, body or not, so a seat that was empty or dead
+    // when the guard was set still bursts when its next occupant dies.
+    bool claimDeathBurst(Player& player, bool hasBody) {
+        if (player.isAlive) { player.deathBurstSpawned = false; return false; }
+        if (!hasBody || player.deathBurstSpawned) return false;
+        spawnEliminationBurst(player.position, player.color_outline);
+        player.deathBurstSpawned = true;
+        return true;
+    }
+
     // Tick the VFX sparks (drift + fade) and drop dead ones, nothing else. The
     // networked client uses this because the server owns every other object's
     // lifecycle, but sparks are a purely local effect that is never serialized -
@@ -476,15 +499,8 @@ public:
         // (the local player drives the death screen), so a per-player flag keeps
         // the burst from re-firing every frame.
         for (Player& player : players) {
-            // An empty slot is permanently !isAlive and was never in the match,
-            // so it has nothing to detonate. resetPlayersForMatch clears
-            // deathBurstSpawned, so without this guard every vacant slot fires a
-            // spark burst and a death cue on the first tick of every match.
-            if (player.isVacant) continue;
-            if (!player.isAlive && !player.deathBurstSpawned) {
-                spawnEliminationBurst(player.position, player.color_outline);
+            if (claimDeathBurst(player, /*hasBody=*/!player.isVacant)) {
                 emitAudio(FX_PLAYER_DEATH, player.position, player.id);
-                player.deathBurstSpawned = true;
                 // Stop the body: dead slots aren't driven through the input
                 // path anymore (no gravity), so leftover velocity would carry
                 // them in a straight line forever. Spectating restores control.
