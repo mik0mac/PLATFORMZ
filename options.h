@@ -595,16 +595,16 @@ struct MatchTally {
 //   - it is a contest (two or more participants) and at most one body is left
 //     standing - bots included, so a lone human does not have to watch the bots
 //     finish; or
-//   - it is a SOLO run, `soloEndsOnClear` is set, and the arena is clear.
+//   - it is a SOLO run and the arena is clear. The asteroid count never ends a
+//     contest.
 //
-// That last flag is the one place local and online play differ, on purpose kept
-// as it was rather than quietly changed: a LOCAL solo run is the arena-clearing
-// game and ends when the last asteroid goes. An ONLINE room with one human in
-// it does not - its empty seats are still joinable, so clearing the field does
-// not end the match under someone who might be about to walk in. The asteroid
-// count never ends a contest in either mode.
-inline bool MatchIsOver(const MatchTally& t, bool soloEndsOnClear) {
+// The same in both modes. Online solo used to differ: a room with one human
+// and no bots did NOT end on a clear arena, on the grounds that its empty seats
+// were still joinable. What that bought was a player flying around an empty
+// cube with no result and no way out but the host's [Q] - and an arena with
+// nothing left in it is not a match anybody wants to walk into.
+inline bool MatchIsOver(const MatchTally& t) {
     if (t.aliveHumans <= 0)  return true;
     if (t.participants >= 2) return t.aliveTotal <= 1;
-    return soloEndsOnClear && t.asteroids <= 0;
+    return t.asteroids <= 0;
 }

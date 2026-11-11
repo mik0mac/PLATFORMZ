@@ -3446,8 +3446,8 @@ void Match::Tick(CollisionGrid& scratchGrid) {
             // past the first human's death, and both humans reach GAME OVER on
             // the same phase flip. The single-survivor clause is gated to
             // multi-PARTICIPANT rosters so a solo start doesn't end instantly;
-            // it then ends only when the lone human dies (aliveHumans == 0),
-            // preserving today's solo behavior.
+            // a solo room (one human, BOTS off) ends when that human dies or
+            // when the arena is clear, the same as a local solo run.
             //
             // Participants, not players.size(): a room whose preset caps maxBots
             // can hold empty slots, and counting those as bodies made a one-human
@@ -3471,7 +3471,7 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                 // away from is not a bot either, and must not keep a match alive.
                 MatchTally tally = gameSpace.matchTally();
                 tally.aliveHumans = aliveHumans;
-                if (MatchIsOver(tally, /*soloEndsOnClear=*/false)) {
+                if (MatchIsOver(tally)) {
                     gamePhase = Phase::GAMEOVER;
                     std::cout << "Match over (humans alive " << tally.aliveHumans
                               << ", total alive " << tally.aliveTotal << ")\n";

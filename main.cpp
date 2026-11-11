@@ -2389,8 +2389,16 @@ int main(int argc, char** argv) {
                 { "Destroy asteroids to replenish ammo, fuel, and health.", COUNTDOWN_SECONDS * 0.34f },
                 { "Good luck!",                                          COUNTDOWN_SECONDS * 0.68f },
             };
-            // Adjust the info for a single player game:
-            if (gameSpace.getPlayers().size() == 1) {
+            // Adjust the info for a single player game. Bodies, not roster slots:
+            // an online room with BOTS off and one human in it has empty seats,
+            // so its roster is bigger than one - and a lone player was being told
+            // to eliminate other players in an arena that had none. An empty
+            // seat reaches us as !isConnected (the server's `active` flag);
+            // locally every slot is somebody.
+            int bodies = 0;
+            for (const Player& p : gameSpace.getPlayers())
+                if (!networked || p.isConnected) bodies++;
+            if (bodies == 1) {
                 infoLines[0].text = "Destroy every asteroid to win.";
                 infoLines[1].text = "Each elimination replenishes ammo, fuel, and health.";
             }
@@ -3173,7 +3181,7 @@ int main(int argc, char** argv) {
             // The rule is MatchIsOver (options.h), shared with the server. Solo
             // (one body, BOTS off) ends when the player dies or the arena is
             // clear; with bots it is last-man-standing, or every human dead.
-            if (MatchIsOver(gameSpace.matchTally(), /*soloEndsOnClear=*/true)) {
+            if (MatchIsOver(gameSpace.matchTally())) {
                 gameOverTimer -= dt;
                 if (gameOverTimer <= 0.0f) endLocalMatch();
             }
