@@ -1167,6 +1167,25 @@ static std::string buildLeaderboard(const std::string& identity) {
     return s;
 }
 
+// The `active` flag both state builders send: is there somebody in this slot
+// for a client to draw, list and shoot at?
+//
+// A slot is shown if a human occupies it, a bot drives it, or - once a match is
+// underway (roster final) - whenever it is not VACANT, so a mid-match leaver's
+// open body stays visible and killable instead of going invisible, while a slot
+// the preset's maxBots left empty never had a body to show.
+//
+// ONE function because the JSON (web) and binary (native) builders each carried
+// a copy, and a copy that drifted would have had the two kinds of client
+// disagreeing about who is in the match.
+//
+// The scoreboard credit at match end deliberately does NOT use this: it credits
+// only a held slot or a bot, so a leaver's abandoned body earns no row.
+static bool SlotShown(SlotMask connectedSlots, int slot, const Player& p, Phase phase) {
+    return SlotSet(connectedSlots, slot) || p.isBot
+        || (phase != Phase::LOBBY && !p.isVacant);
+}
+
 //MARK: State packet
 // -------------------------------------------------------------------------
 // State serialization - build the JSON state body sent to all clients.
@@ -1212,14 +1231,9 @@ std::string Match::buildStateBodyJson(SlotMask connectedSlots, int hostSlot) {
         s += ",\"flash\":"  + jf(p.flashTimer); // damage-flash, so the client can glow a hit body
         s += ",\"oob\":"    + jb(p.isOutOfBounds);   // server-owned: outside the boundary, elimination pending
         s += ",\"oobt\":"   + jf(p.outOfBoundsTimer); // seconds left before being lost in space (drives the HUD countdown)
-        // A slot is shown if a human occupies it, a bot drives it, or - once a
-        // match is underway (roster final) - whenever it is not VACANT, so a
-        // mid-match leaver's open body stays visible/killable instead of going
-        // invisible, while a slot the preset's maxBots left empty never had a
-        // body to show. This flag is also how the client learns a slot is empty:
-        // isVacant itself never crosses the wire.
-        s += ",\"active\":" + jb(SlotSet(connectedSlots, i) || p.isBot
-                                 || (gamePhase.load() != Phase::LOBBY && !p.isVacant));
+        // SlotShown has the rule. This flag is also how the client learns a
+        // slot is empty: isVacant itself never crosses the wire.
+        s += ",\"active\":" + jb(SlotShown(connectedSlots, i, p, gamePhase.load()));
         s += ",\"score\":"  + ji(p.score); // server-owned score (credited in collisions)
         // Who runs this room. Server-owned, because the client can no longer work
         // it out: host is the CREATOR now, not whoever holds the lowest slot, and
@@ -1424,11 +1438,8 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
         nb::putQFrac(b, p.flashTimer, Player::flash_duration);
         nb::putQFrac(b, p.spectatingTimer, p.countdownToSpectating);
         nb::putU16(b, (uint16_t)p.score);
-        // Same rule as the JSON builder: in-match slots stay visible even when
-        // their human left (open body awaiting a reconnect), but a VACANT slot
-        // (over the preset's maxBots) never had a body and stays hidden.
-        bool active = SlotSet(connectedSlots, i) || p.isBot
-                      || (gamePhase.load() != Phase::LOBBY && !p.isVacant);
+        // The same rule as the JSON builder, by construction: SlotShown.
+        bool active = SlotShown(connectedSlots, i, p, gamePhase.load());
         // Bit 32 is the host flag. Bits 32/64/128 were free, so this needed no
         // layout change and no STATE_BIN_VERSION bump - a client built before it
         // masks the bits it knows and ignores this one.
@@ -3454,16 +3465,16 @@ void Match::Tick(CollisionGrid& scratchGrid) {
                     if (client.playerId >= 0 && client.playerId < (int)players.size()
                         && players[client.playerId].isAlive) aliveHumans++;
                 }
-                int aliveTotal = 0, participants = 0;
-                for (const auto& p : players) {
-                    if (p.isAlive) aliveTotal++;
-                    if (!p.isVacant) participants++;
-                }
-                bool multi = participants >= 2;
-                if (aliveHumans == 0 || (multi && aliveTotal <= 1)) {
+                // The rule itself is MatchIsOver (options.h), shared with the
+                // local client. Humans are counted HERE, from `clients`, not by
+                // matchTally's "any living non-bot": a body its player walked
+                // away from is not a bot either, and must not keep a match alive.
+                MatchTally tally = gameSpace.matchTally();
+                tally.aliveHumans = aliveHumans;
+                if (MatchIsOver(tally, /*soloEndsOnClear=*/false)) {
                     gamePhase = Phase::GAMEOVER;
-                    std::cout << "Match over (humans alive " << aliveHumans
-                              << ", total alive " << aliveTotal << ")\n";
+                    std::cout << "Match over (humans alive " << tally.aliveHumans
+                              << ", total alive " << tally.aliveTotal << ")\n";
                 }
             }
         }
@@ -3508,8 +3519,9 @@ void Match::Tick(CollisionGrid& scratchGrid) {
 
                 std::lock_guard<std::mutex> sb(scoreboardMutex);
                 for (int i = 0; i < (int)ps.size(); ++i) {
-                    // Same "active" rule the state packet uses (see buildState):
-                    // a slot a client holds, or one a bot is driving. Player's
+                    // Narrower than the state packet's `active` flag (SlotShown) on
+                    // purpose: a slot a client holds, or one a bot is driving - not
+                    // the open body a mid-match leaver left behind. Player's
                     // isConnected is CLIENT-side state - the server never sets it,
                     // so testing it here would filter nothing. Unoccupied slots
                     // still carry a name and a zero score, and would otherwise

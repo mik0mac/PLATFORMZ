@@ -784,6 +784,53 @@ int main(int argc, char** argv) {
         return "PLAYER " + std::to_string(slot + 1);
     };
 
+    //MARK: Shared small steps
+    // Each of these was written out at every place that needed it, and each copy
+    // was one forgotten line away from a bug the others did not have.
+
+    // Take the mouse for free-look. The capture recentres the cursor, which
+    // reads as a look jump, and the click or key that led here must not also
+    // fire a rocket - so both are swallowed (see consumeLookFrames' declaration).
+    // Every capture needs all three lines; a capture that forgot one either
+    // kicked the view or opened the match with a shot.
+    auto captureMouse = [&]() {
+        DisableCursor();
+        consumeLookFrames = 2;
+        consumeFirstFire  = true;
+    };
+
+    // Our look is PREDICTED: the mouse drives predYaw/predPitch every frame and
+    // they go to the server as an ABSOLUTE aim. So they must start from the
+    // server's own value for our slot - an unseeded or previous-match aim, once
+    // sent, drags the server off the spawn facing. Returns false while our slot
+    // is not known yet; nothing is sent until a seed has landed (predInit).
+    auto seedLook = [&]() -> bool {
+        const std::vector<Player>& ps = gameSpace.getPlayers();
+        if (myIndex < 0 || myIndex >= (int)ps.size()) return false;
+        predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch;
+        predInit = true; predSeededFor = myIndex;
+        return true;
+    };
+    // Seed if we never have, or if the seed was taken against a different slot
+    // (CompactConnectedSlots can move us at match start).
+    auto ensureLookSeeded = [&]() {
+        if (!predInit || predSeededFor != myIndex) seedLook();
+    };
+    // Drop the prediction, forcing a re-seed before anything is sent again.
+    auto forgetLook = [&]() {
+        predYaw = 0.0f; predPitch = 0.0f; predInit = false; predSeededFor = -1;
+    };
+
+    // Stop believing we hold a seat in a room: the slot and everything the
+    // welcome told us about the room. Done the moment WE decide to leave, not
+    // when the server's `unseated` gets back - see the lobby's LEAVE for why.
+    auto forgetRoom = [&]() {
+        myIndex = -1;
+        shell.inMatchCode.clear();
+        shell.inMatchName.clear();
+        shell.inMatchPreset.clear();
+    };
+
     // START. Local: stand up a fresh run. Networked: ask the server to start or
     // restart a match - the screen flips to PLAYING when the server's phase says
     // so (see the loop).
@@ -968,9 +1015,7 @@ int main(int argc, char** argv) {
         audioQueue.clearAll();
         messageQueue.clearAll();
         shell.showControls = false; shell.showOptions = false; shell.showScores = false; // close any open lobby modal so it can't hold the freed cursor
-        DisableCursor();
-        consumeLookFrames = 2;   // swallow the cursor-lock delta (see the declaration)
-        consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
+        captureMouse();
         // Elimination bursts are a client-only effect and deathBurstSpawned isn't
         // wire-synced, so the server clearing its own copy in resetPlayersForMatch()
         // never reaches us - without this, anyone who died last match gets no burst
@@ -990,13 +1035,7 @@ int main(int argc, char** argv) {
         // predYaw (which showed the 2nd player facing the wrong way at spawn until
         // they moved). If our slot isn't known yet, fall back to the lazy seed in
         // the PLAYING block.
-        std::vector<Player>& ps = gameSpace.getPlayers();
-        if (myIndex >= 0 && myIndex < (int)ps.size()) {
-            predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch;
-            predInit = true; predSeededFor = myIndex;
-        } else {
-            predInit = false; predSeededFor = -1;
-        }
+        if (!seedLook()) forgetLook();
         screen = GameScreen::PLAYING;
     };
 
@@ -1104,9 +1143,7 @@ int main(int argc, char** argv) {
             netAcked = true;
             myIndex  = -1;
             if (wasSeated) {
-                shell.inMatchCode.clear();
-                shell.inMatchName.clear();
-                shell.inMatchPreset.clear();
+                forgetRoom();
                 shell.roomLost = true;
             }
             TraceLog(LOG_INFO, "Connected, holding no room");
@@ -1385,7 +1422,7 @@ int main(int argc, char** argv) {
         // targets, so carrying the last match's aim into the next one lets a
         // pre-seed frame transmit it and drag the server off our spawn facing.
         // Clearing predInit forces a re-seed from the new spawn orientation.
-        predYaw = 0.0f; predPitch = 0.0f; predInit = false; predSeededFor = -1;
+        forgetLook();
         shell.botNameOrder = ShuffledIndices(BOT_NAME_COUNT); // fresh random bot names next match
         EnableCursor(); // free the cursor for the title menu
         shell.showControls = false; shell.showOptions = false; shell.showScores = false; // no stale modal flag leaking back onto the lobby
@@ -2138,10 +2175,7 @@ int main(int argc, char** argv) {
                         // walked out of, where no further packet was ever
                         // coming. Forgetting the room first is what makes the
                         // seat guards below able to tell the two apart.
-                        myIndex = -1;
-                        shell.inMatchCode.clear();
-                        shell.inMatchName.clear();
-                        shell.inMatchPreset.clear();
+                        forgetRoom();
                         openBrowser();
                         break;
                     case LobbyAction::None: break;
@@ -2339,9 +2373,7 @@ int main(int argc, char** argv) {
             } else {
                 countdownRemaining -= dt;
                 if (countdownRemaining <= 0.0f) { // count reached zero: unfreeze into the match
-                    DisableCursor(); // capture the mouse for free-look while playing
-                    consumeLookFrames = 2; // swallow the cursor-lock delta (see the declaration)
-                    consumeFirstFire = true; // swallow the start click so it isn't read as a rocket
+                    captureMouse(); // free-look while playing; swallows the lock jump and the start click
                     screen = GameScreen::PLAYING;
                     continue;
                 }
@@ -2494,9 +2526,7 @@ int main(int argc, char** argv) {
             EnableCursor();          // the screen is a menu; also what disarms the controls
         } else if (paused && resumeGesture) {
             paused = false;
-            DisableCursor();
-            consumeLookFrames = 2;   // swallow the cursor-recentre jump (see the declaration)
-            consumeFirstFire  = true; // the click that RESUMED must not also fire a rocket
+            captureMouse();          // the click that RESUMED must not also fire a rocket
         }
 
         // Who may end the match. Local play has no one else in it; online it is
@@ -2521,17 +2551,14 @@ int main(int argc, char** argv) {
             if (!networked) {
                 endLocalMatch();                 // straight to GAME_OVER, no death-FX delay
             } else if (amMatchHost()) {
-                DisableCursor(); consumeLookFrames = 2; consumeFirstFire = true;
+                captureMouse();
                 if (net.isOpen()) net.send(serializeEndMatch()); // request; the server flips the phase for everyone
             } else {
                 // Out of the room, not out of the match for anybody else. Drop
                 // the seat here rather than waiting for the server's `unseated`,
                 // for the same reason LEAVE in the lobby does (see there).
                 if (net.isOpen()) net.send(serializeLeave());
-                myIndex = -1;
-                shell.inMatchCode.clear();
-                shell.inMatchName.clear();
-                shell.inMatchPreset.clear();
+                forgetRoom();
                 returnToTitle();   // holding no room, this lands in the browser
                 continue;
             }
@@ -2555,13 +2582,7 @@ int main(int argc, char** argv) {
             // the send, too late to prevent it. enterNetworkedMatch normally seeds
             // already; this covers the case where our slot wasn't known yet then,
             // and re-seeds if CompactConnectedSlots moved us to a different slot.
-            if (!predInit || predSeededFor != myIndex) {
-                std::vector<Player>& ps = gameSpace.getPlayers();
-                if (myIndex >= 0 && myIndex < (int)ps.size()) {
-                    predYaw = ps[myIndex].yaw; predPitch = ps[myIndex].pitch;
-                    predInit = true; predSeededFor = myIndex;
-                }
-            }
+            ensureLookSeeded();
 
             // Gather input and predict look locally. Position is server-
             // authoritative, but a mouse-look that waited a full round-trip
@@ -2636,23 +2657,15 @@ int main(int argc, char** argv) {
             // around the spawn point of an eight-slot room with one human in it.
             //
             // The local sim already refused them by isVacant (gamespace.h,
-            // updateActiveObjects); this is the same loop written a second time
-            // for the networked mirror, and the guard was only ever added to the
-            // first copy. isVacant does not cross the wire - the server folds it
-            // into the `active` flag, which lands here as isConnected - so that
-            // is the flag to ask. It stays TRUE for a mid-match leaver's open
+            // updateActiveObjects); this used to be the same loop written a
+            // second time for the networked mirror, and the guard was only ever
+            // added to the first copy. Both now go through claimDeathBurst and
+            // differ only in how they know a slot has a body. isVacant does not
+            // cross the wire - the server folds it into the `active` flag, which
+            // lands here as isConnected - so that is the flag to ask. It stays TRUE for a mid-match leaver's open
             // body, which is a real body and does still burst when it dies.
-            for (Player& player : gameSpace.getPlayers()) {
-                // Alive again (a new match, or a joiner took a dead slot over):
-                // the next death is a new one. BEFORE the isConnected test, so a
-                // slot that was empty when the flag was set is still re-armed.
-                if (player.isAlive) player.deathBurstSpawned = false;
-                if (!player.isConnected) continue;
-                if (!player.isAlive && !player.deathBurstSpawned) {
-                    gameSpace.spawnEliminationBurst(player.position, player.color_outline);
-                    player.deathBurstSpawned = true;
-                }
-            }
+            for (Player& player : gameSpace.getPlayers())
+                gameSpace.claimDeathBurst(player, /*hasBody=*/player.isConnected);
 
             // Tick the bursts: the server owns every other object, but sparks are
             // a local-only effect, so the client drifts/fades/retires them itself.
@@ -2666,12 +2679,7 @@ int main(int argc, char** argv) {
                 // run. Seeding here also discards the garbage predYaw this frame
                 // accumulated (that value was never sent - the send is gated on
                 // predInit).
-                if (!predInit || predSeededFor != localIndex) {
-                    predYaw = players[localIndex].yaw;
-                    predPitch = players[localIndex].pitch;
-                    predInit = true;
-                    predSeededFor = localIndex;
-                }
+                ensureLookSeeded(); // localIndex IS myIndex here (set after the poll above)
                 // Override the local player's look with the prediction (the
                 // server echo lags); all other fields stay server-authoritative.
                 players[localIndex].yaw   = predYaw;
@@ -3162,34 +3170,12 @@ int main(int argc, char** argv) {
             // is not a death. It used to be a bare M press mid-flight, which
             // ended the match on a single keystroke with nothing to confirm it.
 
-            int remaining_players = 0;
-            int remaining_humans = 0;
-            int remaining_bots = 0;
-            int remaining_asteroids = (int)gameSpace.getAsteroids().size();
-            
-            if (gameSpace.getPlayers().size() == 1) {
-                // specal case.  Solo player, no bots.  Game only end when player dies or all asteroids are gone.
-                if (remaining_asteroids <= 0 || !gameSpace.getPlayers()[0].isAlive) {
-                    gameOverTimer -= dt;
-                    if (gameOverTimer <= 0.0f) endLocalMatch();
-                }
-            } else {
-                // main case.  Multiple players (bots and humans).  Game ends when only one player is left or all humans are dead.
-                // determine number of remaining ALIVE players (bots included). Only
-                // alive players count toward the human/bot tally - otherwise a dead
-                // human still counts as a human and remaining_humans never hits 0.
-                for (const Player& p : gameSpace.getPlayers()) {
-                    if (!p.isAlive) continue;
-                    remaining_players++;
-                    if (p.isBot) remaining_bots++; else remaining_humans++;
-                }
-                // Last-man-standing: end once one (or zero) players remain, or no
-                // humans are left. Asteroid count doesn't end a multiplayer match -
-                // only a solo game (handled above) ends on clearing all asteroids.
-                if (remaining_players <= 1 || remaining_humans <= 0) {
-                    gameOverTimer -= dt;
-                    if (gameOverTimer <= 0.0f) endLocalMatch();
-                }
+            // The rule is MatchIsOver (options.h), shared with the server. Solo
+            // (one body, BOTS off) ends when the player dies or the arena is
+            // clear; with bots it is last-man-standing, or every human dead.
+            if (MatchIsOver(gameSpace.matchTally(), /*soloEndsOnClear=*/true)) {
+                gameOverTimer -= dt;
+                if (gameOverTimer <= 0.0f) endLocalMatch();
             }
         }
         
