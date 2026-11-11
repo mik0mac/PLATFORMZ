@@ -37,10 +37,11 @@ def set_target(host, port=None):
 # Tags per netbin.h. WELCOME is 0x0C since the welcome grew the room's NAME and
 # PRESET on top of its code and kind - values are never recycled there, so each
 # bump goes past the high-water mark rather than taking a free low value (0x0A is
-# burned by the layout before the name). STATE is 0x0E since explosions became
-# one-shot announcements (id, owner, age); 0x0D was the layout before that, and
-# 0x0B the one before the room's music cue (#174).
-STATE, WELCOME, CHUNK, FULL = 0x0E, 0x0C, 0x03, 0x06
+# burned by the layout before the name). STATE is 0x0F since the position and
+# velocity ranges widened (same bytes, new scale); 0x0E was explosions becoming
+# one-shot announcements, 0x0D the layout before that, and 0x0B the one before
+# the room's music cue (#174).
+STATE, WELCOME, CHUNK, FULL = 0x0F, 0x0C, 0x03, 0x06
 PHASES = {0: "lobby", 1: "countdown", 2: "playing", 3: "gameover"}
 # Wire order of mapSizeOrder (constants.h). Append only, same as there.
 MAP_SIZES = ["SMALL", "MEDIUM", "LARGE", "XL"]

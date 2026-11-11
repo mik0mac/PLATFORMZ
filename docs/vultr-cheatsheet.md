@@ -66,7 +66,7 @@ ranges the running binary was built with:
 
 ```
 PLATFORMZ server | port 9000 (TCP/WebSocket + UDP) | 60 Hz
-Protocol: state tag 0x07, welcome tag 0x02 | qpos +/-2400 | qvel +/-700
+Protocol: state tag 0x0f, welcome tag 0x0c | qpos +/-7000 body, 20500 shot | qvel +/-1000 body, 4600 shot
 ```
 
 Those must match `netbin.h` in the build your clients are running. If they don't,

@@ -1402,8 +1402,8 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     for (int i = 0; i < (int)players.size(); i++) {
         const Player& p = players[i];
         nb::putU32(b, p.id);
-        nb::putQPos(b, p.position.x); nb::putQPos(b, p.position.y); nb::putQPos(b, p.position.z);
-        nb::putQVel(b, p.velocity.x); nb::putQVel(b, p.velocity.y); nb::putQVel(b, p.velocity.z);
+        nb::putQPos(b, p.position.x, nb::QPOS_BODY_RANGE); nb::putQPos(b, p.position.y, nb::QPOS_BODY_RANGE); nb::putQPos(b, p.position.z, nb::QPOS_BODY_RANGE);
+        nb::putQVel(b, p.velocity.x, nb::QVEL_BODY_RANGE); nb::putQVel(b, p.velocity.y, nb::QVEL_BODY_RANGE); nb::putQVel(b, p.velocity.z, nb::QVEL_BODY_RANGE);
         nb::putQAngle(b, p.yaw); nb::putQAngle(b, p.pitch);
         nb::putU8(b, (uint8_t)p.health);
         nb::putQFrac(b, p.fuel, PLAYER_MAX_FUEL);
@@ -1433,8 +1433,8 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     nb::putU16(b, (uint16_t)asteroids.size());
     for (const Asteroid& a : asteroids) {
         nb::putU32(b, a.id);
-        nb::putQPos(b, a.position.x); nb::putQPos(b, a.position.y); nb::putQPos(b, a.position.z);
-        nb::putQVel(b, a.velocity.x); nb::putQVel(b, a.velocity.y); nb::putQVel(b, a.velocity.z);
+        nb::putQPos(b, a.position.x, nb::QPOS_BODY_RANGE); nb::putQPos(b, a.position.y, nb::QPOS_BODY_RANGE); nb::putQPos(b, a.position.z, nb::QPOS_BODY_RANGE);
+        nb::putQVel(b, a.velocity.x, nb::QVEL_BODY_RANGE); nb::putQVel(b, a.velocity.y, nb::QVEL_BODY_RANGE); nb::putQVel(b, a.velocity.z, nb::QVEL_BODY_RANGE);
         nb::putQFrac(b, a.size, ASTEROID_SIZE_ENCODE_MAX);
         nb::putU8(b, (uint8_t)a.health);
         nb::putQFrac(b, a.flashTimer, ASTEROID_FLASH_DURATION);
@@ -1445,8 +1445,8 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     nb::putU16(b, (uint16_t)rockets.size());
     for (const Rocket& r : rockets) {
         nb::putU32(b, r.id);
-        nb::putQPos(b, r.position.x); nb::putQPos(b, r.position.y); nb::putQPos(b, r.position.z);
-        nb::putQVel(b, r.velocity.x); nb::putQVel(b, r.velocity.y); nb::putQVel(b, r.velocity.z);
+        nb::putQPos(b, r.position.x, nb::QPOS_SHOT_RANGE); nb::putQPos(b, r.position.y, nb::QPOS_SHOT_RANGE); nb::putQPos(b, r.position.z, nb::QPOS_SHOT_RANGE);
+        nb::putQVel(b, r.velocity.x, nb::QVEL_SHOT_RANGE); nb::putQVel(b, r.velocity.y, nb::QVEL_SHOT_RANGE); nb::putQVel(b, r.velocity.z, nb::QVEL_SHOT_RANGE);
     }
 
     // Explosions: announcements for their first EXPLOSION_NET_WINDOW (see
@@ -1456,7 +1456,7 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     auto& explosions = gameSpace.getExplosions();
     nb::putU16(b, (uint16_t)explosions.size());
     for (const Explosion& e : explosions) {
-        nb::putQPos(b, e.position.x); nb::putQPos(b, e.position.y); nb::putQPos(b, e.position.z);
+        nb::putQPos(b, e.position.x, nb::QPOS_SHOT_RANGE); nb::putQPos(b, e.position.y, nb::QPOS_SHOT_RANGE); nb::putQPos(b, e.position.z, nb::QPOS_SHOT_RANGE);
         nb::putU8(b, (uint8_t)(e.id & 0xFF));
         nb::putU8(b, (uint8_t)e.ownerId);
         nb::putQFrac(b, e.age, EXPLOSION_NET_WINDOW);
@@ -1468,7 +1468,7 @@ std::string Match::buildStateBodyBinary(SlotMask connectedSlots, int hostSlot) {
     for (const auto& ev : audio) {
         nb::putU8(b, (uint8_t)ev.fx);
         nb::putU32(b, ev.owner);
-        nb::putQPos(b, ev.pos.x); nb::putQPos(b, ev.pos.y); nb::putQPos(b, ev.pos.z);
+        nb::putQPos(b, ev.pos.x, nb::QPOS_SHOT_RANGE); nb::putQPos(b, ev.pos.y, nb::QPOS_SHOT_RANGE); nb::putQPos(b, ev.pos.z, nb::QPOS_SHOT_RANGE);
         nb::putQFrac(b, ev.volumeScale, 1.0f);
     }
 
@@ -3984,8 +3984,8 @@ int main() {
               << std::setw(2) << (int)nb::STATE_BIN_VERSION
               << ", welcome tag 0x" << std::setw(2) << (int)nb::WELCOME_BIN_VERSION
               << std::dec << std::setfill(' ')
-              << " | qpos +/-" << nb::QPOS_RANGE
-              << " | qvel +/-" << nb::QVEL_RANGE << "\n";
+              << " | qpos +/-" << nb::QPOS_BODY_RANGE << " body, " << nb::QPOS_SHOT_RANGE << " shot"
+              << " | qvel +/-" << nb::QVEL_BODY_RANGE << " body, " << nb::QVEL_SHOT_RANGE << " shot\n";
 
     // Join key gate (never printed - it's the secret). Lives in the
     // environment, not the repo: docs/deploy-vultr.md covers setting it on

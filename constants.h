@@ -287,13 +287,21 @@ const float RETICLE_BRACKET_LENGTH = 0.4f;  // bracket arm length, fraction of R
 const float RETICLE_SMOOTHING = 12.0f;      // anchor easing rate (1/sec) for non-local reticles; higher = snappier, lower = floatier
 
 //MARK: Player Speed
-const float PLAYER_SPEED_WALK = 30.0f; // units/sec
-const float PLAYER_ACCELERATION_WALK = 30.0f; // units/sec^2
-const float PLAYER_SPEED_JETPACK = 45.0f; // units/sec
-const float PLAYER_ACCELERATION_JETPACK = 45.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~24 net climb accel under moon gravity, matching the old feel.
+const float PLAYER_SPEED_WALK = 54.0f; // units/sec
+const float PLAYER_ACCELERATION_WALK = 54.0f; // units/sec^2
+const float PLAYER_SPEED_JETPACK = 81.0f; // units/sec
+const float PLAYER_ACCELERATION_JETPACK = 81.0f; // units/sec^2. Gravity applies during thrust (Player::updateVelocity), so this must exceed EARTH_GRAVITY to climb; ~75 net climb accel under moon gravity.
 // The speeds above are the 1x baseline: the OPTIONS SPEED BOOST and JETPACK
 // THRUST sliders (MatchOptions in options.h) multiply them per match. The
 // COAST MODE toggle that decides how they decay is a rule and lives there too.
+// Hard ceiling on a player's speed from ANY source - movement, rocket kickback,
+// blast pushback, gravity. Kickback is what needs it: each shot adds
+// ROCKET_KICKBACK_FACTOR of the rocket's speed, and nothing removes it in coast
+// mode or vertically, so firing steadily would otherwise grow speed without
+// limit. Enforced in Player::updatePos, before the move. Comfortably above the
+// fastest movement (PLAYER_SPEED_JETPACK * 2 * 2 = 324). netbin.h's
+// QPOS_BODY_RANGE / QVEL_BODY_RANGE are sized from it - raise them with it.
+const float PLAYER_MAX_SPEED = 600.0f; // units/sec
 
 //MARK: Health, Ammo, Fuel
 const int PLAYER_MAX_AMMO = 100;
@@ -322,12 +330,19 @@ const std::vector<Color> HUMAN_PLAYER_COLORS = {
     
     {0, 0, 255, 255},     // Blue
     {0, 255, 0, 255},     // Green
-    {255, 0, 255, 255},   // Pink
+    // {255, 0, 255, 255},   // Pink
     {255, 255, 0, 255},   // Yellow
     {0, 255, 255, 255},   // Cyan
-    {255, 128, 0, 255},   // Orange
-    {160, 32, 240, 255},  // Purple
-    {255, 0, 0, 255},     // Red
+    // {255, 128, 0, 255},   // Orange
+    //  {128, 0, 128, 255},   // Purple
+    {127, 255, 0, 255},   // Chartreuse
+    // {255, 0, 0, 255},     // Red
+    // {255, 255, 255, 255}, // White
+    {128, 128, 128, 255}, // Gray
+    {128, 64, 0, 255},    // Brown
+    // {64, 128, 0, 255},    // Olive
+    // {0, 128, 128, 255},   // Teal
+    // {128, 0, 64, 255},    // Maroon
 };
 
 //MARK: Bot Constants
@@ -369,8 +384,11 @@ const float BOT_TICK_JITTER_MAX = 1.3f;    // decision-interval multiplier hi
 const bool DISABLE_BOT_MOVEMENT = false; // If true, bots don't move or jetpack (for testing other features)
 const bool DISABLE_BOT_FIRE_PLAYER = false;     // If true, bots don't fire rockets (for testing other features)
 const bool DISABLE_BOT_FIRE_ASTEROIDS = false; // If true, bots don't fire at asteroids (for testing other features)
-const float BOT_FIRERATE_MAX = PLAYER_FIRE_RATE; // max shots/sec for bots (lower = easier)
-const float BOT_FIRERATE_MIN = PLAYER_FIRE_RATE / 4.0f; // min shots/sec for bots (higher = harder)
+// Seconds between a bot's shots, chosen by its aggression (bot_controller.h):
+// aggression 1 waits MIN, 0 waits MAX, linear in seconds between. A bot still
+// only fires once it is on target, and never faster than PLAYER_FIRE_RATE.
+const float BOT_FIRE_PERIOD_MIN = 1.0f / PLAYER_FIRE_RATE;        // hardest: the player's own rate (0.33s)
+const float BOT_FIRE_PERIOD_MAX = 3.0f;                          // easiest: one shot every 3 seconds
 const float BOT_FIRST_FIRE_DELAY = 3.0f; // seconds into a match before a bot may fire at all (#160) - no volley on the first frame
 
 // Placeholder bot display names (NATO phonetic alphabet). Used by the title
@@ -425,7 +443,7 @@ const float ROCKET_RADIUS = 0.5f; // Radius of the rocket's collision box (a sma
 // 10 ~68%. Not scaled by EXPLOSION RADIUS. Any size is safe - no grid limit.
 const float ROCKET_PROXIMITY_RADIUS = 6.0f;
 
-const float ROCKET_SPEED = 270.0f; // units/sec
+const float ROCKET_SPEED = 972.0f; // units/sec
 const float ROCKET_KICKBACK_FACTOR = 0.02f; // Recoil applied to player on shoot, as a fraction of ROCKET_SPEED
 const bool ROCKET_GRAVITY_ENABLED = true; // Per-rocket default: gravity affects the rocket. The OPTIONS "ROCKETS OBEY PHYSICS" toggle overrides this per match (see ROCKETS_OBEY_PHYSICS, options.h).
 const bool ROCKET_VELOCITY_INHERITANCE_ENABLED = true; // Per-rocket default: rocket inherits the shooter's velocity at launch. Also driven by ROCKETS_OBEY_PHYSICS (options.h).
@@ -461,7 +479,7 @@ const Color EXPLOSION_COLOR = {255, 150, 0, 255}; // orange: the ring, and the d
 // --- 2. The flash ---
 // The ring, the glow and the platform flash all start at full strength and
 // fade out together over this many seconds. A bigger explosion doesn't last longer.
-const float EXPLOSION_FLASH_LIFETIME = 5.0f / 3.0f; 
+const float EXPLOSION_FLASH_LIFETIME = 1.0f; 
 // How bright the flash is on the walls, platforms and anything else it lights,
 // compared with the dots, which always flash at full strength. 1 = the same as
 // the dots. 0.5 = half as bright, so the dots lead and the walls stay subtle.
@@ -501,7 +519,7 @@ const float EXPLOSION_PLATFORM_MIN = 0.35f; // platforms near the edge of the ra
 // (shapes.h DrawBlastDots).
 
 // How many.
-const int   EXPLOSION_DOT_COUNT = 1248;     // dots in a default-sized explosion
+const int   EXPLOSION_DOT_COUNT = 624;     // dots in a default-sized explosion
 // Bigger explosions get more dots: count = DOT_COUNT x (size / default size)^POWER.
 // 2 = grows gently. 3 = keeps the dots just as crowded at any size.
 const float EXPLOSION_DOT_SIZE_POWER = 3.0f;
@@ -527,7 +545,7 @@ const float EXPLOSION_DOT_DRAG = 1.5f;   // how quickly it slows from SPEED to C
 const float EXPLOSION_DOT_SPREAD = 0.0f;   // each dot's speed differs by up to this much (+/-), so the edge is ragged, not a perfect sphere
 
 // How long.
-const float EXPLOSION_DOT_LIFETIME = EXPLOSION_FLASH_LIFETIME * 2.0f;  // seconds. The dots stay fully bright until the flash is over (EXPLOSION_FLASH_LIFETIME), then fade out over the rest of this.
+const float EXPLOSION_DOT_LIFETIME = EXPLOSION_FLASH_LIFETIME * 1.5f;  // seconds. The dots stay fully bright until the flash is over (EXPLOSION_FLASH_LIFETIME), then fade out over the rest of this.
 // A dot's streak is as long as the distance it travels in this many seconds, so
 // fast dots streak and slow ones shrink to a speck (never shorter than SPARK_STREAK_LENGTH).
 const float EXPLOSION_DOT_STREAK_TIME = 0.04f;
