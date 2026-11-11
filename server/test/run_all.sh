@@ -34,6 +34,7 @@ run grid_equiv  server/test/grid_equiv_test.cpp collisions.cpp
 run rocket_fuse server/test/rocket_fuse_test.cpp collisions.cpp
 run bot_aim     server/test/bot_aim_test.cpp collisions.cpp
 run registry    server/test/registry_test.cpp
+run options_wire server/test/options_wire_test.cpp
 
 printf '\n=== benches (informational, not pass/fail) ===\n'
 g++ $CXXFLAGS server/test/bench_grid_split.cpp collisions.cpp -o "$OUT/bench" \

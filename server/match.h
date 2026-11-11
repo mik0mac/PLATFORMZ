@@ -238,35 +238,43 @@ struct Match {
     std::atomic<uint32_t> matchEpoch{0};
 
     // ---- Pending match config (io thread -> sim thread) ------------------
-    // Written by the io thread when a "start"/"options" arrives, read by the sim
-    // thread when it consumes startRequested (the flag is the synchronization
-    // point).
-    // The chosen arena, as an index into mapSizeOrder (options.h). One value
-    // instead of the three loose numbers it used to be: half-size, platform count
-    // and asteroid count are all derivable from it at start, and keeping them
-    // separate meant they could disagree with each other and with what the lobby
-    // was showing.
+    // The room's rules: what the lobby is showing and what the next START will
+    // build. Written by an io thread when a "start"/"options" arrives (and once
+    // at creation, from the preset); read by the sim thread and by the state
+    // builders.
+    //
+    // ONE bundle behind one small mutex. This used to be seventeen separate
+    // atomics, each copied by hand in six places - the preset, both message
+    // handlers, both state builders and the match start - and nothing kept the
+    // six lists the same length. Two had already drifted: the explosion radius
+    // defaulted to 1.0 here against 2.0 in MatchOptions, and nothing arriving
+    // off the wire was ever clamped. A bundle also changes as a unit, where
+    // seventeen atomics could be read half-updated.
+    //
+    // optMutex is a LEAF: taken for the length of a copy, never while calling
+    // out, so it cannot take part in a lock-order cycle with gameMutex or
+    // clientMutex. Always go through options()/setOptions().
+    MatchOptions options() const {
+        std::lock_guard<std::mutex> g(optMutex);
+        return pendingOpt;
+    }
+    // The single way in, so the single place values are forced legal. A
+    // hand-built packet can ask for a speed boost of 1000 or 0 players; the
+    // sliders cannot, and the server should not take either on trust.
+    void setOptions(MatchOptions o) {
+        ClampOptions(o);
+        pendingMap.store(MapSizeIndex(o.mapSize));
+        std::lock_guard<std::mutex> g(optMutex);
+        pendingOpt = std::move(o);
+    }
+    // A lock-free mirror of the bundle's arena, as an index into mapSizeOrder
+    // (options.h). For the directory, which lists every room and must never
+    // wait on one - it reads atomics only. Written by setOptions and nowhere else.
     std::atomic<int>   pendingMap{MapSizeIndex(MatchOptions{}.mapSize)};
-    std::atomic<int>   pendingPlayers{GAMESPACE_DEFAULT_PLAYERS};
-    std::atomic<float> pendingDiff{BOT_DIFFICULTY_DEFAULT};
-    // The two rules with no OPTIONS slider. Still pendings, because they still
-    // arrive in the host's options bundle like everything else here - they are
-    // just authored by a preset rather than dialed. refreshBotSlots reads the
-    // first every tick, ServiceAutoStart the second.
-    std::atomic<int>   pendingMaxBots{MAX_BOTS_DEFAULT};
-    std::atomic<int>   pendingMinHumans{PUBLIC_MIN_PLAYERS};
-    std::atomic<float> pendingWallElast{WALL_ELASTICITY_PLAYER};     // OPTIONS WALL ELASTICITY (players only)
-    std::atomic<float> pendingPlatElast{PLATFORM_ELASTICITY_PLAYER}; // OPTIONS PLATFORM ELASTICITY (players only)
-    std::atomic<float> pendingBoost{1.0f};       // OPTIONS SPEED BOOST
-    std::atomic<float> pendingRocketSpeed{1.0f}; // OPTIONS ROCKET VELOCITY
-    std::atomic<float> pendingXRadius{1.0f};     // OPTIONS EXPLOSION RADIUS
-    std::atomic<float> pendingJThrust{1.0f};     // OPTIONS JETPACK THRUST
-    std::atomic<int>   pendingFuelBurn{(int)FUEL_CONSUMPTION_RATE}; // OPTIONS FUEL CONSUMPTION
-    std::atomic<int>   pendingFuelRegen{FUEL_REGEN_PCT_DEFAULT};    // OPTIONS FUEL REGEN (% of consumption)
-    std::atomic<bool>  pendingWallsEnabled{WALLS_ENABLED};
-    std::atomic<bool>  pendingRocketsPhysics{ROCKETS_OBEY_PHYSICS};
-    std::atomic<bool>  pendingFriendlyFire{FRIENDLY_FIRE};
-    std::atomic<bool>  pendingCoastMode{COAST_MODE};
+private:
+    mutable std::mutex optMutex;
+    MatchOptions       pendingOpt;
+public:
 
     // ---- Cached welcome -------------------------------------------------
     // The "static" half of the welcome packet: boundary size + platform layout.
@@ -331,7 +339,7 @@ struct Match {
     std::string matchPreset;
 
     // Auto-start countdown, LOBBY only. Armed once connectedCount reaches this
-    // room's pendingMinHumans, disarmed if it empties back below it.
+    // room's minHumansToStart, disarmed if it empties back below it.
     bool              autoStartArmed = false;
     Clock::time_point autoStartAt{};
 
@@ -486,28 +494,7 @@ struct Match {
     // The values are COPIED in, so the 60 Hz state packet reads them straight off
     // the match and never has to reach into registry storage under the registry
     // lock to build its "opt" block. Creation-time only.
-    void ApplyPreset(const MatchPreset& preset) {
-        const MatchOptions& o = preset.options;
-        pendingPlayers        = o.numPlayers;
-        pendingDiff           = o.botDifficulty;
-        pendingWallElast      = o.wallElasticity;
-        pendingPlatElast      = o.platformElasticity;
-        pendingBoost          = o.speedBoost;
-        pendingRocketSpeed    = o.rocketSpeedScale;
-        pendingXRadius        = o.explosionRadiusScale;
-        pendingJThrust        = o.jetpackThrust;
-        pendingFuelBurn       = o.fuelConsumption;
-        pendingFuelRegen      = o.fuelRegenPct;
-        pendingWallsEnabled   = o.wallsEnabled;
-        pendingRocketsPhysics = o.rocketsObeyPhysics;
-        pendingFriendlyFire   = o.friendlyFire;
-        pendingCoastMode      = o.coastMode;
-
-        pendingMaxBots        = OPT_RANGE_MAX_BOTS.clampi(o.maxBots);
-        pendingMinHumans      = OPT_RANGE_MIN_HUMANS.clampi(o.minHumansToStart);
-
-        pendingMap = MapSizeIndex(o.mapSize);
-    }
+    void ApplyPreset(const MatchPreset& preset) { setOptions(preset.options); }
     void BroadcastState(uint32_t tick);
     // Dispatch one inbound text frame from a client already in this match's
     // roster. The free HandleClientMessage() in server_main.cpp is the router
