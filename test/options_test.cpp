@@ -169,5 +169,31 @@ int main() {
 
     printf(failures ? "\nsome description checks FAILED\n"
                     : "\nall room-description checks passed\n");
+    // --- MatchIsOver: the end-of-match rule the client and the server share ---
+    {
+        printf("MatchIsOver\n");
+        auto over = [](int humans, int alive, int participants, int roids) {
+            MatchTally t;
+            t.aliveHumans = humans; t.aliveTotal = alive;
+            t.participants = participants; t.asteroids = roids;
+            return MatchIsOver(t);
+        };
+        auto is = [](bool got, bool want, const char* what) {
+            check(got == want, what, got ? "over" : "still playing");
+        };
+        // A contest: last body standing, or no humans left.
+        is(over(1, 8, 8, 18), false, "a full match that has just begun is not over");
+        is(over(1, 2, 8, 18), false, "one human and one bot left: still a fight");
+        is(over(1, 1, 8, 18), true,  "one body left standing ends a contest");
+        is(over(0, 3, 8, 18), true,  "every human dead ends it, bots still alive or not");
+        is(over(2, 2, 2, 0),  false, "clearing the asteroids never ends a contest");
+        // Solo: the lone human dying, or clearing the arena - local and online alike.
+        is(over(1, 1, 1, 5),  false, "a solo run with asteroids left goes on");
+        is(over(1, 1, 1, 0),  true,  "a solo run ends when the arena is clear");
+        is(over(0, 0, 1, 5),  true,  "the solo player dying ends it");
+        // Empty seats are not participants (the first-tick bug).
+        is(over(1, 1, 1, 18), false, "one human among EMPTY seats is solo, not 'last one standing'");
+    }
+
     return failures ? 1 : 0;
 }

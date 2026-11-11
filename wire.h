@@ -369,24 +369,29 @@ inline std::string serializeGoodbye() {
 // Map size isn't here - it's chosen at the START button press (serializeStart).
 // The shared option payload: every message that carries the OPTIONS bundle
 // ("options", "start", and the server's "opt" echo) uses these keys.
+//
+// The keys themselves are VisitMatchOptions (options.h) - the one list of rules
+// the server's reader and writer walk too.
+namespace wire_detail {
+struct OptionKeyWriter {      // bundle -> JSON object
+    nlohmann::json& j;
+    void integer(const char* k, int v)                { j[k] = v; }
+    void real   (const char* k, float v)              { j[k] = v; }
+    void flag   (const char* k, bool v)               { j[k] = v; }
+    void text   (const char* k, const std::string& v) { j[k] = v; }
+};
+struct OptionKeyReader {      // JSON object -> bundle; an absent key keeps what the field held
+    const nlohmann::json& j;
+    void integer(const char* k, int& v)         { v = j.value(k, v); }
+    void real   (const char* k, float& v)       { v = j.value(k, v); }
+    void flag   (const char* k, bool& v)        { v = j.value(k, v); }
+    void text   (const char* k, std::string& v) { v = j.value(k, v); }
+};
+} // namespace wire_detail
+
 inline void writeOptionKeys(nlohmann::json& j, const MatchOptions& o) {
-    j["nplayers"] = o.numPlayers;           // requested match size (server clamps to connected)
-    j["maxbots"]  = o.maxBots;              // how many unclaimed slots get bot-filled; the rest stay empty
-    j["minhumans"] = o.minHumansToStart;    // humans an official room waits for before auto-starting
-    j["diff"]     = o.botDifficulty;        // bot difficulty center [0..BOT_DIFFICULTY]
-    j["welast"]   = o.wallElasticity;       // OPTIONS: WALL ELASTICITY (players only)
-    j["pelast"]   = o.platformElasticity;   // OPTIONS: PLATFORM ELASTICITY (players only)
-    j["boost"]    = o.speedBoost;           // OPTIONS: SPEED BOOST (walk/jetpack/rocket)
-    j["rspeed"]   = o.rocketSpeedScale;     // OPTIONS: ROCKET VELOCITY (on top of boost)
-    j["xradius"]  = o.explosionRadiusScale; // OPTIONS: EXPLOSION RADIUS
-    j["jthrust"]  = o.jetpackThrust;        // OPTIONS: JETPACK THRUST (on top of boost)
-    j["fburn"]    = o.fuelConsumption;      // OPTIONS: FUEL CONSUMPTION (units/sec)
-    j["fregen"]   = o.fuelRegenPct;         // OPTIONS: FUEL REGEN (% of consumption)
-    j["walls"]    = o.wallsEnabled;         // OPTIONS: boundary walls on vs open space
-    j["phys"]     = o.rocketsObeyPhysics;   // OPTIONS: rockets obey gravity + inherit shooter velocity
-    j["ff"]       = o.friendlyFire;         // OPTIONS: a player's own blast can self-damage
-    j["coast"]    = o.coastMode;            // OPTIONS: frictionless movement (no slow-down on release / cap drop)
-    j["map"]      = o.mapSize;              // OPTIONS: which arena (name; see mapSizeOrder)
+    wire_detail::OptionKeyWriter w{j};
+    VisitMatchOptions(o, w);
 }
 
 inline std::string serializeOptions(const MatchOptions& o) {
@@ -929,24 +934,11 @@ inline ServerMessage applyMessage(const std::string& text, GameSpace& gs) {
     if (j.contains("opt")) {
         const auto& o = j["opt"];
         msg.hasOptions = true;
-        MatchOptions d; // absent keys fall back to the compile-time defaults
-        msg.opt.numPlayers           = o.value("nplayers", d.numPlayers);
-        msg.opt.maxBots              = o.value("maxbots",  d.maxBots);
-        msg.opt.minHumansToStart     = o.value("minhumans", d.minHumansToStart);
-        msg.opt.botDifficulty        = o.value("diff",     d.botDifficulty);
-        msg.opt.wallElasticity       = o.value("welast",   d.wallElasticity);
-        msg.opt.platformElasticity   = o.value("pelast",   d.platformElasticity);
-        msg.opt.speedBoost           = o.value("boost",    d.speedBoost);
-        msg.opt.rocketSpeedScale     = o.value("rspeed",   d.rocketSpeedScale);
-        msg.opt.explosionRadiusScale = o.value("xradius",  d.explosionRadiusScale);
-        msg.opt.jetpackThrust        = o.value("jthrust",  d.jetpackThrust);
-        msg.opt.fuelConsumption      = o.value("fburn",    d.fuelConsumption);
-        msg.opt.fuelRegenPct         = o.value("fregen",   d.fuelRegenPct);
-        msg.opt.wallsEnabled         = o.value("walls",    d.wallsEnabled);
-        msg.opt.rocketsObeyPhysics   = o.value("phys",     d.rocketsObeyPhysics);
-        msg.opt.friendlyFire         = o.value("ff",       d.friendlyFire);
-        msg.opt.coastMode            = o.value("coast",    d.coastMode);
-        msg.opt.mapSize              = o.value("map",      d.mapSize);
+        // Absent keys fall back to the compile-time defaults: start from a
+        // fresh bundle and let the reader overwrite what the packet carries.
+        msg.opt = MatchOptions{};
+        OptionKeyReader reader{o};
+        VisitMatchOptions(msg.opt, reader);
     }
 
     // Players - a fixed, persistent set of slots; never erased (also Player

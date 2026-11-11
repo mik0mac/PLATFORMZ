@@ -288,6 +288,55 @@ inline void ClampOptions(MatchOptions& m) {
     m.fuelRegenPct         = OPT_RANGE_FUEL_REGEN.clampi(m.fuelRegenPct);
 }
 
+//MARK: The rule list - ONE definition
+// Every rule, with the name it goes by as TEXT (JSON on the wire). Anything that
+// reads or writes the whole bundle as text walks this instead of keeping its own
+// list: the client's "options"/"start" messages and its reading of the server's
+// echo (wire.h), and the server's reading of those messages and writing of that
+// echo (server_main.cpp).
+//
+// Those were four hand-kept lists of the same seventeen names, plus two more on
+// the server that copied the bundle field by field. Add a rule to three and
+// forget the fourth and nothing fails to compile: the rule just quietly never
+// reaches players, or resets to its default every time the host presses START.
+//
+// The visitor supplies four members - integer, real, flag, text - each taking
+// (const char* key, value&). Pass a const bundle to read it, a mutable one to
+// fill it in. A template, so this file still includes nothing.
+//
+// WHAT THIS DOES NOT COVER, because each is a different thing wearing the same
+// field names:
+//   - the BINARY state packet (server buildStateBodyBinary / wire.h
+//     applyBinaryState): a packed layout with its own byte widths and a version
+//     tag, where order and size are the contract. Still written out by hand, in
+//     two places that must match.
+//   - profile.h's saved bundle: its own key names, which are a file format
+//     already on players' disks.
+//   - the OPTIONS modal and GameSpace::applyOptions, which USE rules one at a
+//     time rather than carrying the bundle.
+// A new rule still needs a line in each of those it applies to. The keys below
+// are a wire format too: renaming one breaks every client older than the server.
+template <class Options, class Visitor>
+inline void VisitMatchOptions(Options& o, Visitor& v) {
+    v.integer("nplayers",  o.numPlayers);           // requested roster size (the server floors it at the humans present)
+    v.integer("maxbots",   o.maxBots);              // how many unclaimed slots get a bot; the rest stay empty
+    v.integer("minhumans", o.minHumansToStart);     // humans an official room waits for before auto-starting
+    v.real   ("diff",      o.botDifficulty);        // 0..BOT_DIFFICULTY
+    v.real   ("welast",    o.wallElasticity);       // players only
+    v.real   ("pelast",    o.platformElasticity);   // players only
+    v.real   ("boost",     o.speedBoost);           // walk / jetpack / rocket
+    v.real   ("rspeed",    o.rocketSpeedScale);     // on top of boost
+    v.real   ("xradius",   o.explosionRadiusScale);
+    v.real   ("jthrust",   o.jetpackThrust);        // on top of boost
+    v.integer("fburn",     o.fuelConsumption);      // units/sec
+    v.integer("fregen",    o.fuelRegenPct);         // % of consumption
+    v.flag   ("walls",     o.wallsEnabled);         // boundary walls on vs open space
+    v.flag   ("phys",      o.rocketsObeyPhysics);   // rockets take gravity + the shooter's velocity
+    v.flag   ("ff",        o.friendlyFire);         // your own blast can hurt you
+    v.flag   ("coast",     o.coastMode);            // frictionless movement
+    v.text   ("map",       o.mapSize);              // which arena, by name (see mapSizeOrder)
+}
+
 //MARK: Match kind
 // How a room is GOVERNED: who may change its rules, and who starts it.
 //
@@ -569,4 +618,42 @@ inline std::string generateRoomDescription(const MatchOptions& o) {
     // else if (o.botDifficulty >= ROOM_DESC_TOUGH_BOTS) say("TOUGH BOTS.");
 
     return out;
+}
+
+//MARK: When a match is over
+// The end-of-match rule, in one place. The local client (which hosts its own
+// sim) and the server each used to spell it out, in different variable names
+// and a different shape, and nothing made the two agree.
+//
+// A tally is plain counts so this file stays free of the game's classes (see
+// the include rule at the top). GameSpace::matchTally() fills one in.
+struct MatchTally {
+    int aliveHumans  = 0;  // people still in it. WHO counts is the caller's call:
+                           // locally, any living non-bot; on the server, a living
+                           // body a connected client is actually holding
+    int aliveTotal   = 0;  // every living body, bots included
+    int participants = 0;  // slots that have (or had) a body. NOT the roster size:
+                           // a seat the preset's maxBots left empty is nobody, and
+                           // counting it made a one-human match "down to its last
+                           // player" on the first tick
+    int asteroids    = 0;  // asteroids left in the arena
+};
+
+// Over when:
+//   - no human is left alive, whatever else is going on; or
+//   - it is a contest (two or more participants) and at most one body is left
+//     standing - bots included, so a lone human does not have to watch the bots
+//     finish; or
+//   - it is a SOLO run and the arena is clear. The asteroid count never ends a
+//     contest.
+//
+// The same in both modes. Online solo used to differ: a room with one human
+// and no bots did NOT end on a clear arena, on the grounds that its empty seats
+// were still joinable. What that bought was a player flying around an empty
+// cube with no result and no way out but the host's [Q] - and an arena with
+// nothing left in it is not a match anybody wants to walk into.
+inline bool MatchIsOver(const MatchTally& t) {
+    if (t.aliveHumans <= 0)  return true;
+    if (t.participants >= 2) return t.aliveTotal <= 1;
+    return t.asteroids <= 0;
 }

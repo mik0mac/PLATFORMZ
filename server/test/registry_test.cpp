@@ -58,7 +58,7 @@ int main() {
         std::string c;
         auto m = make(r, c);
         const MatchPreset& p = MatchPresetByName("DEFAULT");
-        check(m->pendingPlayers.load() == p.options.numPlayers, "options copied from preset");
+        check(m->options().numPlayers == p.options.numPlayers, "options copied from preset");
         // The map is inside `options` now, and the match holds it as an index
         // into mapSizeOrder rather than as three loose numbers.
         check(m->pendingMap.load() == MapSizeIndex(p.options.mapSize), "map copied from preset");
@@ -67,8 +67,8 @@ int main() {
               "unknown preset falls back to DEFAULT");
         // The two rules with no OPTIONS slider. Nothing in the UI would notice
         // if ApplyPreset stopped copying them, so the test has to.
-        check(m->pendingMaxBots.load() == p.options.maxBots, "maxBots copied from preset");
-        check(m->pendingMinHumans.load() == p.options.minHumansToStart,
+        check(m->options().maxBots == p.options.maxBots, "maxBots copied from preset");
+        check(m->options().minHumansToStart == p.options.minHumansToStart,
               "minHumansToStart copied from preset");
     }
 
